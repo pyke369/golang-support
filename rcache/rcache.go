@@ -3,25 +3,38 @@ package rcache
 import (
 	"crypto/md5"
 	"regexp"
+	"runtime"
 	"sync"
 )
 
 var (
+	cores int
 	cache map[[16]byte]*regexp.Regexp = map[[16]byte]*regexp.Regexp{}
 	lock  sync.RWMutex
 )
 
 func Get(expression string) *regexp.Regexp {
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
 	key := md5.Sum([]byte(expression))
-	lock.RLock()
+	if cores > 1 {
+		lock.RLock()
+	}
 	if cache[key] != nil {
-		defer lock.RUnlock()
+		if cores > 1 {
+			defer lock.RUnlock()
+		}
 		return cache[key].Copy()
 	}
-	lock.RUnlock()
+	if cores > 1 {
+		lock.RUnlock()
+	}
 	if regex, err := regexp.Compile(expression); err == nil {
-		lock.Lock()
-		defer lock.Unlock()
+		if cores > 1 {
+			lock.Lock()
+			defer lock.Unlock()
+		}
 		cache[key] = regex
 		return cache[key].Copy()
 	}

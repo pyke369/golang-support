@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ type replacer struct {
 }
 
 var (
+	cores     int
 	escaped   string
 	unescaper *regexp.Regexp
 	requoter  *regexp.Regexp
@@ -133,6 +135,9 @@ func reduce(input interface{}) {
 }
 
 func New(input string, inline ...bool) (*UConfig, error) {
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
 	config := &UConfig{
 		config: nil,
 	}
@@ -140,8 +145,10 @@ func New(input string, inline ...bool) (*UConfig, error) {
 }
 
 func (this *UConfig) Load(input string, inline ...bool) error {
-	this.Lock()
-	defer this.Unlock()
+	if cores > 1 {
+		this.Lock()
+		defer this.Unlock()
+	}
 
 	this.cache = map[string]interface{}{}
 	base, _ := os.Getwd()
@@ -277,14 +284,18 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 }
 
 func (this *UConfig) Loaded() bool {
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	return !(this.config == nil)
 }
 
 func (this *UConfig) Hash() string {
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	return this.hash
 }
 
@@ -301,38 +312,54 @@ func (this *UConfig) GetPaths(path string) []string {
 		paths   []string    = []string{}
 	)
 
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	prefix := ""
 	if current == nil || path == "" {
 		return paths
 	}
-	this.cacheLock.RLock()
+	if cores > 1 {
+		this.cacheLock.RLock()
+	}
 	if this.cache[path] != nil {
 		if paths, ok := this.cache[path].([]string); ok {
-			this.cacheLock.RUnlock()
+			if cores > 1 {
+				this.cacheLock.RUnlock()
+			}
 			return paths
 		}
 	}
-	this.cacheLock.RUnlock()
+	if cores > 1 {
+		this.cacheLock.RUnlock()
+	}
 	if path != "" {
 		prefix = "."
 		for _, part := range strings.Split(path, ".") {
 			kind := reflect.TypeOf(current).Kind()
 			index, err := strconv.Atoi(part)
 			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
-				this.cacheLock.Lock()
+				if cores > 1 {
+					this.cacheLock.Lock()
+				}
 				this.cache[path] = paths
-				this.cacheLock.Unlock()
+				if cores > 1 {
+					this.cacheLock.Unlock()
+				}
 				return paths
 			}
 			if kind == reflect.Slice {
 				current = current.([]interface{})[index]
 			} else {
 				if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
-					this.cacheLock.Lock()
+					if cores > 1 {
+						this.cacheLock.Lock()
+					}
 					this.cache[path] = paths
-					this.cacheLock.Unlock()
+					if cores > 1 {
+						this.cacheLock.Unlock()
+					}
 					return paths
 				}
 			}
@@ -348,61 +375,91 @@ func (this *UConfig) GetPaths(path string) []string {
 			paths = append(paths, fmt.Sprintf("%s%s%s", path, prefix, key))
 		}
 	}
-	this.cacheLock.Lock()
+	if cores > 1 {
+		this.cacheLock.Lock()
+	}
 	this.cache[path] = paths
-	this.cacheLock.Unlock()
+	if cores > 1 {
+		this.cacheLock.Unlock()
+	}
 	return paths
 }
 
 func (this *UConfig) value(path string) (string, error) {
 	var current interface{} = this.config
 
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	if current == nil || path == "" {
 		return "", fmt.Errorf("invalid parameter")
 	}
-	this.cacheLock.RLock()
+	if cores > 1 {
+		this.cacheLock.RLock()
+	}
 	if this.cache[path] != nil {
 		if current, ok := this.cache[path].(bool); ok && !current {
-			this.cacheLock.RUnlock()
+			if cores > 1 {
+				this.cacheLock.RUnlock()
+			}
 			return "", fmt.Errorf("invalid path")
 		}
 		if current, ok := this.cache[path].(string); ok {
-			this.cacheLock.RUnlock()
+			if cores > 1 {
+				this.cacheLock.RUnlock()
+			}
 			return current, nil
 		}
 	}
-	this.cacheLock.RUnlock()
+	if cores > 1 {
+		this.cacheLock.RUnlock()
+	}
 	for _, part := range strings.Split(path, ".") {
 		kind := reflect.TypeOf(current).Kind()
 		index, err := strconv.Atoi(part)
 		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
-			this.cacheLock.Lock()
+			if cores > 1 {
+				this.cacheLock.Lock()
+			}
 			this.cache[path] = false
-			this.cacheLock.Unlock()
+			if cores > 1 {
+				this.cacheLock.Unlock()
+			}
 			return "", fmt.Errorf("invalid path")
 		}
 		if kind == reflect.Slice {
 			current = current.([]interface{})[index]
 		} else {
 			if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
-				this.cacheLock.Lock()
+				if cores > 1 {
+					this.cacheLock.Lock()
+				}
 				this.cache[path] = false
-				this.cacheLock.Unlock()
+				if cores > 1 {
+					this.cacheLock.Unlock()
+				}
 				return "", fmt.Errorf("invalid path")
 			}
 		}
 	}
 	if reflect.TypeOf(current).Kind() == reflect.String {
-		this.cacheLock.Lock()
+		if cores > 1 {
+			this.cacheLock.Lock()
+		}
 		this.cache[path] = current.(string)
-		this.cacheLock.Unlock()
+		if cores > 1 {
+			this.cacheLock.Unlock()
+		}
 		return current.(string), nil
 	}
-	this.cacheLock.Lock()
+	if cores > 1 {
+		this.cacheLock.Lock()
+	}
 	this.cache[path] = false
-	this.cacheLock.Unlock()
+	if cores > 1 {
+		this.cacheLock.Unlock()
+	}
 	return "", fmt.Errorf("invalid path")
 }
 

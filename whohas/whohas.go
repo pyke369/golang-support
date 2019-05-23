@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +39,12 @@ type LOOKUP struct {
 	Expires  time.Time
 }
 
+var cores int
+
 func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE, ckey string) (lookup *LOOKUP) {
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
 	if path == "" || backends == nil || len(backends) < 1 || timeout < 100*time.Millisecond {
 		return
 	}
@@ -50,7 +56,9 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 	cbackends := backends
 	if cache != nil && cache.items != nil {
 		now := time.Now()
-		cache.RLock()
+		if cores > 1 {
+			cache.RLock()
+		}
 		if cache.items[cpath] != nil && now.Sub(cache.items[cpath].deadline) < 0 {
 			lookup = cache.items[cpath]
 			if cache.items[cpath].Host != "" {
@@ -78,7 +86,9 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				cbackends = backends
 			}
 		}
-		cache.RUnlock()
+		if cores > 1 {
+			cache.RUnlock()
+		}
 	}
 
 	if lookup == nil {
@@ -181,7 +191,9 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 
 	if cache != nil {
 		now := time.Now()
-		cache.Lock()
+		if cores > 1 {
+			cache.Lock()
+		}
 		if cache.items == nil {
 			cache.items = map[string]*LOOKUP{}
 		}
@@ -223,7 +235,9 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				cache.items[cpath] = lookup
 			}
 		}
-		cache.Unlock()
+		if cores > 1 {
+			cache.Unlock()
+		}
 	}
 
 	return

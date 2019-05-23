@@ -3,6 +3,7 @@ package chash
 import (
 	"math/rand"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -28,6 +29,8 @@ type CHash struct {
 	frozen   bool
 	sync.RWMutex
 }
+
+var cores int
 
 func init() {
 	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
@@ -75,8 +78,10 @@ func (a ByHash) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByHash) Less(i, j int) bool { return a[i].hash < a[j].hash }
 
 func (this *CHash) freeze() {
-	this.Lock()
-	defer this.Unlock()
+	if cores > 1 {
+		this.Lock()
+		defer this.Unlock()
+	}
 	if this.frozen {
 		return
 	}
@@ -114,6 +119,9 @@ func (this *CHash) freeze() {
 }
 
 func New(replicas ...uint8) *CHash {
+	if cores == 0 {
+		cores = runtime.NumCPU()
+	}
 	chash := &CHash{
 		targets:  make(map[string]uint8),
 		names:    nil,
@@ -136,8 +144,10 @@ func New(replicas ...uint8) *CHash {
 
 func (this *CHash) AddTarget(name string, weight uint8) bool {
 	if weight > 0 && weight <= 100 && len(name) <= 128 && this.targets[name] != weight {
-		this.Lock()
-		defer this.Unlock()
+		if cores > 1 {
+			this.Lock()
+			defer this.Unlock()
+		}
 		this.targets[name] = weight
 		this.frozen = false
 		return true
@@ -145,15 +155,19 @@ func (this *CHash) AddTarget(name string, weight uint8) bool {
 	return false
 }
 func (this *CHash) RemoveTarget(name string) bool {
-	this.Lock()
-	defer this.Unlock()
+	if cores > 1 {
+		this.Lock()
+		defer this.Unlock()
+	}
 	delete(this.targets, name)
 	this.frozen = false
 	return true
 }
 func (this *CHash) ClearTargets() bool {
-	this.Lock()
-	defer this.Unlock()
+	if cores > 1 {
+		this.Lock()
+		defer this.Unlock()
+	}
 	this.targets = make(map[string]uint8)
 	this.frozen = false
 	return true
@@ -161,8 +175,10 @@ func (this *CHash) ClearTargets() bool {
 
 func (this *CHash) Serialize() []byte {
 	this.freeze()
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	size := uint32(4) + 4 + 1 + 2 + 4
 	for _, name := range this.names {
 		size += 1 + 1 + uint32(len(name))
@@ -216,8 +232,10 @@ func (this *CHash) FileSerialize(path string) bool {
 }
 
 func (this *CHash) Unserialize(serialized []byte) bool {
-	this.Lock()
-	defer this.Unlock()
+	if cores > 1 {
+		this.Lock()
+		defer this.Unlock()
+	}
 	if len(serialized) < 15 {
 		return false
 	}
@@ -280,8 +298,10 @@ func (this *CHash) Lookup(candidate string, count int) []string {
 	var start uint32 = 0
 
 	this.freeze()
-	this.RLock()
-	defer this.RUnlock()
+	if cores > 1 {
+		this.RLock()
+		defer this.RUnlock()
+	}
 	if count > len(this.targets) {
 		count = len(this.targets)
 	}
