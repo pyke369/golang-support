@@ -2,41 +2,82 @@ package dynacert
 
 import (
 	"crypto/tls"
+	"errors"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/pyke369/golang-support/rcache"
 )
 
 type DYNACERT struct {
-	Public, Key    string
-	Certificate    *tls.Certificate
-	Last, Modified time.Time
+	Public, Key  string
+	Config       [][3]string
+	certificates []*tls.Certificate
+	modified     []time.Time
+	last         time.Time
 	sync.RWMutex
 }
 
-func (this *DYNACERT) GetCertificate(*tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
-	var info os.FileInfo
+func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
+	if this.Config == nil || this.certificates == nil || this.modified == nil {
+		this.Lock()
+		if this.Config == nil {
+			this.Config = [][3]string{}
+			if this.Public != "" && this.Key != "" {
+				this.Config = append(this.Config, [3]string{"", this.Public, this.Key})
+				this.Public, this.Key = "", ""
+			}
+		}
+		if this.certificates == nil {
+			this.certificates = make([]*tls.Certificate, len(this.Config))
+		}
+		if this.modified == nil {
+			this.modified = make([]time.Time, len(this.Config))
+		}
+		this.Unlock()
+	}
 
-	if this.Certificate == nil || time.Now().Sub(this.Last) >= 10*time.Second {
-		this.Last = time.Now()
-		if info, err = os.Stat(this.Public); err != nil {
-			return nil, err
+	if time.Now().Sub(this.last) >= time.Minute {
+		this.Lock()
+		if time.Now().Sub(this.last) >= time.Minute {
+			var info os.FileInfo
+
+			this.last = time.Now()
+			for index, config := range this.Config {
+				if info, err = os.Stat(config[1]); err == nil {
+					if _, err = os.Stat(config[2]); err == nil {
+						if info.ModTime().Sub(this.modified[index]) != 0 {
+							if certificate, err := tls.LoadX509KeyPair(config[1], config[2]); err == nil {
+								this.certificates[index] = &certificate
+								this.modified[index] = info.ModTime()
+							}
+						}
+					}
+				}
+			}
 		}
-		if _, err = os.Stat(this.Key); err != nil {
-			return nil, err
-		}
-		if this.Certificate == nil || info.ModTime().Sub(this.Modified) != 0 {
-			if certificate, err := tls.LoadX509KeyPair(this.Public, this.Key); err != nil {
-				return nil, err
-			} else {
-				this.Lock()
-				this.Modified = info.ModTime()
-				this.Certificate = &certificate
-				this.Unlock()
+		this.Unlock()
+	}
+
+	this.RLock()
+	defer this.RUnlock()
+	if len(this.certificates) == 0 {
+		return nil, errors.New("no loaded certificate")
+	}
+	if client != nil && client.ServerName != "" {
+		for index, config := range this.Config {
+			if config[0] != "" && config[0] != "*" && this.certificates[index] != nil {
+				if matcher := rcache.Get(config[0]); matcher != nil && matcher.MatchString(client.ServerName) {
+					return this.certificates[index], nil
+				}
 			}
 		}
 	}
-	this.RLock()
-	defer this.RUnlock()
-	return this.Certificate, nil
+	for index, config := range this.Config {
+		if (config[0] == "" || config[0] == "*") && this.certificates[index] != nil {
+			return this.certificates[index], nil
+		}
+	}
+	return nil, errors.New("no matching certificate")
 }
