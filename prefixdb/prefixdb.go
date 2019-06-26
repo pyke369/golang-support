@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -62,12 +61,7 @@ type PrefixDB struct {
 	Nodes       [4]int // size / count / offset / nodes width (bits)
 }
 
-var cores int
-
 func New() *PrefixDB {
-	if cores == 0 {
-		cores = runtime.NumCPU()
-	}
 	return &PrefixDB{strings: map[string]*[3]int{}, numbers: map[float64]*[3]int{}, pairs: map[uint64]*[3]int{}, clusters: map[[16]byte]*cluster{}}
 }
 
@@ -78,9 +72,7 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 		ones += 96
 		prefix.Mask = net.CIDRMask(ones, bits+96)
 	}
-	if cores > 1 {
-		this.Lock()
-	}
+	this.Lock()
 	pnode := &this.tree
 	for bit := 0; bit < ones; bit++ {
 		down := 0
@@ -187,9 +179,7 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 			pnode.data = append(pnode.data, 0x7000000000000000|((uint64(index)<<32)&0x0fffffff00000000))
 		}
 	}
-	if cores > 1 {
-		this.Unlock()
-	}
+	this.Unlock()
 }
 
 func wbytes(bytes, value int, data []byte) {
@@ -239,9 +229,7 @@ func wnbits(bits, value0, value1 int, data []byte) {
 }
 func (this *PrefixDB) Save(path, description string) (content []byte, err error) {
 	// layout header + signature placeholder + description
-	if cores > 1 {
-		this.Lock()
-	}
+	this.Lock()
 	this.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'D', 'E', 'S', 'C', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	if description == "" {
@@ -498,9 +486,7 @@ func (this *PrefixDB) Save(path, description string) (content []byte, err error)
 		}
 	}
 
-	if cores > 1 {
-		this.Unlock()
-	}
+	this.Unlock()
 	return this.data, err
 }
 
@@ -517,9 +503,7 @@ func (this *PrefixDB) Load(path string) error {
 			if len(data) < 24 || fmt.Sprintf("%x", md5.Sum(data[24:])) != fmt.Sprintf("%x", data[8:24]) {
 				return errors.New(`database checksum is invalid`)
 			}
-			if cores > 1 {
-				this.Lock()
-			}
+			this.Lock()
 			this.data = data
 			this.Total = len(data)
 			this.Version = version
@@ -590,9 +574,7 @@ func (this *PrefixDB) Load(path string) error {
 					}
 				}
 			}
-			if cores > 1 {
-				this.Unlock()
-			}
+			this.Unlock()
 			if this.Strings[2] == 0 || this.Numbers[2] == 0 || this.Pairs[2] == 0 || this.Clusters[2] == 0 || this.Maps[2] == 0 || this.Nodes[2] == 0 {
 				return errors.New(`database structure is invalid`)
 			}
@@ -755,9 +737,7 @@ func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (outp
 	} else {
 		address = address.To16()
 		offset := 0
-		if cores > 1 {
-			this.RLock()
-		}
+		this.RLock()
 		for bit := 0; bit < 128; bit++ {
 			down := 0
 			if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
@@ -819,9 +799,7 @@ func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (outp
 				break
 			}
 		}
-		if cores > 1 {
-			this.RUnlock()
-		}
+		this.RUnlock()
 	}
 	return output, err
 }

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,7 +26,6 @@ const (
 )
 
 var (
-	cores      int
 	facilities = map[string]syslog.Priority{
 		"user":   syslog.LOG_USER,
 		"daemon": syslog.LOG_DAEMON,
@@ -85,9 +83,6 @@ type ULog struct {
 }
 
 func New(target string) *ULog {
-	if cores == 0 {
-		cores = runtime.NumCPU()
-	}
 	log := &ULog{
 		fileOutputs:  map[string]*FileOutput{},
 		syslogHandle: nil,
@@ -97,11 +92,7 @@ func New(target string) *ULog {
 
 func (this *ULog) Load(target string) *ULog {
 	this.Close()
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
-
+	this.Lock()
 	this.file = false
 	this.filePath = ""
 	this.fileTime = TIME_DATETIME
@@ -215,14 +206,12 @@ func (this *ULog) Load(target string) *ULog {
 	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, this.consoleHandle.(*os.File).Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&info)), 0, 0, 0); err != 0 {
 		this.consoleColors = false
 	}
+	this.Unlock()
 	return this
 }
 
 func (this *ULog) Close() {
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
+	this.Lock()
 	if this.syslogHandle != nil {
 		this.syslogHandle.Close()
 		this.syslogHandle = nil
@@ -233,6 +222,7 @@ func (this *ULog) Close() {
 		}
 		delete(this.fileOutputs, path)
 	}
+	this.Unlock()
 }
 
 func (this *ULog) SetLevel(level string) {
@@ -413,9 +403,7 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 	layout = strings.TrimSpace(layout)
 	if this.syslog {
 		if this.syslogHandle == nil {
-			if cores > 1 {
-				this.Lock()
-			}
+			this.Lock()
 			if this.syslogHandle == nil {
 				protocol := ""
 				if this.syslogRemote != "" {
@@ -425,9 +413,7 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 					this.syslogHandle = nil
 				}
 			}
-			if cores > 1 {
-				this.Unlock()
-			}
+			this.Unlock()
 		}
 		if this.syslogHandle != nil {
 			switch severity {
@@ -449,9 +435,7 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 	}
 	if this.file {
 		path := strftime(this.filePath, now)
-		if cores > 1 {
-			this.Lock()
-		}
+		this.Lock()
 		if this.fileOutputs[path] == nil {
 			os.MkdirAll(filepath.Dir(path), 0755)
 			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
@@ -485,9 +469,7 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 				}
 			}
 		}
-		if cores > 1 {
-			this.Unlock()
-		}
+		this.Unlock()
 	}
 	if this.console {
 		prefix := ""
@@ -508,13 +490,9 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 				prefix += severityLabels[severity]
 			}
 		}
-		if cores > 1 {
-			this.Lock()
-		}
+		this.Lock()
 		fmt.Fprintf(this.consoleHandle, prefix+layout+"\n", a...)
-		if cores > 1 {
-			this.Unlock()
-		}
+		this.Unlock()
 	}
 }
 

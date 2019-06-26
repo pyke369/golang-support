@@ -3,7 +3,6 @@ package chash
 import (
 	"math/rand"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -29,8 +28,6 @@ type CHash struct {
 	frozen   bool
 	sync.RWMutex
 }
-
-var cores int
 
 func init() {
 	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
@@ -78,11 +75,9 @@ func (a ByHash) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByHash) Less(i, j int) bool { return a[i].hash < a[j].hash }
 
 func (this *CHash) freeze() {
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
+	this.Lock()
 	if this.frozen {
+		this.Unlock()
 		return
 	}
 	this.ringSize = 0
@@ -91,6 +86,7 @@ func (this *CHash) freeze() {
 	}
 	if this.ringSize == 0 {
 		this.frozen = true
+		this.Unlock()
 		return
 	}
 
@@ -116,12 +112,10 @@ func (this *CHash) freeze() {
 	}
 	sort.Sort(ByHash(this.ring))
 	this.frozen = true
+	this.Unlock()
 }
 
 func New(replicas ...uint8) *CHash {
-	if cores == 0 {
-		cores = runtime.NumCPU()
-	}
 	chash := &CHash{
 		targets:  make(map[string]uint8),
 		names:    nil,
@@ -144,41 +138,32 @@ func New(replicas ...uint8) *CHash {
 
 func (this *CHash) AddTarget(name string, weight uint8) bool {
 	if weight > 0 && weight <= 100 && len(name) <= 128 && this.targets[name] != weight {
-		if cores > 1 {
-			this.Lock()
-			defer this.Unlock()
-		}
+		this.Lock()
 		this.targets[name] = weight
 		this.frozen = false
+		this.Unlock()
 		return true
 	}
 	return false
 }
 func (this *CHash) RemoveTarget(name string) bool {
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
+	this.Lock()
 	delete(this.targets, name)
 	this.frozen = false
+	this.Unlock()
 	return true
 }
 func (this *CHash) ClearTargets() bool {
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
+	this.Lock()
 	this.targets = make(map[string]uint8)
 	this.frozen = false
+	this.Unlock()
 	return true
 }
 
 func (this *CHash) Serialize() []byte {
 	this.freeze()
-	if cores > 1 {
-		this.RLock()
-		defer this.RUnlock()
-	}
+	this.RLock()
 	size := uint32(4) + 4 + 1 + 2 + 4
 	for _, name := range this.names {
 		size += 1 + 1 + uint32(len(name))
@@ -217,6 +202,7 @@ func (this *CHash) Serialize() []byte {
 		serialized[offset+5] = byte((item.target >> 8) & 0xff)
 		offset += 6
 	}
+	this.RUnlock()
 	return serialized
 }
 func (this *CHash) FileSerialize(path string) bool {
@@ -224,18 +210,15 @@ func (this *CHash) FileSerialize(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer handle.Close()
 	if _, err := handle.Write(this.Serialize()); err != nil {
+		handle.Close()
 		return false
 	}
+	handle.Close()
 	return true
 }
 
 func (this *CHash) Unserialize(serialized []byte) bool {
-	if cores > 1 {
-		this.Lock()
-		defer this.Unlock()
-	}
 	if len(serialized) < 15 {
 		return false
 	}
@@ -247,6 +230,7 @@ func (this *CHash) Unserialize(serialized []byte) bool {
 	if magic != CHASH_MAGIC || size != uint32(len(serialized)) {
 		return false
 	}
+	this.Lock()
 	this.targets = make(map[string]uint8)
 	this.names = make([]string, names)
 	this.ring = make([]item, ringSize)
@@ -260,6 +244,7 @@ func (this *CHash) Unserialize(serialized []byte) bool {
 		offset += 2 + len
 	}
 	if offset > size {
+		this.Unlock()
 		return false
 	}
 	for item := uint32(0); item < ringSize && offset < size; item++ {
@@ -268,9 +253,11 @@ func (this *CHash) Unserialize(serialized []byte) bool {
 		offset += 6
 	}
 	if offset != size {
+		this.Unlock()
 		return false
 	}
 	this.frozen = true
+	this.Unlock()
 	return true
 }
 func (this *CHash) FileUnserialize(path string) bool {
@@ -298,14 +285,12 @@ func (this *CHash) Lookup(candidate string, count int) []string {
 	var start uint32 = 0
 
 	this.freeze()
-	if cores > 1 {
-		this.RLock()
-		defer this.RUnlock()
-	}
+	this.RLock()
 	if count > len(this.targets) {
 		count = len(this.targets)
 	}
 	if this.ringSize == 0 || count < 1 {
+		this.RUnlock()
 		return []string{}
 	}
 	hash := mmhash2([]byte(candidate), -1)
@@ -345,6 +330,7 @@ func (this *CHash) Lookup(candidate string, count int) []string {
 			start = 0
 		}
 	}
+	this.RUnlock()
 	return result
 }
 func (this *CHash) LookupBalance(candidate string, count int) string {
