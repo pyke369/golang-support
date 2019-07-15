@@ -73,7 +73,8 @@ type METHOD func(map[string]interface{}, interface{}) (interface{}, *ERROR)
 
 var httpDefaultTransport = &http.Transport{
 	MaxIdleConnsPerHost: 64,
-	IdleConnTimeout:     30 * time.Second,
+	IdleConnTimeout:     60 * time.Second,
+	DisableCompression:  true,
 }
 
 func DefaultTransport(input []byte, context interface{}) (output []byte, err error) {
