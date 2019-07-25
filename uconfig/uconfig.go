@@ -566,3 +566,7 @@ func (this *UConfig) GetDurationBounds(path string, fallback, min, max float64) 
 	}
 	return math.Max(math.Min(nvalue, max), min)
 }
+
+func Duration(input float64) time.Duration {
+	return time.Duration(input * float64(time.Second))
+}
