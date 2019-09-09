@@ -19,6 +19,7 @@ import (
 
 type RPACK struct {
 	Compressed bool
+	Default    bool
 	Modified   int64
 	Mime       string
 	Content    string
@@ -30,7 +31,7 @@ var guzpool = sync.Pool{
 		return &gzip.Reader{}
 	}}
 
-func Pack(root, output, pkgname, funcname string, main bool) {
+func Pack(root, output, pkgname, funcname, defdoc string, main bool) {
 	root = strings.TrimSuffix(root, "/")
 	if root == "" || output == "" {
 		return
@@ -56,6 +57,9 @@ func Pack(root, output, pkgname, funcname string, main bool) {
 				}
 			}
 			pack := &RPACK{Modified: info.ModTime().Unix(), Mime: "text/plain"}
+			if rpath == defdoc {
+				pack.Default = true
+			}
 			if mime := mime.TypeByExtension(filepath.Ext(rpath)); mime != "" {
 				pack.Mime = mime
 			}
@@ -82,7 +86,7 @@ func Pack(root, output, pkgname, funcname string, main bool) {
 		random := make([]byte, 64)
 		rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
 		rand.Read(random)
-		uid := fmt.Sprintf("rpack%8.8x", md5.Sum(random))
+		uid := fmt.Sprintf("rpack_%8.8x", md5.Sum(random))
 		fmt.Fprintf(handle,
 			`package %s
 
@@ -96,8 +100,8 @@ var %s map[string]*rpack.RPACK = map[string]*rpack.RPACK {
 			pkgname, uid)
 		for path, entry := range entries {
 			fmt.Fprintf(handle,
-				`    "%s": &rpack.RPACK{Compressed:%t, Modified:%d, Mime:"%s", Content:"%s"},
-`, path, entry.Compressed, entry.Modified, entry.Mime, entry.Content)
+				`    "%s": &rpack.RPACK{Compressed:%t, Default:%t, Modified:%d, Mime:"%s", Content:"%s"},
+`, path, entry.Compressed, entry.Default, entry.Modified, entry.Mime, entry.Content)
 		}
 		fmt.Fprintf(handle,
 			`}
@@ -122,33 +126,43 @@ func main() {
 func Serve(pack map[string]*RPACK) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		var err error
-		if pack == nil || pack[request.URL.Path] == nil {
+
+		path := request.URL.Path
+		if path == "" && pack != nil {
+			for name, entry := range pack {
+				if entry.Default {
+					path = name
+					break
+				}
+			}
+		}
+		if pack == nil || pack[path] == nil {
 			response.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if pack[request.URL.Path].raw == nil {
-			if pack[request.URL.Path].raw, err = base64.StdEncoding.DecodeString(pack[request.URL.Path].Content); err != nil {
+		if pack[path].raw == nil {
+			if pack[path].raw, err = base64.StdEncoding.DecodeString(pack[path].Content); err != nil {
 				response.WriteHeader(http.StatusNotFound)
 				return
 			}
 		}
-		resource := pack[request.URL.Path]
+		resource := pack[path]
 		response.Header().Set("Content-Type", resource.Mime)
 		if strings.Index(request.Header.Get("Accept-Encoding"), "gzip") >= 0 && request.Header.Get("Range") == "" && resource.Compressed {
 			response.Header().Set("Content-Encoding", "gzip")
 			response.Header().Set("Content-Length", fmt.Sprintf("%d", len(resource.raw)))
-			http.ServeContent(response, request, request.URL.Path, time.Unix(resource.Modified, 0), bytes.NewReader(resource.raw))
+			http.ServeContent(response, request, path, time.Unix(resource.Modified, 0), bytes.NewReader(resource.raw))
 		} else {
 			if resource.Compressed {
 				decompressor := guzpool.Get().(*gzip.Reader)
 				decompressor.Reset(bytes.NewReader(resource.raw))
 				if raw, err := ioutil.ReadAll(decompressor); err == nil {
-					http.ServeContent(response, request, request.URL.Path, time.Unix(resource.Modified, 0), bytes.NewReader(raw))
+					http.ServeContent(response, request, path, time.Unix(resource.Modified, 0), bytes.NewReader(raw))
 				}
 				decompressor.Close()
 				guzpool.Put(decompressor)
 			} else {
-				http.ServeContent(response, request, request.URL.Path, time.Unix(resource.Modified, 0), bytes.NewReader(resource.raw))
+				http.ServeContent(response, request, path, time.Unix(resource.Modified, 0), bytes.NewReader(resource.raw))
 			}
 		}
 	})
