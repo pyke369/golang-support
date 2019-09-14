@@ -49,7 +49,7 @@ type Config struct {
 	InactiveTimeout time.Duration
 	WriteTimeout    time.Duration
 	OpenHandler     func(*Socket)
-	MessageHandler  func(*Socket, int, []byte)
+	MessageHandler  func(*Socket, int, []byte, time.Duration)
 	CloseHandler    func(*Socket, int)
 }
 
@@ -302,7 +302,7 @@ func (this *Socket) receive(buffered io.Reader) {
 	var err error
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
-	seen, code, dmode, dsize, doffset, dlast := time.Now(), 0, byte(0), 0, 0, false
+	seen, code, dmode, dsize, doffset, dlast, dstart := time.Now(), 0, byte(0), 0, 0, false, time.Time{}
 	buffer, roffset, woffset, read := bslab.Get(this.config.ReadSize, nil), 0, 0, 0
 	buffer = buffer[:cap(buffer)]
 	if !this.client {
@@ -342,6 +342,9 @@ close:
 							break
 						}
 						if opcode == WEBSOCKET_OPCODE_TEXT || opcode == WEBSOCKET_OPCODE_BLOB {
+							if dmode == 0 {
+								dstart = time.Now()
+							}
 							dmode = opcode
 						}
 						if dmode != 0 && fin == 1 {
@@ -409,10 +412,10 @@ close:
 									break close
 								}
 								if this.config.MessageHandler != nil {
-									this.config.MessageHandler(this, int(dmode), data)
+									this.config.MessageHandler(this, int(dmode), data, time.Now().Sub(dstart))
 								}
 								bslab.Put(data)
-								dmode, dsize, doffset, dlast, data = 0, 0, 0, false, nil
+								dmode, dsize, doffset, dlast, data, dstart = 0, 0, 0, false, nil, time.Time{}
 							}
 							size = -1
 						}
