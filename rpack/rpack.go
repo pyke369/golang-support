@@ -92,6 +92,7 @@ func Pack(root, output, pkgname, funcname, defdoc string, main bool) {
 
 import (
     "net/http"
+	"time"
 	"github.com/pyke369/golang-support/rpack"
 )
 
@@ -106,15 +107,15 @@ var %s map[string]*rpack.RPACK = map[string]*rpack.RPACK {
 		fmt.Fprintf(handle,
 			`}
 
-func %s() http.Handler {
-	return rpack.Serve(%s)
+func %s(ttl time.Duration) http.Handler {
+	return rpack.Serve(%s, ttl)
 }
 `, funcname, uid)
 		if main {
 			fmt.Fprintf(handle,
 				`
 func main() {
-    http.Handle("/resources/", http.StripPrefix("/resources/", %s()))
+    http.Handle("/resources/", http.StripPrefix("/resources/", %s(24 * time.Hour)))
     http.ListenAndServe(":8000", nil)
 }
 `, funcname)
@@ -123,7 +124,7 @@ func main() {
 	}
 }
 
-func Serve(pack map[string]*RPACK) http.Handler {
+func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		var err error
 
@@ -148,6 +149,10 @@ func Serve(pack map[string]*RPACK) http.Handler {
 		}
 		resource := pack[path]
 		response.Header().Set("Content-Type", resource.Mime)
+		if sttl := ttl / time.Second; sttl > 0 {
+			response.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, public", sttl))
+			response.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
+		}
 		if strings.Index(request.Header.Get("Accept-Encoding"), "gzip") >= 0 && request.Header.Get("Range") == "" && resource.Compressed {
 			response.Header().Set("Content-Encoding", "gzip")
 			response.Header().Set("Content-Length", fmt.Sprintf("%d", len(resource.raw)))
