@@ -10,8 +10,9 @@ import (
 
 type TCPListener struct {
 	*net.TCPListener
-	ReadBufferSize  int
-	WriteBufferSize int
+	read     int
+	write    int
+	callback func(*net.TCPConn)
 }
 
 func (this *TCPListener) Accept() (net.Conn, error) {
@@ -28,16 +29,19 @@ func (this *TCPListener) Accept() (net.Conn, error) {
 				syscall.SetsockoptInt(int(handle), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
 			})
 	}
-	if this.ReadBufferSize > 0 {
-		connection.SetReadBuffer(this.ReadBufferSize)
+	if this.read > 0 {
+		connection.SetReadBuffer(this.read)
 	}
-	if this.WriteBufferSize > 0 {
-		connection.SetWriteBuffer(this.WriteBufferSize)
+	if this.write > 0 {
+		connection.SetWriteBuffer(this.write)
+	}
+	if this.callback != nil {
+		this.callback(connection)
 	}
 	return connection, nil
 }
 
-func NewTCPListener(network, address string, reuseport bool, read, write int) (listener *TCPListener, err error) {
+func NewTCPListener(network, address string, reuseport bool, read, write int, callback func(*net.TCPConn)) (listener *TCPListener, err error) {
 	config := net.ListenConfig{
 		Control: func(network, address string, connection syscall.RawConn) error {
 			connection.Control(func(handle uintptr) {
@@ -55,6 +59,6 @@ func NewTCPListener(network, address string, reuseport bool, read, write int) (l
 	if clistener, err := config.Listen(context.Background(), network, address); err != nil {
 		return nil, err
 	} else {
-		return &TCPListener{clistener.(*net.TCPListener), read, write}, nil
+		return &TCPListener{clistener.(*net.TCPListener), read, write, callback}, nil
 	}
 }
