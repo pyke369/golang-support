@@ -54,11 +54,11 @@ type Config struct {
 }
 
 type Socket struct {
-	Path, Origin, Remote, Protocol string
-	config                         *Config
-	conn                           net.Conn
-	connected, client              bool
-	wlock, dlock, clock            sync.Mutex
+	Path, Origin, Agent, Remote, Protocol string
+	config                                *Config
+	conn                                  net.Conn
+	connected, client                     bool
+	wlock, dlock, clock                   sync.Mutex
 }
 
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
@@ -69,7 +69,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	}
 	config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
 	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
-	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 4<<20)
+	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 	config.ConnectTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
@@ -183,7 +183,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			}
 			config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
 			config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
-			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 4<<20)
+			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
@@ -191,8 +191,8 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			if strings.ToLower(origin) == "null" {
 				origin = ""
 			}
-			ws = &Socket{Path: request.URL.Path, Origin: origin, Remote: conn.RemoteAddr().String(), Protocol: protocol,
-				config: config, conn: conn, connected: true}
+			ws = &Socket{Path: request.URL.Path, Origin: origin, Agent: request.Header.Get("User-Agent"),
+				Remote: conn.RemoteAddr().String(), Protocol: protocol, config: config, conn: conn, connected: true}
 			go ws.receive(reader)
 			if config.OpenHandler != nil {
 				config.OpenHandler(ws)
