@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,9 @@ var guzpool = sync.Pool{
 		return &gzip.Reader{}
 	}}
 
-func Pack(root, output, pkgname, funcname, defdoc string, main bool) {
+func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
+	var matcher *regexp.Regexp
+
 	root = strings.TrimSuffix(root, "/")
 	if root == "" || output == "" {
 		return
@@ -42,6 +45,9 @@ func Pack(root, output, pkgname, funcname, defdoc string, main bool) {
 	if funcname == "" {
 		funcname = "resources"
 	}
+	if exclude != "" {
+		matcher, _ = regexp.Compile(exclude)
+	}
 	funcname = strings.ToUpper(funcname[:1]) + funcname[1:]
 	entries := map[string]*RPACK{}
 	compressor, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
@@ -50,6 +56,9 @@ func Pack(root, output, pkgname, funcname, defdoc string, main bool) {
 	start := time.Now()
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		rpath := strings.TrimPrefix(path, root+"/")
+		if matcher != nil && matcher.MatchString(rpath) {
+			return nil
+		}
 		if info.Mode()&os.ModeType == 0 {
 			for _, part := range strings.Split(rpath, "/") {
 				if len(part) > 0 && part[0] == '.' {
