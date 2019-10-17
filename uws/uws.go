@@ -57,7 +57,7 @@ type Socket struct {
 	Path, Origin, Agent, Remote, Protocol string
 	config                                *Config
 	conn                                  net.Conn
-	connected, client                     bool
+	connected, client, closing            bool
 	wlock, dlock, clock                   sync.Mutex
 }
 
@@ -260,7 +260,9 @@ func (this *Socket) Write(mode byte, data []byte) (err error) {
 
 func (this *Socket) Close(code int) {
 	this.clock.Lock()
-	if this.connected {
+	if !this.closing && this.connected {
+		this.closing = true
+		this.clock.Unlock()
 		if this.config != nil && this.config.CloseHandler != nil {
 			this.config.CloseHandler(this, code)
 		}
@@ -280,8 +282,9 @@ func (this *Socket) Close(code int) {
 		this.send(payload)
 		this.connected = false
 		this.conn.Close()
+	} else {
+		this.clock.Unlock()
 	}
-	this.clock.Unlock()
 }
 
 func (this *Socket) send(payload net.Buffers) (err error) {
