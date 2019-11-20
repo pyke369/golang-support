@@ -182,36 +182,36 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 			if arguments[0][0:1] != "/" {
 				arguments[0] = fmt.Sprintf("%s/%s", base, arguments[0])
 			}
-			base = ""
+			nbase := ""
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
 					if mcontent, err := ioutil.ReadFile(element); err == nil {
-						base = filepath.Dir(element)
+						nbase = filepath.Dir(element)
 						expanded += string(mcontent)
 					}
 				}
 			}
-			if base != "" && strings.Index(expanded, "\n") >= 0 {
-				expanded = fmt.Sprintf("/*base:%s*/\n%s\n", base, expanded)
+			if nbase != "" && strings.Index(expanded, "\n") >= 0 {
+				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
 			}
 		case "|":
 			if arguments[0][0:1] != "/" {
 				arguments[0] = fmt.Sprintf("%s/%s", base, arguments[0])
 			}
-			base = ""
+			nbase := ""
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
 					if element[0:1] != "/" {
 						element = fmt.Sprintf("%s/%s", base, element)
 					}
 					if mcontent, err := exec.Command(element, strings.Join(arguments[1:], " ")).Output(); err == nil {
-						base = filepath.Dir(element)
+						nbase = filepath.Dir(element)
 						expanded += string(mcontent)
 					}
 				}
 			}
-			if base != "" && strings.Index(expanded, "\n") >= 0 {
-				expanded = fmt.Sprintf("/*base:%s*/\n%s\n", base, expanded)
+			if nbase != "" && strings.Index(expanded, "\n") >= 0 {
+				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
 			}
 		case "@":
 			requester := http.Client{
