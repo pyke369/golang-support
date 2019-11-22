@@ -23,6 +23,7 @@ import (
 )
 
 type UConfig struct {
+	input     string
 	config    interface{}
 	hash      string
 	cache     map[string]interface{}
@@ -136,9 +137,14 @@ func reduce(input interface{}) {
 
 func New(input string, inline ...bool) (*UConfig, error) {
 	config := &UConfig{
+		input:  input,
 		config: nil,
 	}
 	return config, config.Load(input, inline...)
+}
+
+func (this *UConfig) Reload(inline ...bool) error {
+	return this.Load(this.input, inline...)
 }
 
 func (this *UConfig) Load(input string, inline ...bool) error {
