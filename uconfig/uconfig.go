@@ -149,7 +149,6 @@ func (this *UConfig) Reload(inline ...bool) error {
 
 func (this *UConfig) Load(input string, inline ...bool) error {
 	this.Lock()
-	this.cache = map[string]interface{}{}
 	base, _ := os.Getwd()
 	content := fmt.Sprintf("/*base:%s*/\n", base)
 	if len(inline) > 0 && inline[0] {
@@ -264,15 +263,14 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:len(content)])
 	}
 
-	this.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
-	if err := json.Unmarshal([]byte(content), &this.config); err != nil {
-		if err := json.Unmarshal([]byte("{"+content+"}"), &this.config); err != nil {
-			this.config = nil
+	var config interface{}
+	if err := json.Unmarshal([]byte(content), &config); err != nil {
+		if err := json.Unmarshal([]byte("{"+content+"}"), &config); err != nil {
 			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
 				if start := strings.LastIndex(content[:syntax.Offset], "\n") + 1; start >= 0 {
 					line := strings.Count(content[:start], "\n") + 1
 					this.Unlock()
-					return errors.New(fmt.Sprintf("%s at line %d near %s", syntax, line, content[start:syntax.Offset]))
+					return fmt.Errorf("uconfig: %s at line %d near %s", syntax, line, content[start:syntax.Offset])
 				}
 			}
 			this.Unlock()
@@ -280,6 +278,9 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 		}
 	}
 
+	this.config = config
+	this.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
+	this.cache = map[string]interface{}{}
 	reduce(this.config)
 	this.Unlock()
 	return nil
@@ -373,14 +374,14 @@ func (this *UConfig) value(path string) (string, error) {
 	this.RLock()
 	if current == nil || path == "" {
 		this.RUnlock()
-		return "", fmt.Errorf("invalid parameter")
+		return "", errors.New(`uconfig: invalid parameter`)
 	}
 	this.cacheLock.RLock()
 	if this.cache[path] != nil {
 		if current, ok := this.cache[path].(bool); ok && !current {
 			this.cacheLock.RUnlock()
 			this.RUnlock()
-			return "", fmt.Errorf("invalid path")
+			return "", errors.New(`uconfig: invalid path`)
 		}
 		if current, ok := this.cache[path].(string); ok {
 			this.cacheLock.RUnlock()
@@ -397,7 +398,7 @@ func (this *UConfig) value(path string) (string, error) {
 			this.cache[path] = false
 			this.cacheLock.Unlock()
 			this.RUnlock()
-			return "", fmt.Errorf("invalid path")
+			return "", errors.New(`uconfig: invalid path`)
 		}
 		if kind == reflect.Slice {
 			current = current.([]interface{})[index]
@@ -407,7 +408,7 @@ func (this *UConfig) value(path string) (string, error) {
 				this.cache[path] = false
 				this.cacheLock.Unlock()
 				this.RUnlock()
-				return "", fmt.Errorf("invalid path")
+				return "", errors.New(`uconfig: invalid path`)
 			}
 		}
 	}
@@ -422,7 +423,7 @@ func (this *UConfig) value(path string) (string, error) {
 	this.cache[path] = false
 	this.cacheLock.Unlock()
 	this.RUnlock()
-	return "", fmt.Errorf("invalid path")
+	return "", errors.New(`uconfig: invalid path`)
 }
 
 func (this *UConfig) GetBoolean(path string, fallback bool) bool {

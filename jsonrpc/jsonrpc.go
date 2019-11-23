@@ -80,7 +80,7 @@ var httpDefaultTransport = &http.Transport{
 func DefaultTransport(input []byte, context interface{}) (output []byte, err error) {
 	options := context.(TRANSPORT_OPTIONS)
 	if options.URL == "" {
-		return nil, errors.New("jsonrpc: missing URL in default transport options")
+		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
 	}
 	if options.Timeout == 0 {
 		options.Timeout = 10 * time.Second
@@ -101,31 +101,31 @@ func DefaultTransport(input []byte, context interface{}) (output []byte, err err
 			output, _ = ioutil.ReadAll(response.Body)
 			response.Body.Close()
 			if response.StatusCode/100 != 2 || len(output) == 0 {
-				return nil, errors.New(fmt.Sprintf("jsonrpc: HTTP error %d", response.StatusCode))
+				return nil, fmt.Errorf("jsonrpc: HTTP error %d", response.StatusCode)
 			}
 		} else {
-			return nil, errors.New(fmt.Sprintf("jsonrpc: %v", err))
+			return nil, fmt.Errorf("jsonrpc: %v", err)
 		}
 	} else {
-		return nil, errors.New(fmt.Sprintf("jsonrpc: %v", err))
+		return nil, fmt.Errorf("jsonrpc: %v", err)
 	}
 	return
 }
 
 func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*CALL, err error) {
 	if calls == nil || len(calls) == 0 {
-		return nil, errors.New("jsonrpc: no call provided")
+		return nil, errors.New(`jsonrpc: no call provided`)
 	}
 	if transport == nil {
 		if _, ok := context.(TRANSPORT_OPTIONS); !ok {
-			return nil, errors.New("jsonrpc: invalid context for default transport")
+			return nil, errors.New(`jsonrpc: invalid context for default transport`)
 		}
 		transport = DefaultTransport
 	}
 	input, ids := []byte{'['}, map[string]*CALL{}
 	for index, call := range calls {
 		if call.Method == "" {
-			return nil, errors.New(fmt.Sprintf("jsonrpc: invalid method for call #%d", index))
+			return nil, fmt.Errorf("jsonrpc: invalid method for call #%d", index)
 		}
 		if call.Notification {
 			call.Id = ""
@@ -178,7 +178,7 @@ func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*C
 			}
 			results = calls
 		} else {
-			return nil, errors.New(fmt.Sprintf("jsonrpc: %v", err))
+			return nil, fmt.Errorf("jsonrpc: %v", err)
 		}
 	}
 	return

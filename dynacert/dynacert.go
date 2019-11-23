@@ -63,7 +63,7 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 	this.RLock()
 	defer this.RUnlock()
 	if len(this.certificates) == 0 {
-		return nil, errors.New("no loaded certificate")
+		return nil, errors.New(`dynacert: no loaded certificate`)
 	}
 	if client != nil && client.ServerName != "" {
 		for index, config := range this.Config {
@@ -79,7 +79,7 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 			return this.certificates[index], nil
 		}
 	}
-	return nil, errors.New("no matching certificate")
+	return nil, errors.New(`dynacert: no matching certificate`)
 }
 
 func ModernTLSConfig(input func(*tls.ClientHelloInfo) (*tls.Certificate, error)) (output *tls.Config) {

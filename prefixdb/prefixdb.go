@@ -495,13 +495,13 @@ func (this *PrefixDB) Load(path string) error {
 		return err
 	} else {
 		if len(data) < 8 || string(data[0:4]) != "PFDB" {
-			return errors.New(`invalid preamble`)
+			return errors.New(`prefixdb: invalid preamble`)
 		}
 		if version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7]); (version & 0xff0000) > (VERSION & 0xff0000) {
-			return errors.New(fmt.Sprintf(`library major version %d is incompatible with database major version %d`, (VERSION&0xff0000)>>16, (version&0xff0000)>>16))
+			return fmt.Errorf(`prefixdb: library major version %d is incompatible with database major version %d`, (VERSION&0xff0000)>>16, (version&0xff0000)>>16)
 		} else {
 			if len(data) < 24 || fmt.Sprintf("%x", md5.Sum(data[24:])) != fmt.Sprintf("%x", data[8:24]) {
-				return errors.New(`database checksum is invalid`)
+				return errors.New(`prefixdb: checksum is invalid`)
 			}
 			this.Lock()
 			this.data = data
@@ -576,7 +576,7 @@ func (this *PrefixDB) Load(path string) error {
 			}
 			this.Unlock()
 			if this.Strings[2] == 0 || this.Numbers[2] == 0 || this.Pairs[2] == 0 || this.Clusters[2] == 0 || this.Maps[2] == 0 || this.Nodes[2] == 0 {
-				return errors.New(`database structure is invalid`)
+				return errors.New(`prefixdb: structure is invalid`)
 			}
 		}
 	}
@@ -733,7 +733,7 @@ func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (outp
 	output = input
 	if this.data == nil || this.Total == 0 || this.Version == 0 || this.Strings[2] == 0 || this.Numbers[2] == 0 ||
 		this.Pairs[2] == 0 || this.Clusters[2] == 0 || this.Maps[2] == 0 || this.Nodes[2] == 0 || address == nil {
-		err = errors.New("record not found")
+		err = errors.New(`prefixdb: record not found`)
 	} else {
 		address = address.To16()
 		offset := 0

@@ -104,12 +104,12 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			if response.StatusCode != http.StatusSwitchingProtocols || strings.ToLower(response.Header.Get("Connection")) != "upgrade" ||
 				strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) || sconn == nil {
 				response.Body.Close()
-				return nil, errors.New("websocket: invalid protocol upgrade")
+				return nil, errors.New(`websocket: invalid protocol upgrade`)
 			}
 			protocol := response.Header.Get("Sec-WebSocket-Protocol")
 			if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
 				response.Body.Close()
-				return nil, errors.New("websocket: could not negotiate sub-protocol with server")
+				return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
 			}
 			if parts, err := url.Parse(endpoint); err == nil {
 				path = parts.Path
@@ -289,7 +289,7 @@ func (this *Socket) Close(code int) {
 
 func (this *Socket) send(payload net.Buffers) (err error) {
 	if !this.connected {
-		return errors.New("websocket: not connected")
+		return errors.New(`websocket: not connected`)
 	}
 	this.wlock.Lock()
 	this.conn.SetWriteDeadline(time.Now().Add(this.config.WriteTimeout))
