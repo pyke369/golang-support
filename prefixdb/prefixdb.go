@@ -52,6 +52,7 @@ type PrefixDB struct {
 	data        []byte
 	Total       int
 	Version     uint32
+	Path        string
 	Description string
 	Strings     [4]int // size / count / offset / strings index width (bytes)
 	Numbers     [3]int // size / count / offset
@@ -507,6 +508,7 @@ func (this *PrefixDB) Load(path string) error {
 			this.data = data
 			this.Total = len(data)
 			this.Version = version
+			this.Path = path
 			offset := 24
 			if this.Total >= offset+4 && string(data[offset:offset+4]) == "DESC" {
 				offset += 4
