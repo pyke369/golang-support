@@ -228,3 +228,18 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 
 	return
 }
+
+func Evict(path string, cache *CACHE, ckey string) {
+	if path != "" && cache != nil && cache.items != nil {
+		cpath := path
+		if index := strings.Index(path, "?"); index >= 0 {
+			cpath = path[:index]
+		}
+		cache.Lock()
+		delete(cache.items, cpath)
+		if ckey != "" {
+			delete(cache.items, "k"+ckey)
+		}
+		cache.Unlock()
+	}
+}
