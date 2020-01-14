@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ type BACKEND struct {
 	Path    string
 	Headers map[string]string
 	Penalty time.Duration
+	Probe   bool
 }
 type CACHE struct {
 	TTL   time.Duration
@@ -37,6 +39,10 @@ type LOOKUP struct {
 	Modified time.Time
 	Expires  time.Time
 }
+
+var (
+	matcher = regexp.MustCompile(`^bytes \d+-\d+/(\d+)$`)
+)
 
 func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE, ckey string) (lookup *LOOKUP) {
 	if path == "" || backends == nil || len(backends) < 1 || timeout < 100*time.Millisecond {
@@ -99,6 +105,10 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 						return
 					}
 				}
+				method := http.MethodHead
+				if backend.Probe {
+					method = http.MethodGet
+				}
 				lookup.Protocol = "http"
 				if backend.Secure {
 					lookup.Protocol = "https"
@@ -107,9 +117,12 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				if backend.Path != "" {
 					rpath = backend.Path
 				}
-				if request, err := http.NewRequest(http.MethodHead, lookup.Protocol+"://"+backend.Host+rpath, nil); err == nil {
+				if request, err := http.NewRequest(method, lookup.Protocol+"://"+backend.Host+rpath, nil); err == nil {
 					request = request.WithContext(ctx)
 					request.Header.Set("User-Agent", "whohas")
+					if backend.Probe {
+						request.Header.Set("Range", "bytes=0-1")
+					}
 					if backend.Headers != nil {
 						lookup.Headers = map[string]string{}
 						for name, value := range backend.Headers {
@@ -117,17 +130,23 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 							request.Header.Set(name, value)
 						}
 					}
+
 					if response, err := http.DefaultClient.Do(request); err == nil {
-						if response.StatusCode == 200 {
+						if response.StatusCode/100 == 2 {
 							lookup.Host = backend.Host
 							lookup.Size, _ = strconv.ParseInt(response.Header.Get("Content-Length"), 10, 64)
+							if crange := response.Header.Get("Content-Range"); crange != "" {
+								if captures := matcher.FindStringSubmatch(crange); captures != nil {
+									lookup.Size, _ = strconv.ParseInt(captures[1], 10, 64)
+								}
+							}
 							lookup.Mime = response.Header.Get("Content-Type")
 							if lookup.Mime == "" || lookup.Mime == "application/octet-stream" || lookup.Mime == "text/plain" {
 								if extension := filepath.Ext(path); extension != "" {
 									lookup.Mime = mime.TypeByExtension(extension)
 								}
 							}
-							if response.Header.Get("Accept-Ranges") != "" {
+							if response.Header.Get("Accept-Ranges") != "" || response.StatusCode == 206 {
 								lookup.Ranges = true
 							}
 							if header := response.Header.Get("Date"); header != "" {
