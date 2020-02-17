@@ -12,9 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -108,6 +106,7 @@ func (this *ULog) Load(target string) *ULog {
 	this.syslogFacility = syslog.LOG_DAEMON
 	this.optionUTC = false
 	this.level = syslog.LOG_INFO
+	console := os.Stderr
 	for _, target := range regexp.MustCompile("(file|console|syslog|option)\\s*\\(([^\\)]*)\\)").FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
 		case "file":
@@ -148,6 +147,7 @@ func (this *ULog) Load(target string) *ULog {
 				case "output":
 					if option[2] == "stdout" {
 						this.consoleHandle = os.Stdout
+						console = os.Stdout
 					}
 				case "time":
 					switch {
@@ -202,9 +202,10 @@ func (this *ULog) Load(target string) *ULog {
 		}
 	}
 
-	var info syscall.Termios
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, this.consoleHandle.(*os.File).Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&info)), 0, 0, 0); err != 0 {
-		this.consoleColors = false
+	if info, err := console.Stat(); err == nil {
+		if info.Mode()&(os.ModeDevice|os.ModeCharDevice) != os.ModeDevice|os.ModeCharDevice {
+			this.consoleColors = false
+		}
 	}
 	this.Unlock()
 	return this
