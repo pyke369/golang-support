@@ -27,6 +27,7 @@ type UConfig struct {
 	config    interface{}
 	hash      string
 	cache     map[string]interface{}
+	separator string
 	cacheLock sync.RWMutex
 	sync.RWMutex
 }
@@ -137,14 +138,19 @@ func reduce(input interface{}) {
 
 func New(input string, inline ...bool) (*UConfig, error) {
 	config := &UConfig{
-		input:  input,
-		config: nil,
+		input:     input,
+		config:    nil,
+		separator: ".",
 	}
 	return config, config.Load(input, inline...)
 }
 
 func (this *UConfig) Reload(inline ...bool) error {
 	return this.Load(this.input, inline...)
+}
+
+func (this *UConfig) SetSeparator(s string) {
+	this.separator = s
 }
 
 func (this *UConfig) Load(input string, inline ...bool) error {
@@ -327,8 +333,8 @@ func (this *UConfig) GetPaths(path string) []string {
 	}
 	this.cacheLock.RUnlock()
 	if path != "" {
-		prefix = "."
-		for _, part := range strings.Split(path, ".") {
+		prefix = this.separator
+		for _, part := range strings.Split(path, this.separator) {
 			kind := reflect.TypeOf(current).Kind()
 			index, err := strconv.Atoi(part)
 			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
@@ -390,7 +396,7 @@ func (this *UConfig) value(path string) (string, error) {
 		}
 	}
 	this.cacheLock.RUnlock()
-	for _, part := range strings.Split(path, ".") {
+	for _, part := range strings.Split(path, this.separator) {
 		kind := reflect.TypeOf(current).Kind()
 		index, err := strconv.Atoi(part)
 		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
