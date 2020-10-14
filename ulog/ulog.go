@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -67,6 +68,7 @@ type ULog struct {
 	fileTime              int
 	fileLast              time.Time
 	fileSeverity          bool
+	fileFacility          syslog.Priority
 	consoleHandle         io.Writer
 	consoleTime           int
 	consoleSeverity       bool
@@ -134,6 +136,8 @@ func (this *ULog) Load(target string) *ULog {
 					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
 						this.fileSeverity = false
 					}
+				case "facility":
+					this.fileFacility = facilities[strings.ToLower(option[2])]
 				}
 			}
 			if this.filePath == "" {
@@ -439,24 +443,28 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 		this.Lock()
 		if this.fileOutputs[path] == nil {
 			os.MkdirAll(filepath.Dir(path), 0755)
-			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0644); err == nil {
 				this.fileOutputs[path] = &FileOutput{handle: handle}
 			}
 		}
 		if this.fileOutputs[path] != nil && this.fileOutputs[path].handle != nil {
 			prefix := ""
-			switch this.fileTime {
-			case TIME_DATETIME:
-				prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
-			case TIME_MSDATETIME:
-				prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%03d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond()/int(time.Millisecond))
-			case TIME_TIMESTAMP:
-				prefix = fmt.Sprintf("%d ", now.Unix())
-			case TIME_MSTIMESTAMP:
-				prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
-			}
-			if this.fileSeverity {
-				prefix += severityLabels[severity]
+			if this.fileFacility != 0 {
+				prefix = fmt.Sprintf("<%d>%s %s[%d]: ", this.fileFacility|severity, now.Format(time.Stamp), this.syslogName, os.Getpid())
+			} else {
+				switch this.fileTime {
+				case TIME_DATETIME:
+					prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
+				case TIME_MSDATETIME:
+					prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%03d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond()/int(time.Millisecond))
+				case TIME_TIMESTAMP:
+					prefix = fmt.Sprintf("%d ", now.Unix())
+				case TIME_MSTIMESTAMP:
+					prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
+				}
+				if this.fileSeverity {
+					prefix += severityLabels[severity]
+				}
 			}
 			this.fileOutputs[path].handle.WriteString(fmt.Sprintf(prefix+layout+"\n", a...))
 			this.fileOutputs[path].last = now
