@@ -238,16 +238,27 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 		case "&":
 			expanded += os.Getenv(arguments[0])
 		case "!":
-			arguments[0] = strings.ToLower(arguments[0])
-			for index := 1; index < len(os.Args); index++ {
-				option := strings.ToLower(os.Args[index])
-				if option == "--"+arguments[0] {
-					if index == len(os.Args)-1 || strings.HasPrefix(os.Args[index+1], "--") {
-						expanded = "true"
-					} else {
-						expanded = os.Args[index+1]
+			if matcher := rcache.Get(fmt.Sprintf(`(?i)^--?(no-?)?(?:%s)(?:(=)(.+))?$`, arguments[0])); matcher != nil {
+				for index := 1; index < len(os.Args); index++ {
+					option := os.Args[index]
+					if option == "--" {
+						break
 					}
-					break
+					if captures := matcher.FindStringSubmatch(option); captures != nil {
+						if captures[2] == "=" {
+							expanded = captures[3]
+						} else {
+							if index == len(os.Args)-1 || strings.HasPrefix(os.Args[index+1], "-") {
+								expanded = "true"
+								if captures[1] != "" {
+									expanded = "false"
+								}
+							} else {
+								expanded = os.Args[index+1]
+							}
+						}
+						break
+					}
 				}
 			}
 		case "-":
@@ -582,4 +593,25 @@ func (this *UConfig) GetDurationBounds(path string, fallback, min, max float64) 
 
 func Duration(input float64) time.Duration {
 	return time.Duration(input * float64(time.Second))
+}
+
+func Args() (args []string) {
+	for index := 1; index < len(os.Args); index++ {
+		option := os.Args[index]
+		if args == nil {
+			if option[0] == '-' {
+				if option != "-" && option != "--" && strings.Index(option, "=") < 0 && index < len(os.Args)-1 && os.Args[index+1][0] != '-' {
+					index++
+				}
+			} else {
+				args = []string{}
+			}
+		}
+		if args != nil {
+			args = append(args, option)
+		} else if option == "--" {
+			args = []string{}
+		}
+	}
+	return
 }
