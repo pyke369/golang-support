@@ -370,6 +370,9 @@ func Slice(value interface{}) []interface{} {
 	return []interface{}{}
 }
 func StringSlice(value interface{}) []string {
+	if cast, ok := value.([]string); ok {
+		return cast
+	}
 	returned := []string{}
 	if _, ok := value.([]interface{}); ok {
 		for _, item := range value.([]interface{}) {
@@ -381,6 +384,9 @@ func StringSlice(value interface{}) []string {
 	return returned
 }
 func NumberSlice(value interface{}) []float64 {
+	if cast, ok := value.([]float64); ok {
+		return cast
+	}
 	returned := []float64{}
 	if _, ok := value.([]interface{}); ok {
 		for _, item := range value.([]interface{}) {
@@ -399,6 +405,9 @@ func Map(value interface{}) map[string]interface{} {
 	return map[string]interface{}{}
 }
 func StringMap(value interface{}) map[string]string {
+	if cast, ok := value.(map[string]string); ok {
+		return cast
+	}
 	returned := map[string]string{}
 	if _, ok := value.(map[string]interface{}); ok {
 		for key, item := range value.(map[string]interface{}) {
@@ -410,6 +419,9 @@ func StringMap(value interface{}) map[string]string {
 	return returned
 }
 func NumberMap(value interface{}) map[string]float64 {
+	if cast, ok := value.(map[string]float64); ok {
+		return cast
+	}
 	returned := map[string]float64{}
 	if _, ok := value.(map[string]interface{}); ok {
 		for key, item := range value.(map[string]interface{}) {
