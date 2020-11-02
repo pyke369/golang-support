@@ -357,8 +357,15 @@ func String(value interface{}) string {
 	return ""
 }
 func Number(value interface{}) float64 {
-	if _, ok := value.(float64); ok {
-		return value.(float64)
+	if value != nil {
+		switch reflect.TypeOf(value).Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return float64(reflect.ValueOf(value).Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return float64(reflect.ValueOf(value).Uint())
+		case reflect.Float32, reflect.Float64:
+			return reflect.ValueOf(value).Float()
+		}
 	}
 	return 0.0
 }
