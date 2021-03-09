@@ -1,11 +1,14 @@
 package uws
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/rand"
@@ -39,6 +42,8 @@ const (
 )
 
 type Config struct {
+	Headers         map[string]string
+	Insecure        bool
 	Protocols       []string
 	NeedProtocol    bool
 	ReadSize        int
@@ -62,8 +67,6 @@ type Socket struct {
 }
 
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
-	endpoint = strings.Replace(endpoint, "wss:", "https:", 1)
-	endpoint = strings.Replace(endpoint, "ws:", "http:", 1)
 	if config == nil {
 		config = &Config{}
 	}
@@ -74,60 +77,77 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
-		var sconn net.Conn
+	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
+	if parts, err := url.Parse(endpoint); err == nil {
+		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
+			var conn net.Conn
 
-		nonce := base64.StdEncoding.EncodeToString(uuid.BUUID())
-		request.Header.Add("User-Agent", "uws")
-		request.Header.Add("Connection", "Upgrade")
-		request.Header.Add("Upgrade", "websocket")
-		request.Header.Add("Sec-WebSocket-Version", WEBSOCKET_VERSION)
-		request.Header.Add("Sec-WebSocket-Key", nonce)
-		if len(config.Protocols) > 0 {
-			request.Header.Add("Sec-WebSocket-Protocol", strings.Join(config.Protocols, ", "))
-		}
-		if origin != "" {
-			request.Header.Add("Origin", origin)
-		}
-		client := &http.Client{Transport: &http.Transport{
-			Dial: func(network, addr string) (conn net.Conn, err error) {
-				dialer := &net.Dialer{Timeout: 10 * time.Second}
-				if conn, err = dialer.Dial(network, addr); err == nil {
-					sconn = conn
+			nonce := base64.StdEncoding.EncodeToString(uuid.BUUID())
+			request.Header.Add("User-Agent", "uws")
+			request.Header.Add("Connection", "Upgrade")
+			request.Header.Add("Upgrade", "websocket")
+			request.Header.Add("Sec-WebSocket-Version", WEBSOCKET_VERSION)
+			request.Header.Add("Sec-WebSocket-Key", nonce)
+			if len(config.Protocols) > 0 {
+				request.Header.Add("Sec-WebSocket-Protocol", strings.Join(config.Protocols, ", "))
+			}
+			if origin != "" {
+				request.Header.Add("Origin", origin)
+			}
+			for name, value := range config.Headers {
+				request.Header.Add(name, value)
+			}
+			if strings.HasPrefix(endpoint, "http:") {
+				if value, err := net.DialTimeout("tcp", parts.Host, config.ConnectTimeout); err == nil {
+					conn = value
+				} else {
+					return nil, fmt.Errorf(`websocket: %v`, err)
 				}
-				return
-			},
-		}}
-		if response, err := client.Do(request); err == nil {
-			ckey, path := sha1.Sum([]byte(nonce+WEBSOCKET_UUID)), ""
-			skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
-			if response.StatusCode != http.StatusSwitchingProtocols || strings.ToLower(response.Header.Get("Connection")) != "upgrade" ||
-				strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) || sconn == nil {
-				response.Body.Close()
-				return nil, errors.New(`websocket: invalid protocol upgrade`)
+			} else {
+				tconfig := &tls.Config{}
+				if config.Insecure {
+					tconfig.InsecureSkipVerify = true
+				}
+				if value, err := tls.DialWithDialer(&net.Dialer{Timeout: config.ConnectTimeout}, "tcp", parts.Host, tconfig); err == nil {
+					conn = net.Conn(value)
+				} else {
+					return nil, fmt.Errorf(`websocket: %v`, err)
+				}
 			}
-			protocol := response.Header.Get("Sec-WebSocket-Protocol")
-			if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
-				response.Body.Close()
-				return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
+			if err := request.Write(conn); err != nil {
+				return nil, fmt.Errorf(`websocket: %v`, err)
 			}
-			if parts, err := url.Parse(endpoint); err == nil {
-				path = parts.Path
-			}
-			if path == "" {
-				path = "/"
-			}
-			ws = &Socket{Path: path, Remote: sconn.RemoteAddr().String(), Origin: origin, Protocol: protocol,
-				config: config, client: true, conn: sconn, connected: true}
-			go ws.receive(response.Body)
-			if config.OpenHandler != nil {
-				config.OpenHandler(ws)
+			conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
+			if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
+				skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
+				ckey, path := sha1.Sum([]byte(nonce+WEBSOCKET_UUID)), parts.Path
+				if path == "" {
+					path = "/"
+				}
+				if response.StatusCode != http.StatusSwitchingProtocols || strings.ToLower(response.Header.Get("Connection")) != "upgrade" ||
+					strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) {
+					response.Body.Close()
+					return nil, fmt.Errorf(`websocket: invalid protocol upgrade (status %d)`, response.StatusCode)
+				}
+				protocol := response.Header.Get("Sec-WebSocket-Protocol")
+				if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
+					response.Body.Close()
+					return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
+				}
+				ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol,
+					config: config, client: true, conn: conn, connected: true}
+				go ws.receive(nil)
+				if config.OpenHandler != nil {
+					config.OpenHandler(ws)
+				}
+			} else {
+				return nil, err
 			}
 		} else {
-			return nil, err
+			return nil, fmt.Errorf(`websocket: %v`, err)
 		}
 	} else {
-		return nil, err
+		return nil, fmt.Errorf(`websocket: %v`, err)
 	}
 	return
 }
