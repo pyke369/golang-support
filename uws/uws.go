@@ -54,12 +54,14 @@ type Config struct {
 	InactiveTimeout time.Duration
 	WriteTimeout    time.Duration
 	OpenHandler     func(*Socket)
-	MessageHandler  func(*Socket, int, []byte)
+	MessageHandler  func(*Socket, int, []byte) bool
 	CloseHandler    func(*Socket, int)
+	Context         interface{}
 }
 
 type Socket struct {
 	Path, Origin, Agent, Remote, Protocol string
+	Context                               interface{}
 	config                                *Config
 	conn                                  net.Conn
 	connected, client, closing            bool
@@ -134,7 +136,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					response.Body.Close()
 					return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
 				}
-				ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol,
+				ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol, Context: config.Context,
 					config: config, client: true, conn: conn, connected: true}
 				go ws.receive(nil)
 				if config.OpenHandler != nil {
@@ -212,7 +214,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				origin = ""
 			}
 			ws = &Socket{Path: request.URL.Path, Origin: origin, Agent: request.Header.Get("User-Agent"),
-				Remote: conn.RemoteAddr().String(), Protocol: protocol, config: config, conn: conn, connected: true}
+				Remote: conn.RemoteAddr().String(), Protocol: protocol, Context: config.Context, config: config, conn: conn, connected: true}
 			go ws.receive(reader)
 			if config.OpenHandler != nil {
 				config.OpenHandler(ws)
@@ -431,10 +433,13 @@ close:
 									code = WEBSOCKET_ERROR_INVALID
 									break close
 								}
+								keep := false
 								if this.config.MessageHandler != nil {
-									this.config.MessageHandler(this, int(dmode), data)
+									keep = this.config.MessageHandler(this, int(dmode), data)
 								}
-								bslab.Put(data)
+								if !keep {
+									bslab.Put(data)
+								}
 								dmode, dsize, doffset, dlast, data = 0, 0, 0, false, nil
 							}
 							size = -1
