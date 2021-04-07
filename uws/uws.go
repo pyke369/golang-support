@@ -313,12 +313,14 @@ func (this *Socket) send(payload net.Buffers) (err error) {
 	if !this.connected {
 		return errors.New(`websocket: not connected`)
 	}
-	this.wlock.Lock()
 	this.conn.SetWriteDeadline(time.Now().Add(this.config.WriteTimeout))
+	this.wlock.Lock()
 	if _, err = payload.WriteTo(this.conn); err != nil {
+		this.wlock.Unlock()
 		this.Close(0)
+	} else {
+		this.wlock.Unlock()
 	}
-	this.wlock.Unlock()
 	return
 }
 
