@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/syslog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,36 +24,70 @@ const (
 	TIME_MSTIMESTAMP
 )
 
+const (
+	LOG_EMERG int = iota
+	LOG_ALERT
+	LOG_CRIT
+	LOG_ERR
+	LOG_WARNING
+	LOG_NOTICE
+	LOG_INFO
+	LOG_DEBUG
+)
+
+const (
+	LOG_KERN int = iota << 3
+	LOG_USER
+	LOG_MAIL
+	LOG_DAEMON
+	LOG_AUTH
+	LOG_SYSLOG
+	LOG_LPR
+	LOG_NEWS
+	LOG_UUCP
+	LOG_CRON
+	LOG_AUTHPRIV
+	LOG_FTP
+	LOG_LOCAL0
+	LOG_LOCAL1
+	LOG_LOCAL2
+	LOG_LOCAL3
+	LOG_LOCAL4
+	LOG_LOCAL5
+	LOG_LOCAL6
+	LOG_LOCAL7
+)
+
 var (
-	facilities = map[string]syslog.Priority{
-		"user":   syslog.LOG_USER,
-		"daemon": syslog.LOG_DAEMON,
-		"local0": syslog.LOG_LOCAL0,
-		"local1": syslog.LOG_LOCAL1,
-		"local2": syslog.LOG_LOCAL2,
-		"local3": syslog.LOG_LOCAL3,
-		"local4": syslog.LOG_LOCAL4,
-		"local5": syslog.LOG_LOCAL5,
-		"local6": syslog.LOG_LOCAL6,
-		"local7": syslog.LOG_LOCAL7,
+	facilities = map[string]int{
+		"user":   LOG_USER,
+		"daemon": LOG_DAEMON,
+		"local0": LOG_LOCAL0,
+		"local1": LOG_LOCAL1,
+		"local2": LOG_LOCAL2,
+		"local3": LOG_LOCAL3,
+		"local4": LOG_LOCAL4,
+		"local5": LOG_LOCAL5,
+		"local6": LOG_LOCAL6,
+		"local7": LOG_LOCAL7,
 	}
-	severities = map[string]syslog.Priority{
-		"error":   syslog.LOG_ERR,
-		"warning": syslog.LOG_WARNING,
-		"info":    syslog.LOG_INFO,
-		"debug":   syslog.LOG_DEBUG,
+	severities = map[string]int{
+		"error":   LOG_ERR,
+		"warning": LOG_WARNING,
+		"info":    LOG_INFO,
+		"debug":   LOG_DEBUG,
 	}
-	severityLabels = map[syslog.Priority]string{
-		syslog.LOG_ERR:     "ERRO ",
-		syslog.LOG_WARNING: "WARN ",
-		syslog.LOG_INFO:    "INFO ",
-		syslog.LOG_DEBUG:   "DBUG ",
+	severityLabels = map[int]string{
+		LOG_ERR:     "ERRO ",
+		LOG_WARNING: "WARN ",
+		LOG_INFO:    "INFO ",
+		LOG_DEBUG:   "DBUG ",
 	}
-	severityColors = map[syslog.Priority]string{
-		syslog.LOG_ERR:     "\x1b[31m",
-		syslog.LOG_WARNING: "\x1b[33m",
-		syslog.LOG_INFO:    "\x1b[36m",
-		syslog.LOG_DEBUG:   "\x1b[32m",
+	severityColors = map[int]string{
+		LOG_ERR:     "\x1b[31m",
+		LOG_WARNING: "\x1b[33m",
+		LOG_INFO:    "\x1b[36m",
+		LOG_DEBUG:   "\x1b[32m",
 	}
 )
 
@@ -68,17 +102,17 @@ type ULog struct {
 	fileTime              int
 	fileLast              time.Time
 	fileSeverity          bool
-	fileFacility          syslog.Priority
+	fileFacility          int
 	consoleHandle         io.Writer
 	consoleTime           int
 	consoleSeverity       bool
 	consoleColors         bool
-	syslogHandle          *syslog.Writer
+	syslogHandle          *Syslog
 	syslogRemote          string
 	syslogName            string
-	syslogFacility        syslog.Priority
+	syslogFacility        int
 	optionUTC             bool
-	level                 syslog.Priority
+	level                 int
 	sync.Mutex
 }
 
@@ -105,9 +139,9 @@ func (this *ULog) Load(target string) *ULog {
 	this.syslog = false
 	this.syslogRemote = ""
 	this.syslogName = filepath.Base(os.Args[0])
-	this.syslogFacility = syslog.LOG_DAEMON
+	this.syslogFacility = LOG_DAEMON
 	this.optionUTC = false
-	this.level = syslog.LOG_INFO
+	this.level = LOG_INFO
 	console := os.Stderr
 	for _, target := range regexp.MustCompile("(file|console|syslog|option)\\s*\\(([^\\)]*)\\)").FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
@@ -211,6 +245,9 @@ func (this *ULog) Load(target string) *ULog {
 			this.consoleColors = false
 		}
 	}
+	if runtime.GOOS == "windows" {
+		this.consoleColors = false
+	}
 	this.Unlock()
 	return this
 }
@@ -234,13 +271,13 @@ func (this *ULog) SetLevel(level string) {
 	level = strings.ToLower(level)
 	switch level {
 	case "error":
-		this.level = syslog.LOG_ERR
+		this.level = LOG_ERR
 	case "warning":
-		this.level = syslog.LOG_WARNING
+		this.level = LOG_WARNING
 	case "info":
-		this.level = syslog.LOG_INFO
+		this.level = LOG_INFO
 	case "debug":
-		this.level = syslog.LOG_DEBUG
+		this.level = LOG_DEBUG
 	}
 }
 
@@ -386,7 +423,7 @@ func strftime(layout string, base time.Time) string {
 	return strings.Join(output, "")
 }
 
-func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface{}, a ...interface{}) {
+func (this *ULog) log(now time.Time, severity int, xlayout interface{}, a ...interface{}) {
 	var err error
 	if this.level < severity || (!this.syslog && !this.file && !this.console) {
 		return
@@ -414,7 +451,7 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 				if this.syslogRemote != "" {
 					protocol = "udp"
 				}
-				if this.syslogHandle, err = syslog.Dial(protocol, this.syslogRemote, this.syslogFacility, this.syslogName); err != nil {
+				if this.syslogHandle, err = DialSyslog(protocol, this.syslogRemote, this.syslogFacility, this.syslogName); err != nil {
 					this.syslogHandle = nil
 				}
 			}
@@ -422,13 +459,13 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 		}
 		if this.syslogHandle != nil {
 			switch severity {
-			case syslog.LOG_ERR:
+			case LOG_ERR:
 				this.syslogHandle.Err(fmt.Sprintf(layout, a...))
-			case syslog.LOG_WARNING:
+			case LOG_WARNING:
 				this.syslogHandle.Warning(fmt.Sprintf(layout, a...))
-			case syslog.LOG_INFO:
+			case LOG_INFO:
 				this.syslogHandle.Info(fmt.Sprintf(layout, a...))
-			case syslog.LOG_DEBUG:
+			case LOG_DEBUG:
 				this.syslogHandle.Debug(fmt.Sprintf(layout, a...))
 			}
 		}
@@ -506,27 +543,27 @@ func (this *ULog) log(now time.Time, severity syslog.Priority, xlayout interface
 }
 
 func (this *ULog) Error(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), syslog.LOG_ERR, layout, a...)
+	this.log(time.Now(), LOG_ERR, layout, a...)
 }
 func (this *ULog) Warn(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), syslog.LOG_WARNING, layout, a...)
+	this.log(time.Now(), LOG_WARNING, layout, a...)
 }
 func (this *ULog) Info(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), syslog.LOG_INFO, layout, a...)
+	this.log(time.Now(), LOG_INFO, layout, a...)
 }
 func (this *ULog) Debug(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), syslog.LOG_DEBUG, layout, a...)
+	this.log(time.Now(), LOG_DEBUG, layout, a...)
 }
 
 func (this *ULog) ErrorTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, syslog.LOG_ERR, layout, a...)
+	this.log(now, LOG_ERR, layout, a...)
 }
 func (this *ULog) WarnTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, syslog.LOG_WARNING, layout, a...)
+	this.log(now, LOG_WARNING, layout, a...)
 }
 func (this *ULog) InfoTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, syslog.LOG_INFO, layout, a...)
+	this.log(now, LOG_INFO, layout, a...)
 }
 func (this *ULog) DebugTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, syslog.LOG_DEBUG, layout, a...)
+	this.log(now, LOG_DEBUG, layout, a...)
 }
