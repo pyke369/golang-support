@@ -82,22 +82,25 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 	return nil, errors.New(`dynacert: no matching certificate`)
 }
 
-func IntermediateTLSConfig(input func(*tls.ClientHelloInfo) (*tls.Certificate, error)) (output *tls.Config) {
-	output = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		CipherSuites: []uint16{
-			// TLS 1.3
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-			// TLS 1.2
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-		},
+func IntermediateTLSConfig(selector func(*tls.ClientHelloInfo) (*tls.Certificate, error), input ...*tls.Config) (output *tls.Config) {
+	if len(input) > 0 && input[0] != nil {
+		output = input[0].Clone()
+	} else {
+		output = &tls.Config{}
 	}
-	if input != nil {
-		output.GetCertificate = input
+	output.MinVersion = tls.VersionTLS12
+	output.CipherSuites = []uint16{
+		// TLS 1.3
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+		// TLS 1.2
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+	}
+	if selector != nil {
+		output.GetCertificate = selector
 	}
 	return
 }
