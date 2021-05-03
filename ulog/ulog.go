@@ -48,6 +48,10 @@ const (
 	LOG_CRON
 	LOG_AUTHPRIV
 	LOG_FTP
+	_
+	_
+	_
+	_
 	LOG_LOCAL0
 	LOG_LOCAL1
 	LOG_LOCAL2
