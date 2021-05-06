@@ -122,7 +122,10 @@ func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*C
 		}
 		transport = DefaultTransport
 	}
-	input, ids := []byte{'['}, map[string]*CALL{}
+	input, ids := make([]byte, 0, 128), map[string]*CALL{}
+	if len(calls) > 1 {
+		input = append(input, '[')
+	}
 	for index, call := range calls {
 		if call.Method == "" {
 			return nil, fmt.Errorf("jsonrpc: invalid method for call #%d", index)
@@ -160,10 +163,20 @@ func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*C
 			input = append(input, ',')
 		}
 	}
-	input = append(input, ']')
+	if len(calls) > 1 {
+		input = append(input, ']')
+	}
 	if output, err := transport(input, context); err != nil {
 		return nil, err
 	} else {
+		if output == nil {
+			output = []byte("[]")
+		}
+		output = bytes.TrimSpace(output)
+		if output[0] != '[' {
+			output = append([]byte("["), output...)
+			output = append(output, ']')
+		}
 		responses := []RESPONSE{}
 		if err := json.Unmarshal(output, &responses); err == nil {
 			for _, response := range responses {
