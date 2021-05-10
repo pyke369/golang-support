@@ -52,7 +52,7 @@ var (
 func init() {
 	escaped = "{}[],#/*;:= "                                                                                                          // match characters within quotes to escape
 	unescaper = regexp.MustCompile(`@\d+@`)                                                                                           // match escaped characters (to reverse previous escaping)
-	expander = regexp.MustCompile(`{{([<|@&!\-\+])\s*([^{}]*?)\s*}}`)                                                                 // match external content macros
+	expander = regexp.MustCompile(`{{([<|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                                // match external content macros
 	sizer = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)                                                                  // match size value
 	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                                                                     // match duration value form1 (free)
 	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)                                                    // match duration value form2 (timecode)
@@ -276,6 +276,8 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 				}
 			}
 			expanded = strings.TrimSpace(expanded)
+		case "_":
+			expanded = filepath.Base(input)
 		}
 		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:len(content)])
 	}
