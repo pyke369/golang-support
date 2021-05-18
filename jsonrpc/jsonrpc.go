@@ -66,10 +66,10 @@ type ERROR struct {
 	Data    interface{}
 }
 type ROUTE struct {
-	Method METHOD
-	Opaque interface{}
+	Handler HANDLER
+	Opaque  interface{}
 }
-type METHOD func(map[string]interface{}, interface{}) (interface{}, *ERROR)
+type HANDLER func(map[string]interface{}, interface{}) (interface{}, *ERROR)
 
 var httpDefaultTransport = &http.Transport{
 	MaxIdleConnsPerHost: 64,
@@ -197,13 +197,10 @@ func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*C
 	return
 }
 
-func Handle(input []byte, routes map[string]*ROUTE, acls []string, options ...bool) (output []byte) {
+func Handle(input []byte, routes map[string]*ROUTE, acls []string, options ...interface{}) (output []byte) {
 	input = bytes.TrimSpace(input)
 	output = []byte{}
-	batch, catch := true, true
-	if len(options) > 0 {
-		catch = options[0]
-	}
+	batch := true
 	requests, responses := []REQUEST{}, map[interface{}]*RESPONSE{}
 	if input == nil || len(input) == 0 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
@@ -268,14 +265,16 @@ func Handle(input []byte, routes map[string]*ROUTE, acls []string, options ...bo
 					}
 					running++
 					go func(request REQUEST) {
-						if catch {
-							defer func() {
-								if r := recover(); r != nil {
-									sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: fmt.Sprintf("jsonrpc: %v", r)}}
-								}
-							}()
+						defer func() {
+							if r := recover(); r != nil {
+								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: fmt.Sprintf("jsonrpc: %v", r)}}
+							}
+						}()
+						opaque := routes[request.Method].Opaque
+						if opaque == nil && len(options) > 0 {
+							opaque = options[0]
 						}
-						if result, err := routes[request.Method].Method(request.Params.(map[string]interface{}), routes[request.Method].Opaque); err != nil {
+						if result, err := routes[request.Method].Handler(request.Params.(map[string]interface{}), opaque); err != nil {
 							sink <- &RESPONSE{Id: request.Id, Error: err}
 						} else {
 							sink <- &RESPONSE{Id: request.Id, Result: result}
