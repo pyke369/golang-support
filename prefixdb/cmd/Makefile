@@ -1,5 +1,6 @@
 prefixdb: prefixdb.go
-	@go build prefixdb.go && strip prefixdb
+	@env GOPATH=/tmp/go CGO_ENABLED=0 go build -trimpath prefixdb.go
+	@-strip prefixdb 2>/dev/null || true
 
 run: prefixdb
 	@#./prefixdb city city.pfdb@'MMCITY 20190402' GeoIP2-City-Locations-en.csv GeoIP2-City-Blocks-IPv4.csv GeoIP2-City-Blocks-IPv6.csv
