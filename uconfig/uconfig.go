@@ -52,7 +52,7 @@ var (
 func init() {
 	escaped = "{}[],#/*;:= "                                                                                                          // match characters within quotes to escape
 	unescaper = regexp.MustCompile(`@\d+@`)                                                                                           // match escaped characters (to reverse previous escaping)
-	expander = regexp.MustCompile(`{{([<|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                                // match external content macros
+	expander = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                               // match external content macros
 	sizer = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)                                                                  // match size value
 	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                                                                     // match duration value form1 (free)
 	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)                                                    // match duration value form2 (timecode)
@@ -204,6 +204,19 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 			}
 			if nbase != "" && strings.Index(expanded, "\n") >= 0 {
 				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
+			}
+		case "=":
+			if elements, err := filepath.Glob(arguments[0]); err == nil {
+				for _, element := range elements {
+					if mcontent, err := ioutil.ReadFile(element); err == nil {
+						for _, line := range strings.Split(string(mcontent), "\n") {
+							line = strings.TrimSpace(line)
+							if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {
+								expanded += fmt.Sprintf("\"%s\"\n", line)
+							}
+						}
+					}
+				}
 			}
 		case "|":
 			if arguments[0][0:1] != "/" {
@@ -454,6 +467,14 @@ func (this *UConfig) GetBoolean(path string, fallback bool) bool {
 		return true
 	}
 	return false
+}
+
+func (this *UConfig) GetStrings(path string) []string {
+	list := []string{}
+	for _, path := range this.GetPaths(path) {
+		list = append(list, this.GetString(path, ""))
+	}
+	return list
 }
 
 func (this *UConfig) GetString(path string, fallback string) string {
