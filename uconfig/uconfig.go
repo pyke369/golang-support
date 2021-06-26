@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -284,7 +283,7 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 			}
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
-					element = path.Base(element)
+					element = filepath.Base(element)
 					expanded += fmt.Sprintf("%s ", strings.TrimSuffix(element, filepath.Ext(element)))
 				}
 			}
@@ -335,6 +334,11 @@ func (this *UConfig) String() string {
 		return string(config)
 	}
 	return "{}"
+}
+
+func (this *UConfig) Base(path string) string {
+	parts := strings.Split(path, this.separator)
+	return parts[len(parts)-1]
 }
 
 func (this *UConfig) GetPaths(path string) []string {
