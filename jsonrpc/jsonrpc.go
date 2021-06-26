@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"bytes"
+	gcontext "context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uuid"
 )
 
@@ -45,6 +47,7 @@ type TRANSPORT_OPTIONS struct {
 	URL       string
 	Headers   map[string]string
 	Timeout   time.Duration
+	Context   interface{}
 	Transport *http.Transport
 }
 type TRANSPORT func([]byte, interface{}) ([]byte, error)
@@ -71,10 +74,13 @@ type ROUTE struct {
 }
 type HANDLER func(map[string]interface{}, interface{}) (interface{}, *ERROR)
 
-var httpDefaultTransport = &http.Transport{
-	MaxIdleConnsPerHost: 64,
-	IdleConnTimeout:     60 * time.Second,
-	DisableCompression:  true,
+var httpDefaultTransport *http.Transport
+
+func init() {
+	httpDefaultTransport = http.DefaultTransport.(*http.Transport).Clone()
+	httpDefaultTransport.MaxIdleConnsPerHost = 64
+	httpDefaultTransport.IdleConnTimeout = 60 * time.Second
+	httpDefaultTransport.DisableCompression = true
 }
 
 func DefaultTransport(input []byte, context interface{}) (output []byte, err error) {
@@ -92,6 +98,9 @@ func DefaultTransport(input []byte, context interface{}) (output []byte, err err
 		options.Transport = httpDefaultTransport
 	}
 	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(input)); err == nil {
+		if options.Context != nil {
+			request = request.WithContext(gcontext.WithValue(request.Context(), "jsonrpc", options.Context))
+		}
 		for key, value := range options.Headers {
 			request.Header.Set(key, value)
 		}
@@ -197,7 +206,7 @@ func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*C
 	return
 }
 
-func Handle(input []byte, routes map[string]*ROUTE, acls []string, options ...interface{}) (output []byte) {
+func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ...interface{}) (output []byte) {
 	input = bytes.TrimSpace(input)
 	output = []byte{}
 	batch := true
@@ -232,12 +241,26 @@ func Handle(input []byte, routes map[string]*ROUTE, acls []string, options ...in
 						}
 						continue
 					}
-					if acls != nil {
+					if len(filters) != 0 {
 						authorized := false
-						for _, acl := range acls {
-							if strings.HasPrefix(request.Method, acl) {
-								authorized = true
-								break
+						for _, filter := range filters {
+							if filter = strings.TrimSpace(filter); len(filter) != 0 {
+								if filter[0] == '~' {
+									if matcher := rcache.Get(strings.TrimSpace(filter[1:])); matcher != nil && matcher.MatchString(request.Method) {
+										authorized = true
+										break
+									}
+								} else if filter[0] == '=' {
+									if request.Method == strings.TrimSpace(filter[1:]) {
+										authorized = true
+										break
+									}
+								} else {
+									if strings.Contains(request.Method, filter) {
+										authorized = true
+										break
+									}
+								}
 							}
 						}
 						if !authorized {
