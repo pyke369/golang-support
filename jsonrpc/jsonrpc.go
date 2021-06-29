@@ -380,14 +380,14 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 }
 
 func Bool(value interface{}) bool {
-	if _, ok := value.(bool); ok {
-		return value.(bool)
+	if cast, ok := value.(bool); ok {
+		return cast
 	}
 	return false
 }
 func String(value interface{}) string {
-	if _, ok := value.(string); ok {
-		return value.(string)
+	if cast, ok := value.(string); ok {
+		return cast
 	}
 	return ""
 }
@@ -406,20 +406,32 @@ func Number(value interface{}) float64 {
 }
 
 func Slice(value interface{}) []interface{} {
-	if _, ok := value.([]interface{}); ok {
-		return value.([]interface{})
+	if cast, ok := value.([]interface{}); ok {
+		return cast
 	}
 	return []interface{}{}
 }
-func StringSlice(value interface{}) []string {
+func StringSlice(value interface{}, extra ...bool) []string {
+	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := value.([]string); ok {
-		return cast
+		if !noempty {
+			return cast
+		}
+		returned := []string{}
+		for _, item := range cast {
+			if strings.TrimSpace(item) != "" {
+				returned = append(returned, item)
+			}
+		}
+		return returned
 	}
 	returned := []string{}
-	if _, ok := value.([]interface{}); ok {
-		for _, item := range value.([]interface{}) {
-			if _, ok := item.(string); ok {
-				returned = append(returned, item.(string))
+	if cast, ok := value.([]interface{}); ok {
+		for _, item := range cast {
+			if cast, ok := item.(string); ok {
+				if !noempty || strings.TrimSpace(cast) != "" {
+					returned = append(returned, cast)
+				}
 			}
 		}
 	}
@@ -430,10 +442,10 @@ func NumberSlice(value interface{}) []float64 {
 		return cast
 	}
 	returned := []float64{}
-	if _, ok := value.([]interface{}); ok {
-		for _, item := range value.([]interface{}) {
-			if _, ok := item.(float64); ok {
-				returned = append(returned, item.(float64))
+	if cast, ok := value.([]interface{}); ok {
+		for _, item := range cast {
+			if cast, ok := item.(float64); ok {
+				returned = append(returned, cast)
 			}
 		}
 	}
@@ -441,20 +453,32 @@ func NumberSlice(value interface{}) []float64 {
 }
 
 func Map(value interface{}) map[string]interface{} {
-	if _, ok := value.(map[string]interface{}); ok {
-		return value.(map[string]interface{})
+	if cast, ok := value.(map[string]interface{}); ok {
+		return cast
 	}
 	return map[string]interface{}{}
 }
-func StringMap(value interface{}) map[string]string {
+func StringMap(value interface{}, extra ...bool) map[string]string {
+	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := value.(map[string]string); ok {
-		return cast
+		if !noempty {
+			return cast
+		}
+		returned := map[string]string{}
+		for key, item := range cast {
+			if strings.TrimSpace(item) != "" {
+				returned[key] = item
+			}
+		}
+		return returned
 	}
 	returned := map[string]string{}
-	if _, ok := value.(map[string]interface{}); ok {
-		for key, item := range value.(map[string]interface{}) {
-			if _, ok := item.(string); ok {
-				returned[key] = item.(string)
+	if cast, ok := value.(map[string]interface{}); ok {
+		for key, item := range cast {
+			if cast, ok := item.(string); ok {
+				if !noempty || strings.TrimSpace(cast) != "" {
+					returned[key] = cast
+				}
 			}
 		}
 	}
@@ -465,10 +489,10 @@ func NumberMap(value interface{}) map[string]float64 {
 		return cast
 	}
 	returned := map[string]float64{}
-	if _, ok := value.(map[string]interface{}); ok {
-		for key, item := range value.(map[string]interface{}) {
-			if _, ok := item.(float64); ok {
-				returned[key] = item.(float64)
+	if cast, ok := value.(map[string]interface{}); ok {
+		for key, item := range cast {
+			if cast, ok := item.(float64); ok {
+				returned[key] = cast
 			}
 		}
 	}
