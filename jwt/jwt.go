@@ -49,10 +49,12 @@ func Decode(token, secret string) (claims map[string]interface{}, err error) {
 	if err != nil {
 		return nil, err
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal(mac.Sum(nil), decoded) {
-		return nil, fmt.Errorf("jwt: invalid signature")
+	if secret != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(parts[0] + "." + parts[1]))
+		if !hmac.Equal(mac.Sum(nil), decoded) {
+			return nil, fmt.Errorf("jwt: invalid signature")
+		}
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
