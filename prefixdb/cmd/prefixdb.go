@@ -29,9 +29,15 @@ type LOCATION struct {
 	InEurope      bool
 }
 
+type OUI struct {
+	Mac     string `json:"oui"`
+	Company string `json:"companyName"`
+}
+
 var (
 	csvMatcher  = regexp.MustCompile(`(?:,|\n|^)("(?:(?:"")*[^"]*)*"|[^",\n]*|(?:\n|$))`)
 	jsonMatcher = regexp.MustCompile(`^(\S+)(?:\s(\{.+?\}))?$`)
+	ouiMatcher  = regexp.MustCompile(`(?i)^([0-9a-f]{1,2})(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?$`)
 	pfdb        = prefixdb.New()
 )
 
@@ -59,6 +65,66 @@ func mkjson() {
 							json.Unmarshal([]byte(fields[2]), &data)
 							pfdb.Add(*prefix, data, [][]string{[]string{"key1", "key2"}})
 							count++
+						}
+					}
+				}
+				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
+					last = now
+					fmt.Fprintf(os.Stderr, "\r- adding prefixes  [%s] %d", os.Args[index], count)
+				}
+			}
+			handle.Close()
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Now().Sub(start))/float64(time.Second), count)
+		}
+	}
+	start := time.Now()
+	description := ""
+	if index := strings.Index(os.Args[2], "@"); index > 0 {
+		description = os.Args[2][index+1:]
+		os.Args[2] = os.Args[2][:index]
+	}
+	fmt.Fprintf(os.Stderr, "\r- saving database  [%s]... ", os.Args[2])
+	if _, err := pfdb.Save(os.Args[2], description); err != nil {
+		fmt.Fprintf(os.Stderr, "\r- saving database   [%s] failed (%v)\n", os.Args[2], err)
+	} else {
+		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
+			os.Args[2], float64(time.Now().Sub(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
+			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
+		)
+	}
+}
+
+func mkoui() {
+	for index := 3; index < len(os.Args); index++ {
+		count := 0
+		if handle, err := os.Open(os.Args[index]); err == nil {
+			reader := bufio.NewReader(handle)
+			last := time.Now()
+			start := last
+			for {
+				if line, err := reader.ReadString('\n'); err != nil {
+					break
+				} else {
+					data, address, mask := OUI{}, "fe80:0000:0000:0000:0000:", 80
+					if json.Unmarshal([]byte(line), &data) == nil {
+						if fields := ouiMatcher.FindStringSubmatch(strings.TrimSpace(data.Mac)); fields != nil && len(fields) > 6 {
+							for index := 1; index <= 6; index++ {
+								if len(fields[index]) != 0 {
+									mask += 4 * len(fields[index])
+									if len(fields[index]) == 1 {
+										fields[index] += "0"
+									}
+								}
+								value, _ := strconv.ParseInt(fields[index], 16, 32)
+								address += fmt.Sprintf("%02x", value)
+								if index == 2 || index == 4 {
+									address += ":"
+								}
+							}
+							if _, prefix, err := net.ParseCIDR(fmt.Sprintf("%s/%d", address, mask)); err == nil {
+								pfdb.Add(*prefix, map[string]interface{}{"company": data.Company}, nil)
+								count++
+							}
 						}
 					}
 				}
@@ -328,6 +394,7 @@ func usage(status int) {
 	fmt.Fprintf(os.Stderr, "usage: prefixdb <action> [parameters...]\n\n"+
 		"help                                                                  show this help screen\n"+
 		"json   <database[@<description>]> <JSON prefixes>...                  build database from generic JSON-formatted prefixes lists\n"+
+		"oui    <database[@<description>]> <JSON OUI>...                       build database from macadress.io JSON OUI lists\n"+
 		"city   <database[@<description>]> <CSV locations> <CSV prefixes>...   build database from MaxMind GeoIP2 cities lists\n"+
 		"asn    <database[@<description>]> <CSV prefixes>...                   build database from MaxMind GeoLite2 asnums lists\n"+
 		"lookup <database>... <address>...                                     lookup entries in databases\n"+
@@ -347,6 +414,11 @@ func main() {
 			usage(1)
 		}
 		mkjson()
+	case "oui":
+		if len(os.Args) < 3 {
+			usage(1)
+		}
+		mkoui()
 	case "city":
 		if len(os.Args) < 5 {
 			usage(1)
