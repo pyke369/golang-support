@@ -234,6 +234,8 @@ func (this *Socket) IsConnected() bool {
 }
 
 func (this *Socket) Write(mode byte, data []byte) (err error) {
+	var mask []byte
+
 	length := len(data)
 	if (mode == WEBSOCKET_OPCODE_TEXT || mode == WEBSOCKET_OPCODE_BLOB) && length > 0 {
 		this.dlock.Lock()
@@ -264,13 +266,14 @@ func (this *Socket) Write(mode byte, data []byte) (err error) {
 			}
 			if this.client {
 				payload[0][1] |= WEBSOCKET_MASK
-				payload = append(payload, rmask())
-				xor(payload[len(payload)-1], data[offset:offset+size])
+				mask = rmask()
+				payload = append(payload, mask)
+				xor(mask, data[offset:offset+size])
 			}
 			payload = append(payload, data[offset:offset+size])
 			err = this.send(payload)
 			if this.client {
-				xor(payload[len(payload)-2], data[offset:offset+size])
+				xor(mask, data[offset:offset+size])
 			}
 			if err != nil {
 				return
