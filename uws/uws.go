@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -50,9 +51,9 @@ type Config struct {
 	FragmentSize    int
 	MessageSize     int
 	ConnectTimeout  time.Duration
-	ProbeTimeout    time.Duration
-	InactiveTimeout time.Duration
-	WriteTimeout    time.Duration
+	ProbeTimeout    int64
+	InactiveTimeout int64
+	WriteTimeout    int64
 	OpenHandler     func(*Socket)
 	MessageHandler  func(*Socket, int, []byte) bool
 	CloseHandler    func(*Socket, int)
@@ -66,6 +67,19 @@ type Socket struct {
 	conn                                  net.Conn
 	connected, client, closing            bool
 	wlock, dlock, clock                   sync.Mutex
+	slast, rlast                          int64
+}
+
+var now int64
+
+func init() {
+	atomic.StoreInt64(&now, time.Now().UnixNano())
+	go func() {
+		for {
+			atomic.StoreInt64(&now, time.Now().UnixNano())
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
 }
 
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
@@ -76,9 +90,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
 	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 	config.ConnectTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
+	config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if parts, err := url.Parse(endpoint); err == nil {
 		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
@@ -206,9 +220,9 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
 			config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
 			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
-			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
+			config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			origin := request.Header.Get("Origin")
 			if strings.ToLower(origin) == "null" {
 				origin = ""
@@ -316,8 +330,12 @@ func (this *Socket) send(payload net.Buffers) (err error) {
 	if !this.connected {
 		return errors.New(`websocket: not connected`)
 	}
-	this.conn.SetWriteDeadline(time.Now().Add(this.config.WriteTimeout))
 	this.wlock.Lock()
+	lnow := atomic.LoadInt64(&now)
+	if time.Duration(lnow-this.slast) >= time.Second {
+		this.slast = lnow
+		this.conn.SetWriteDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(this.config.WriteTimeout)))
+	}
 	if _, err = payload.WriteTo(this.conn); err != nil {
 		this.wlock.Unlock()
 		this.Close(0)
@@ -332,7 +350,7 @@ func (this *Socket) receive(buffered io.Reader) {
 	var err error
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
-	seen, code, dmode, dsize, doffset, dlast := time.Now(), 0, byte(0), 0, 0, false
+	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&now), 0, byte(0), 0, 0, false
 	buffer, roffset, woffset, read := bslab.Get(this.config.ReadSize, nil), 0, 0, 0
 	buffer = buffer[:cap(buffer)]
 	if !this.client {
@@ -346,7 +364,11 @@ close:
 			roffset = 0
 		}
 
-		this.conn.SetReadDeadline(time.Now().Add(this.config.ProbeTimeout))
+		lnow := atomic.LoadInt64(&now)
+		if time.Duration(lnow-this.rlast) >= time.Second {
+			this.rlast = lnow
+			this.conn.SetReadDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(this.config.ProbeTimeout)))
+		}
 		if buffered != nil {
 			read, err = buffered.Read(buffer[woffset:])
 			buffered = nil
@@ -355,7 +377,7 @@ close:
 		}
 
 		if read > 0 {
-			seen = time.Now()
+			seen = atomic.LoadInt64(&now)
 			woffset += read
 			for {
 				if size < 0 {
@@ -509,7 +531,7 @@ close:
 			break close
 		}
 
-		if time.Now().Sub(seen) >= this.config.InactiveTimeout {
+		if atomic.LoadInt64(&now)-seen >= this.config.InactiveTimeout {
 			break close
 		}
 	}
