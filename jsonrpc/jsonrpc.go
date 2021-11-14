@@ -2,7 +2,7 @@ package jsonrpc
 
 import (
 	"bytes"
-	gcontext "context"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +41,7 @@ type CALL struct {
 	Result       interface{}
 	Error        *ERROR
 	Id           string
+	id           string
 	paired       bool
 }
 type TRANSPORT_OPTIONS struct {
@@ -83,8 +84,8 @@ func init() {
 	httpDefaultTransport.DisableCompression = true
 }
 
-func DefaultTransport(input []byte, context interface{}) (output []byte, err error) {
-	options := context.(TRANSPORT_OPTIONS)
+func DefaultTransport(input []byte, tcontext interface{}) (output []byte, err error) {
+	options := tcontext.(TRANSPORT_OPTIONS)
 	if options.URL == "" {
 		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
 	}
@@ -99,7 +100,7 @@ func DefaultTransport(input []byte, context interface{}) (output []byte, err err
 	}
 	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(input)); err == nil {
 		if options.Context != nil {
-			request = request.WithContext(gcontext.WithValue(request.Context(), "jsonrpc", options.Context))
+			request = request.WithContext(context.WithValue(request.Context(), "jsonrpc", options.Context))
 		}
 		for key, value := range options.Headers {
 			request.Header.Set(key, value)
@@ -121,89 +122,112 @@ func DefaultTransport(input []byte, context interface{}) (output []byte, err err
 	return
 }
 
-func Call(calls []*CALL, transport TRANSPORT, context interface{}) (results []*CALL, err error) {
-	if calls == nil || len(calls) == 0 {
-		return nil, errors.New(`jsonrpc: no call provided`)
-	}
-	if transport == nil {
-		if _, ok := context.(TRANSPORT_OPTIONS); !ok {
-			return nil, errors.New(`jsonrpc: invalid context for default transport`)
-		}
-		transport = DefaultTransport
-	}
-	input, ids := make([]byte, 0, 128), map[string]*CALL{}
+func Request(calls []*CALL) (payload []byte, err error) {
+	payload = make([]byte, 0, 128)
 	if len(calls) > 1 {
-		input = append(input, '[')
+		payload = append(payload, '[')
 	}
 	for index, call := range calls {
 		if call.Method == "" {
 			return nil, fmt.Errorf("jsonrpc: invalid method for call #%d", index)
 		}
+		call.id, call.paired = call.Id, false
 		if call.Notification {
-			call.Id = ""
+			call.id = ""
 		} else if call.Id == "" {
-			call.Id = uuid.UUID()
+			call.id = uuid.UUID()
 		}
-		if call.Id != "" {
-			ids[call.Id] = call
-		}
-		input = append(input, `{"jsonrpc":"2.0","method":"`...)
-		input = append(input, call.Method...)
-		input = append(input, '"')
+		payload = append(payload, `{"jsonrpc":"2.0","method":"`...)
+		payload = append(payload, call.Method...)
+		payload = append(payload, '"')
 		if !call.Notification {
-			input = append(input, `,"id":"`...)
-			input = append(input, call.Id...)
-			input = append(input, '"')
+			payload = append(payload, `,"id":"`...)
+			payload = append(payload, call.id...)
+			payload = append(payload, '"')
 		}
 		if call.Params != nil {
 			if marshaled, err := json.Marshal(call.Params); err == nil {
-				input = append(input, `,"params":`...)
+				payload = append(payload, `,"params":`...)
 				if marshaled[0] != '[' && marshaled[0] != '{' {
-					input = append(input, '[')
-					input = append(input, marshaled...)
-					input = append(input, ']')
+					payload = append(payload, '[')
+					payload = append(payload, marshaled...)
+					payload = append(payload, ']')
 				} else {
-					input = append(input, marshaled...)
+					payload = append(payload, marshaled...)
 				}
 			}
 		}
-		input = append(input, '}')
+		payload = append(payload, '}')
 		if index < len(calls)-1 {
-			input = append(input, ',')
+			payload = append(payload, ',')
 		}
 	}
 	if len(calls) > 1 {
-		input = append(input, ']')
-	}
-	if output, err := transport(input, context); err != nil {
-		return nil, err
-	} else {
-		if output == nil {
-			output = []byte("[]")
-		}
-		output = bytes.TrimSpace(output)
-		if output[0] != '[' {
-			output = append([]byte("["), output...)
-			output = append(output, ']')
-		}
-		responses := []RESPONSE{}
-		if err := json.Unmarshal(output, &responses); err == nil {
-			for _, response := range responses {
-				if call, ok := ids[fmt.Sprintf("%v", response.Id)]; ok {
-					call.Result, call.Error, call.paired = response.Result, response.Error, true
-				}
-			}
-			for _, call := range calls {
-				if !call.Notification && !call.paired {
-					call.Error = &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE}
-				}
-			}
-			results = calls
-		} else {
-			return nil, fmt.Errorf("jsonrpc: %v", err)
-		}
+		payload = append(payload, ']')
 	}
 	return
+}
+
+func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
+	if payload == nil {
+		payload = []byte("[]")
+	}
+	payload = bytes.TrimSpace(payload)
+	if payload[0] != '[' {
+		payload = append([]byte("["), payload...)
+		payload = append(payload, ']')
+	}
+	responses, ids := []RESPONSE{}, map[string]*CALL{}
+	if err := json.Unmarshal(payload, &responses); err != nil {
+		return nil, fmt.Errorf("jsonrpc: %v", err)
+	}
+	if calls == nil {
+		calls = []*CALL{}
+	}
+	for _, call := range calls {
+		if call.id != "" {
+			ids[call.id] = call
+		}
+	}
+	for _, response := range responses {
+		id := fmt.Sprintf("%v", response.Id)
+		if len(ids) != 0 {
+			if call, ok := ids[id]; ok {
+				call.Result, call.Error, call.paired = response.Result, response.Error, true
+			}
+		} else {
+			calls = append(calls, &CALL{Id: id, Result: response.Result, Error: response.Error})
+		}
+	}
+	if len(ids) != 0 {
+		for _, call := range calls {
+			if !call.Notification && !call.paired {
+				call.Error = &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE}
+			}
+		}
+	}
+	return calls, nil
+}
+
+func Call(calls []*CALL, transport TRANSPORT, tcontext interface{}) (results []*CALL, err error) {
+	if calls == nil || len(calls) == 0 {
+		return nil, errors.New(`jsonrpc: no call provided`)
+	}
+	if transport == nil {
+		if _, ok := tcontext.(TRANSPORT_OPTIONS); !ok {
+			return nil, errors.New(`jsonrpc: invalid context for default transport`)
+		}
+		transport = DefaultTransport
+	}
+	input, err := Request(calls)
+	if err != nil {
+		return nil, err
+	}
+	output, err := transport(input, tcontext)
+	if err != nil {
+		return nil, err
+	}
+	return Response(output, calls)
 }
 
 func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ...interface{}) (output []byte) {
