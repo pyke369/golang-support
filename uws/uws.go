@@ -43,8 +43,8 @@ const (
 )
 
 type Config struct {
+	TLSConfig       *tls.Config
 	Headers         map[string]string
-	Insecure        bool
 	Protocols       []string
 	NeedProtocol    bool
 	ReadSize        int
@@ -54,6 +54,8 @@ type Config struct {
 	ProbeTimeout    int64
 	InactiveTimeout int64
 	WriteTimeout    int64
+	WriteBufferSize int
+	ReadBufferSize  int
 	OpenHandler     func(*Socket)
 	MessageHandler  func(*Socket, int, []byte) bool
 	CloseHandler    func(*Socket, int)
@@ -93,6 +95,12 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
 	config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	if config.ReadBufferSize != 0 {
+		config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 256<<10)
+	}
+	if config.WriteBufferSize != 0 {
+		config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 256<<10)
+	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if parts, err := url.Parse(endpoint); err == nil {
 		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
@@ -113,24 +121,32 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			for name, value := range config.Headers {
 				request.Header.Add(name, value)
 			}
-			if strings.HasPrefix(endpoint, "http:") {
-				if value, err := net.DialTimeout("tcp", parts.Host, config.ConnectTimeout); err == nil {
-					conn = value
-				} else {
-					return nil, fmt.Errorf(`websocket: %v`, err)
+			if value, err := net.DialTimeout("tcp", parts.Host, config.ConnectTimeout); err == nil {
+				conn = value
+				if tconn, ok := conn.(*net.TCPConn); ok {
+					if config.ReadBufferSize != 0 {
+						tconn.SetReadBuffer(config.ReadBufferSize)
+					}
+					if config.WriteBufferSize != 0 {
+						tconn.SetWriteBuffer(config.WriteBufferSize)
+					}
 				}
 			} else {
-				tconfig := &tls.Config{}
-				if config.Insecure {
-					tconfig.InsecureSkipVerify = true
-				}
-				if value, err := tls.DialWithDialer(&net.Dialer{Timeout: config.ConnectTimeout}, "tcp", parts.Host, tconfig); err == nil {
-					conn = net.Conn(value)
-				} else {
-					return nil, fmt.Errorf(`websocket: %v`, err)
-				}
+				return nil, fmt.Errorf(`websocket: %v`, err)
 			}
+			if strings.HasPrefix(endpoint, "https:") {
+				if config.TLSConfig == nil {
+					config.TLSConfig = &tls.Config{}
+				}
+				if value, _, err := net.SplitHostPort(parts.Host); err == nil {
+					parts.Host = value
+				}
+				config.TLSConfig.ServerName = parts.Host
+				conn = tls.Client(conn, config.TLSConfig)
+			}
+			conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout))
 			if err := request.Write(conn); err != nil {
+				conn.Close()
 				return nil, fmt.Errorf(`websocket: %v`, err)
 			}
 			conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
@@ -223,6 +239,20 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
 			config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			if config.ReadBufferSize != 0 {
+				config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 256<<10)
+			}
+			if config.WriteBufferSize != 0 {
+				config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 256<<10)
+			}
+			if tconn, ok := conn.(*net.TCPConn); ok {
+				if config.ReadBufferSize != 0 {
+					tconn.SetReadBuffer(config.ReadBufferSize)
+				}
+				if config.WriteBufferSize != 0 {
+					tconn.SetWriteBuffer(config.WriteBufferSize)
+				}
+			}
 			origin := request.Header.Get("Origin")
 			if strings.ToLower(origin) == "null" {
 				origin = ""
