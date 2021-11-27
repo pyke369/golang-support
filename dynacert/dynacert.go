@@ -4,54 +4,61 @@ import (
 	"crypto/tls"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
 )
 
+type CERTIFICATE struct {
+	public      string
+	private     string
+	certificate *tls.Certificate
+	modified    time.Time
+}
+
 type DYNACERT struct {
-	Public, Key  string
-	Config       [][3]string
-	certificates []*tls.Certificate
-	modified     []time.Time
-	last         time.Time
 	sync.RWMutex
+	certificates map[string]*CERTIFICATE
+	last         time.Time
+}
+
+func (this *DYNACERT) Add(predicate, public, private string) {
+	this.Lock()
+	if this.certificates == nil {
+		this.certificates = map[string]*CERTIFICATE{}
+	}
+	this.certificates[strings.TrimSpace(predicate)] = &CERTIFICATE{public: strings.TrimSpace(public), private: strings.TrimSpace(private)}
+	this.last = time.Now().Add(-time.Minute)
+	this.Unlock()
+}
+
+func (this *DYNACERT) Clear() {
+	this.Lock()
+	this.certificates = map[string]*CERTIFICATE{}
+	this.Unlock()
+}
+
+func (this *DYNACERT) Count() int {
+	this.RLock()
+	defer this.RUnlock()
+	return len(this.certificates)
 }
 
 func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
-	if this.Config == nil || this.certificates == nil || this.modified == nil {
+	if time.Now().Sub(this.last) >= time.Second*15 {
 		this.Lock()
-		if this.Config == nil {
-			this.Config = [][3]string{}
-			if this.Public != "" && this.Key != "" {
-				this.Config = append(this.Config, [3]string{"", this.Public, this.Key})
-				this.Public, this.Key = "", ""
-			}
-		}
-		if this.certificates == nil {
-			this.certificates = make([]*tls.Certificate, len(this.Config))
-		}
-		if this.modified == nil {
-			this.modified = make([]time.Time, len(this.Config))
-		}
-		this.Unlock()
-	}
-
-	if time.Now().Sub(this.last) >= time.Minute {
-		this.Lock()
-		if time.Now().Sub(this.last) >= time.Minute {
+		if time.Now().Sub(this.last) >= time.Second*15 {
 			var info os.FileInfo
 
 			this.last = time.Now()
-			for index, config := range this.Config {
-				if info, err = os.Stat(config[1]); err == nil {
-					if _, err = os.Stat(config[2]); err == nil {
-						if info.ModTime().Sub(this.modified[index]) != 0 {
-							if certificate, err := tls.LoadX509KeyPair(config[1], config[2]); err == nil {
-								this.certificates[index] = &certificate
-								this.modified[index] = info.ModTime()
-							}
+			for _, certificate := range this.certificates {
+				if info, err = os.Stat(certificate.public); err == nil {
+					if info.ModTime().Sub(certificate.modified) != 0 {
+						if value, err := tls.LoadX509KeyPair(certificate.public, certificate.private); err == nil {
+							certificate.certificate = &value
+							certificate.modified = info.ModTime()
 						}
 					}
 				}
@@ -59,24 +66,23 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 		}
 		this.Unlock()
 	}
-
 	this.RLock()
 	defer this.RUnlock()
 	if len(this.certificates) == 0 {
 		return nil, errors.New(`dynacert: no loaded certificate`)
 	}
 	if client != nil && client.ServerName != "" {
-		for index, config := range this.Config {
-			if config[0] != "" && config[0] != "*" && this.certificates[index] != nil {
-				if matcher := rcache.Get(config[0]); matcher != nil && matcher.MatchString(client.ServerName) {
-					return this.certificates[index], nil
+		for predicate, certificate := range this.certificates {
+			if predicate != "" && predicate != "*" && certificate.certificate != nil {
+				if matcher := rcache.Get(predicate); matcher != nil && matcher.MatchString(client.ServerName) {
+					return certificate.certificate, nil
 				}
 			}
 		}
 	}
-	for index, config := range this.Config {
-		if (config[0] == "" || config[0] == "*") && this.certificates[index] != nil {
-			return this.certificates[index], nil
+	for predicate, certificate := range this.certificates {
+		if (predicate == "" || predicate == "*") && certificate.certificate != nil {
+			return certificate.certificate, nil
 		}
 	}
 	return nil, errors.New(`dynacert: no matching certificate`)
