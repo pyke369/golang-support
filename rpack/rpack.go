@@ -90,7 +90,7 @@ func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
 		}
 		return nil
 	})
-	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Now().Sub(start))
+	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start))
 	if handle, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
 		random := make([]byte, 64)
 		rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
@@ -162,7 +162,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 			response.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, public", sttl))
 			response.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
-		if strings.Index(request.Header.Get("Accept-Encoding"), "gzip") >= 0 && request.Header.Get("Range") == "" && resource.Compressed {
+		if strings.Contains(request.Header.Get("Accept-Encoding"), "gzip") && request.Header.Get("Range") == "" && resource.Compressed {
 			response.Header().Set("Content-Encoding", "gzip")
 			response.Header().Set("Content-Length", fmt.Sprintf("%d", len(resource.raw)))
 			http.ServeContent(response, request, path, time.Unix(resource.Modified, 0), bytes.NewReader(resource.raw))

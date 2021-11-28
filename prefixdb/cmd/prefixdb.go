@@ -74,7 +74,7 @@ func mkjson() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Now().Sub(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 	start := time.Now()
@@ -88,7 +88,7 @@ func mkjson() {
 		fmt.Fprintf(os.Stderr, "\r- saving database   [%s] failed (%v)\n", os.Args[2], err)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Now().Sub(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
+			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	}
@@ -107,7 +107,7 @@ func mkoui() {
 				} else {
 					data, address, mask := OUI{}, "fe80:0000:0000:0000:0000:", 80
 					if json.Unmarshal([]byte(line), &data) == nil {
-						if fields := ouiMatcher.FindStringSubmatch(strings.TrimSpace(data.Mac)); fields != nil && len(fields) > 6 {
+						if fields := ouiMatcher.FindStringSubmatch(strings.TrimSpace(data.Mac)); len(fields) > 6 {
 							for index := 1; index <= 6; index++ {
 								if len(fields[index]) != 0 {
 									mask += 4 * len(fields[index])
@@ -134,7 +134,7 @@ func mkoui() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Now().Sub(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 	start := time.Now()
@@ -148,7 +148,7 @@ func mkoui() {
 		fmt.Fprintf(os.Stderr, "\r- saving database   [%s] failed (%v)\n", os.Args[2], err)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Now().Sub(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
+			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	}
@@ -191,7 +191,7 @@ func mkcity() {
 			}
 		}
 		handle.Close()
-		fmt.Fprintf(os.Stderr, "\r- loaded locations [%s] (%.3fs - %d entries)\n", os.Args[3], float64(time.Now().Sub(start))/float64(time.Second), len(locations))
+		fmt.Fprintf(os.Stderr, "\r- loaded locations [%s] (%.3fs - %d entries)\n", os.Args[3], float64(time.Since(start))/float64(time.Second), len(locations))
 	}
 
 	clusters := [][]string{
@@ -244,7 +244,7 @@ func mkcity() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Now().Sub(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 
@@ -259,7 +259,7 @@ func mkcity() {
 		fmt.Fprintf(os.Stderr, "\r- saving database  [%s] failed (%v)\n", os.Args[2], err)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Now().Sub(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
+			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	}
@@ -297,7 +297,7 @@ func mkasn() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Now().Sub(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 
@@ -312,7 +312,7 @@ func mkasn() {
 		fmt.Fprintf(os.Stderr, "\r- saving database  [%s] failed (%v)\n", os.Args[2], err)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Now().Sub(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
+			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	}
@@ -372,7 +372,7 @@ func server() {
 		}
 		lookup := map[string]interface{}{}
 		if ip := net.ParseIP(remote); ip != nil {
-			lookup["ip"] = fmt.Sprintf("%s", ip)
+			lookup["ip"] = string(ip)
 			for _, database := range databases {
 				lookup, _ = database.Lookup(ip, lookup)
 			}

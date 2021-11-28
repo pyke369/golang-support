@@ -11,7 +11,7 @@ import (
 
 const (
 	CHASH_MAGIC    uint32 = 0x48414843
-	CHASH_REPLICAS        = 128
+	CHASH_REPLICAS uint8  = 128
 )
 
 type item struct {
@@ -74,19 +74,19 @@ func (a ByHash) Len() int           { return len(a) }
 func (a ByHash) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByHash) Less(i, j int) bool { return a[i].hash < a[j].hash }
 
-func (this *CHash) freeze() {
-	this.Lock()
-	if this.frozen {
-		this.Unlock()
+func (c *CHash) freeze() {
+	c.Lock()
+	if c.frozen {
+		c.Unlock()
 		return
 	}
-	this.ringSize = 0
-	for _, tweight := range this.targets {
-		this.ringSize += uint32(tweight) * uint32(this.replicas)
+	c.ringSize = 0
+	for _, tweight := range c.targets {
+		c.ringSize += uint32(tweight) * uint32(c.replicas)
 	}
-	if this.ringSize == 0 {
-		this.frozen = true
-		this.Unlock()
+	if c.ringSize == 0 {
+		c.frozen = true
+		c.Unlock()
 		return
 	}
 
@@ -95,24 +95,24 @@ func (this *CHash) freeze() {
 		offset uint32 = 0
 		key    []byte = make([]byte, 128)
 	)
-	this.names = make([]string, len(this.targets))
-	this.ring = make([]item, this.ringSize)
-	for tname, tweight := range this.targets {
-		this.names[target] = tname
+	c.names = make([]string, len(c.targets))
+	c.ring = make([]item, c.ringSize)
+	for tname, tweight := range c.targets {
+		c.names[target] = tname
 		for weight := uint8(0); weight < tweight; weight++ {
-			for replica := uint8(0); replica < this.replicas; replica++ {
+			for replica := uint8(0); replica < c.replicas; replica++ {
 				key = append(key[:0], tname...)
 				key = strconv.AppendInt(key, int64(weight), 10)
 				key = strconv.AppendInt(key, int64(replica), 10)
-				this.ring[offset] = item{mmhash2(key, -1), target}
+				c.ring[offset] = item{mmhash2(key, -1), target}
 				offset++
 			}
 		}
 		target++
 	}
-	sort.Sort(ByHash(this.ring))
-	this.frozen = true
-	this.Unlock()
+	sort.Sort(ByHash(c.ring))
+	c.frozen = true
+	c.Unlock()
 }
 
 func New(replicas ...uint8) *CHash {
@@ -136,39 +136,39 @@ func New(replicas ...uint8) *CHash {
 	return chash
 }
 
-func (this *CHash) AddTarget(name string, weight uint8) bool {
-	if weight > 0 && weight <= 100 && len(name) <= 128 && this.targets[name] != weight {
-		this.Lock()
-		this.targets[name] = weight
-		this.frozen = false
-		this.Unlock()
+func (c *CHash) AddTarget(name string, weight uint8) bool {
+	if weight > 0 && weight <= 100 && len(name) <= 128 && c.targets[name] != weight {
+		c.Lock()
+		c.targets[name] = weight
+		c.frozen = false
+		c.Unlock()
 		return true
 	}
 	return false
 }
-func (this *CHash) RemoveTarget(name string) bool {
-	this.Lock()
-	delete(this.targets, name)
-	this.frozen = false
-	this.Unlock()
+func (c *CHash) RemoveTarget(name string) bool {
+	c.Lock()
+	delete(c.targets, name)
+	c.frozen = false
+	c.Unlock()
 	return true
 }
-func (this *CHash) ClearTargets() bool {
-	this.Lock()
-	this.targets = make(map[string]uint8)
-	this.frozen = false
-	this.Unlock()
+func (c *CHash) ClearTargets() bool {
+	c.Lock()
+	c.targets = make(map[string]uint8)
+	c.frozen = false
+	c.Unlock()
 	return true
 }
 
-func (this *CHash) Serialize() []byte {
-	this.freeze()
-	this.RLock()
+func (c *CHash) Serialize() []byte {
+	c.freeze()
+	c.RLock()
 	size := uint32(4) + 4 + 1 + 2 + 4
-	for _, name := range this.names {
+	for _, name := range c.names {
 		size += 1 + 1 + uint32(len(name))
 	}
-	size += (this.ringSize * 6)
+	size += (c.ringSize * 6)
 	serialized := make([]byte, size)
 	offset := uint32(0)
 	serialized[offset] = byte(CHASH_MAGIC & 0xff)
@@ -179,21 +179,21 @@ func (this *CHash) Serialize() []byte {
 	serialized[offset+5] = byte((size >> 8) & 0xff)
 	serialized[offset+6] = byte((size >> 16) & 0xff)
 	serialized[offset+7] = byte((size >> 24) & 0xff)
-	serialized[offset+8] = this.replicas
-	serialized[offset+9] = byte(uint16(len(this.names)) & 0xff)
-	serialized[offset+10] = byte(((uint16(len(this.names))) >> 8) & 0xff)
-	serialized[offset+11] = byte(this.ringSize & 0xff)
-	serialized[offset+12] = byte((this.ringSize >> 8) & 0xff)
-	serialized[offset+13] = byte((this.ringSize >> 16) & 0xff)
-	serialized[offset+14] = byte((this.ringSize >> 24) & 0xff)
+	serialized[offset+8] = c.replicas
+	serialized[offset+9] = byte(uint16(len(c.names)) & 0xff)
+	serialized[offset+10] = byte(((uint16(len(c.names))) >> 8) & 0xff)
+	serialized[offset+11] = byte(c.ringSize & 0xff)
+	serialized[offset+12] = byte((c.ringSize >> 8) & 0xff)
+	serialized[offset+13] = byte((c.ringSize >> 16) & 0xff)
+	serialized[offset+14] = byte((c.ringSize >> 24) & 0xff)
 	offset += 15
-	for _, name := range this.names {
-		serialized[offset] = this.targets[name]
+	for _, name := range c.names {
+		serialized[offset] = c.targets[name]
 		serialized[offset+1] = byte(len(name) & 0xff)
 		copy(serialized[offset+2:offset+2+uint32(serialized[offset+1])], []byte(name))
 		offset += 2 + uint32(serialized[offset+1])
 	}
-	for _, item := range this.ring {
+	for _, item := range c.ring {
 		serialized[offset] = byte(item.hash & 0xff)
 		serialized[offset+1] = byte((item.hash >> 8) & 0xff)
 		serialized[offset+2] = byte((item.hash >> 16) & 0xff)
@@ -202,15 +202,15 @@ func (this *CHash) Serialize() []byte {
 		serialized[offset+5] = byte((item.target >> 8) & 0xff)
 		offset += 6
 	}
-	this.RUnlock()
+	c.RUnlock()
 	return serialized
 }
-func (this *CHash) FileSerialize(path string) bool {
+func (c *CHash) FileSerialize(path string) bool {
 	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return false
 	}
-	if _, err := handle.Write(this.Serialize()); err != nil {
+	if _, err := handle.Write(c.Serialize()); err != nil {
 		handle.Close()
 		return false
 	}
@@ -218,7 +218,7 @@ func (this *CHash) FileSerialize(path string) bool {
 	return true
 }
 
-func (this *CHash) Unserialize(serialized []byte) bool {
+func (c *CHash) Unserialize(serialized []byte) bool {
 	if len(serialized) < 15 {
 		return false
 	}
@@ -230,37 +230,37 @@ func (this *CHash) Unserialize(serialized []byte) bool {
 	if magic != CHASH_MAGIC || size != uint32(len(serialized)) {
 		return false
 	}
-	this.Lock()
-	this.targets = make(map[string]uint8)
-	this.names = make([]string, names)
-	this.ring = make([]item, ringSize)
-	this.ringSize = ringSize
-	this.replicas = replicas
+	c.Lock()
+	c.targets = make(map[string]uint8)
+	c.names = make([]string, names)
+	c.ring = make([]item, ringSize)
+	c.ringSize = ringSize
+	c.replicas = replicas
 	offset := uint32(15)
 	for index := uint16(0); index < names && offset < size; index++ {
-		len := uint32(serialized[offset+1])
-		this.names[index] = string(serialized[offset+2 : offset+2+len])
-		this.targets[this.names[index]] = serialized[offset]
-		offset += 2 + len
+		length := uint32(serialized[offset+1])
+		c.names[index] = string(serialized[offset+2 : offset+2+length])
+		c.targets[c.names[index]] = serialized[offset]
+		offset += 2 + length
 	}
 	if offset > size {
-		this.Unlock()
+		c.Unlock()
 		return false
 	}
 	for item := uint32(0); item < ringSize && offset < size; item++ {
-		this.ring[item].hash = uint32(serialized[offset]) + (uint32(serialized[offset+1]) << 8) + (uint32(serialized[offset+2]) << 16) + (uint32(serialized[offset+3]) << 24)
-		this.ring[item].target = uint16(serialized[offset+4]) + (uint16(serialized[offset+5]) << 8)
+		c.ring[item].hash = uint32(serialized[offset]) + (uint32(serialized[offset+1]) << 8) + (uint32(serialized[offset+2]) << 16) + (uint32(serialized[offset+3]) << 24)
+		c.ring[item].target = uint16(serialized[offset+4]) + (uint16(serialized[offset+5]) << 8)
 		offset += 6
 	}
 	if offset != size {
-		this.Unlock()
+		c.Unlock()
 		return false
 	}
-	this.frozen = true
-	this.Unlock()
+	c.frozen = true
+	c.Unlock()
 	return true
 }
-func (this *CHash) FileUnserialize(path string) bool {
+func (c *CHash) FileUnserialize(path string) bool {
 	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return false
@@ -278,30 +278,30 @@ func (this *CHash) FileUnserialize(path string) bool {
 	if int64(read) != info.Size() || err != nil {
 		return false
 	}
-	return this.Unserialize(serialized)
+	return c.Unserialize(serialized)
 }
 
-func (this *CHash) Lookup(candidate string, count int) []string {
+func (c *CHash) Lookup(candidate string, count int) []string {
 	var start uint32 = 0
 
-	this.freeze()
-	this.RLock()
-	if count > len(this.targets) {
-		count = len(this.targets)
+	c.freeze()
+	c.RLock()
+	if count > len(c.targets) {
+		count = len(c.targets)
 	}
-	if this.ringSize == 0 || count < 1 {
-		this.RUnlock()
+	if c.ringSize == 0 || count < 1 {
+		c.RUnlock()
 		return []string{}
 	}
 	hash := mmhash2([]byte(candidate), -1)
-	if hash > this.ring[0].hash && hash <= this.ring[this.ringSize-1].hash {
-		start = this.ringSize / 2
+	if hash > c.ring[0].hash && hash <= c.ring[c.ringSize-1].hash {
+		start = c.ringSize / 2
 		span := start / 2
 		for {
-			if hash > this.ring[start].hash && hash <= this.ring[start+1].hash {
+			if hash > c.ring[start].hash && hash <= c.ring[start+1].hash {
 				break
 			}
-			if hash > this.ring[start].hash {
+			if hash > c.ring[start].hash {
 				start += span
 			} else {
 				start -= span
@@ -312,29 +312,28 @@ func (this *CHash) Lookup(candidate string, count int) []string {
 			}
 		}
 	}
-	result := make([]string, count)
-	rank := 0
+	result, rank := make([]string, count), 0
 	for rank < count {
 		index := 0
 		for index = 0; index < rank; index++ {
-			if result[index] == this.names[this.ring[start].target] {
+			if result[index] == c.names[c.ring[start].target] {
 				break
 			}
 		}
 		if index >= rank {
-			result[rank] = this.names[this.ring[start].target]
+			result[rank] = c.names[c.ring[start].target]
 			rank++
 		}
 		start++
-		if start >= this.ringSize {
+		if start >= c.ringSize {
 			start = 0
 		}
 	}
-	this.RUnlock()
+	c.RUnlock()
 	return result
 }
-func (this *CHash) LookupBalance(candidate string, count int) string {
-	result := this.Lookup(candidate, count)
+func (c *CHash) LookupBalance(candidate string, count int) string {
+	result := c.Lookup(candidate, count)
 	if len(result) > 0 {
 		return result[rand.Intn(len(result))]
 	}

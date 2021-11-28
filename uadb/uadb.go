@@ -40,7 +40,7 @@ func tocode(input string) string {
 				strings.ReplaceAll(
 					strings.ToLower(
 						strings.Map(func(r rune) rune {
-							if strings.IndexRune(removed, r) >= 0 {
+							if strings.ContainsRune(removed, r) {
 								return -1
 							}
 							return r
@@ -68,45 +68,45 @@ func New(size ...int) *UADB {
 	return &UADB{Crawlers: map[string][5]string{}, cache: map[string]*cache{}, max: max}
 }
 
-func (this *UADB) Load(path string) error {
+func (db *UADB) Load(path string) error {
 	if payload, err := ioutil.ReadFile(path); err != nil {
 		return err
 	} else {
-		db := New()
-		if err := json.Unmarshal(payload, db); err != nil {
+		loaded := New()
+		if err := json.Unmarshal(payload, loaded); err != nil {
 			return err
 		}
-		if db.Version == "" || len(db.Agents) == 0 || len(db.Devices) == 0 || len(db.Systems) == 0 || len(db.Crawlers) == 0 {
+		if loaded.Version == "" || len(loaded.Agents) == 0 || len(loaded.Devices) == 0 || len(loaded.Systems) == 0 || len(loaded.Crawlers) == 0 {
 			return fmt.Errorf("invalid uadb database")
 		}
-		this.Version, this.Agents, this.Devices, this.Systems, this.Crawlers = db.Version, db.Agents, db.Devices, db.Systems, db.Crawlers
-		this.lock.Lock()
-		this.cache = map[string]*cache{}
-		this.lock.Unlock()
+		db.Version, db.Agents, db.Devices, db.Systems, db.Crawlers = loaded.Version, loaded.Agents, loaded.Devices, loaded.Systems, loaded.Crawlers
+		db.lock.Lock()
+		db.cache = map[string]*cache{}
+		db.lock.Unlock()
 	}
 
 	return nil
 }
 
-func (this *UADB) Lookup(ua string, withcode ...bool) (output map[string]string) {
+func (db *UADB) Lookup(ua string, withcode ...bool) (output map[string]string) {
 
-	this.lock.RLock()
-	if cache := this.cache[ua]; cache != nil {
+	db.lock.RLock()
+	if cache := db.cache[ua]; cache != nil {
 		output = cache.value
-		this.cache[ua].last = int(time.Now().Unix())
+		db.cache[ua].last = int(time.Now().Unix())
 	}
-	this.lock.RUnlock()
+	db.lock.RUnlock()
 
 	if output == nil {
 		output = map[string]string{}
 		for _, field := range fields {
 			output[field] = "unknown"
 		}
-		if this.Version == "" || len(this.Agents) == 0 || len(this.Devices) == 0 || len(this.Systems) == 0 || len(this.Crawlers) == 0 {
+		if db.Version == "" || len(db.Agents) == 0 || len(db.Devices) == 0 || len(db.Systems) == 0 || len(db.Crawlers) == 0 {
 			return
 		}
 
-		if crawler := this.Crawlers[ua]; crawler[0] != "" {
+		if crawler := db.Crawlers[ua]; crawler[0] != "" {
 			output["ua_family"], output["ua_type"] = crawler[0], "Crawler"
 			if crawler[1] != "" {
 				output["ua_name"] = crawler[1]
@@ -121,7 +121,7 @@ func (this *UADB) Lookup(ua string, withcode ...bool) (output map[string]string)
 				output["device_type"] = crawler[4]
 			}
 		} else {
-			for _, agent := range this.Agents {
+			for _, agent := range db.Agents {
 				if matcher := rcache.Get(agent[0]); matcher != nil && matcher.MatchString(ua) {
 					if agent[1] != "" {
 						output["ua_family"], output["ua_name"] = agent[1], agent[1]
@@ -154,7 +154,7 @@ func (this *UADB) Lookup(ua string, withcode ...bool) (output map[string]string)
 
 			if output["ua_family"] != "unknown" {
 				if output["device_type"] == "unknown" {
-					for _, device := range this.Devices {
+					for _, device := range db.Devices {
 						if matcher := rcache.Get(device[0]); matcher != nil && matcher.MatchString(ua) {
 							if device[1] != "" {
 								output["device_type"] = device[1]
@@ -175,7 +175,7 @@ func (this *UADB) Lookup(ua string, withcode ...bool) (output map[string]string)
 				}
 
 				if output["os_family"] == "unknown" {
-					for _, system := range this.Systems {
+					for _, system := range db.Systems {
 						if matcher := rcache.Get(system[0]); matcher != nil && matcher.MatchString(ua) {
 							if system[1] != "" {
 								output["os_family"] = system[1]
@@ -193,25 +193,25 @@ func (this *UADB) Lookup(ua string, withcode ...bool) (output map[string]string)
 			}
 		}
 
-		this.lock.Lock()
-		this.cache[ua] = &cache{value: output, last: int(time.Now().Unix())}
-		max := int(float64(this.max) * 1.2)
-		if len(this.cache) >= max && time.Now().Sub(this.last) >= 5*time.Second {
-			this.last = time.Now()
+		db.lock.Lock()
+		db.cache[ua] = &cache{value: output, last: int(time.Now().Unix())}
+		max := int(float64(db.max) * 1.2)
+		if len(db.cache) >= max && time.Since(db.last) >= 5*time.Second {
+			db.last = time.Now()
 			sorter := []string{}
-			for key, value := range this.cache {
+			for key, value := range db.cache {
 				sorter = append(sorter, fmt.Sprintf("%d@@%s", value.last, key))
 			}
 			sort.Strings(sorter)
-			for index := 0; index < len(sorter)-this.max; index++ {
+			for index := 0; index < len(sorter)-db.max; index++ {
 				parts := strings.Split(sorter[index], "@@")
-				delete(this.cache, parts[1])
+				delete(db.cache, parts[1])
 			}
 		}
-		this.lock.Unlock()
+		db.lock.Unlock()
 	}
 
-	if len(withcode) > 0 && withcode[0] == true {
+	if len(withcode) > 0 && withcode[0] {
 		coutput := map[string]string{}
 		for _, field := range fields {
 			coutput[field] = output[field]

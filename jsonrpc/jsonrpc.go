@@ -34,6 +34,8 @@ const (
 	INTERNAL_ERROR_MESSAGE        = "internal error"
 )
 
+type CONTEXT_KEY string
+
 type CALL struct {
 	Method       string
 	Params       interface{}
@@ -100,7 +102,7 @@ func DefaultTransport(input []byte, tcontext interface{}) (output []byte, err er
 	}
 	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(input)); err == nil {
 		if options.Context != nil {
-			request = request.WithContext(context.WithValue(request.Context(), "jsonrpc", options.Context))
+			request = request.WithContext(context.WithValue(request.Context(), CONTEXT_KEY("jsonrpc"), options.Context))
 		}
 		for key, value := range options.Headers {
 			request.Header.Set(key, value)
@@ -210,7 +212,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 }
 
 func Call(calls []*CALL, transport TRANSPORT, tcontext interface{}) (results []*CALL, err error) {
-	if calls == nil || len(calls) == 0 {
+	if len(calls) == 0 {
 		return nil, errors.New(`jsonrpc: no call provided`)
 	}
 	if transport == nil {
@@ -235,7 +237,7 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 	output = []byte{}
 	batch := true
 	requests, responses := []REQUEST{}, map[interface{}]*RESPONSE{}
-	if input == nil || len(input) == 0 {
+	if len(input) == 0 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 	} else {
 		if input[0] != '[' {
@@ -329,13 +331,11 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 					}(request)
 				}
 				for running > 0 {
-					select {
-					case response := <-sink:
-						if response.Id != nil {
-							responses[response.Id] = response
-						}
-						running--
+					response := <-sink
+					if response.Id != nil {
+						responses[response.Id] = response
 					}
+					running--
 				}
 				close(sink)
 			}

@@ -121,124 +121,124 @@ type ULog struct {
 }
 
 func New(target string) *ULog {
-	log := &ULog{
+	l := &ULog{
 		fileOutputs:  map[string]*FileOutput{},
 		syslogHandle: nil,
 	}
-	return log.Load(target)
+	return l.Load(target)
 }
 
-func (this *ULog) Load(target string) *ULog {
-	this.Close()
-	this.Lock()
-	this.file = false
-	this.filePath = ""
-	this.fileTime = TIME_DATETIME
-	this.fileSeverity = true
-	this.console = false
-	this.consoleTime = TIME_DATETIME
-	this.consoleSeverity = true
-	this.consoleColors = true
-	this.consoleHandle = os.Stderr
-	this.syslog = false
-	this.syslogRemote = ""
-	this.syslogName = filepath.Base(os.Args[0])
-	this.syslogFacility = LOG_DAEMON
-	this.optionUTC = false
-	this.level = LOG_INFO
+func (l *ULog) Load(target string) *ULog {
+	l.Close()
+	l.Lock()
+	l.file = false
+	l.filePath = ""
+	l.fileTime = TIME_DATETIME
+	l.fileSeverity = true
+	l.console = false
+	l.consoleTime = TIME_DATETIME
+	l.consoleSeverity = true
+	l.consoleColors = true
+	l.consoleHandle = os.Stderr
+	l.syslog = false
+	l.syslogRemote = ""
+	l.syslogName = filepath.Base(os.Args[0])
+	l.syslogFacility = LOG_DAEMON
+	l.optionUTC = false
+	l.level = LOG_INFO
 	console := os.Stderr
-	for _, target := range regexp.MustCompile("(file|console|syslog|option)\\s*\\(([^\\)]*)\\)").FindAllStringSubmatch(target, -1) {
+	for _, target := range regexp.MustCompile(`(file|console|syslog|option)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
 		case "file":
-			this.file = true
-			for _, option := range regexp.MustCompile("([^:=,\\s]+)\\s*[:=]\\s*([^,\\s]+)").FindAllStringSubmatch(target[2], -1) {
+			l.file = true
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "path":
-					this.filePath = option[2]
+					l.filePath = option[2]
 				case "time":
 					option[2] = strings.ToLower(option[2])
 					switch {
 					case option[2] == "datetime":
-						this.fileTime = TIME_DATETIME
+						l.fileTime = TIME_DATETIME
 					case option[2] == "msdatetime":
-						this.fileTime = TIME_MSDATETIME
+						l.fileTime = TIME_MSDATETIME
 					case option[2] == "stamp" || option[2] == "timestamp":
-						this.fileTime = TIME_TIMESTAMP
+						l.fileTime = TIME_TIMESTAMP
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
-						this.fileTime = TIME_MSTIMESTAMP
+						l.fileTime = TIME_MSTIMESTAMP
 					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
-						this.fileTime = TIME_NONE
+						l.fileTime = TIME_NONE
 					}
 				case "severity":
 					option[2] = strings.ToLower(option[2])
 					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						this.fileSeverity = false
+						l.fileSeverity = false
 					}
 				case "facility":
-					this.fileFacility = facilities[strings.ToLower(option[2])]
+					l.fileFacility = facilities[strings.ToLower(option[2])]
 				}
 			}
-			if this.filePath == "" {
-				this.file = false
+			if l.filePath == "" {
+				l.file = false
 			}
 		case "console":
-			this.console = true
-			for _, option := range regexp.MustCompile("([^:=,\\s]+)\\s*[:=]\\s*([^,\\s]+)").FindAllStringSubmatch(target[2], -1) {
+			l.console = true
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
 				case "output":
 					if option[2] == "stdout" {
-						this.consoleHandle = os.Stdout
+						l.consoleHandle = os.Stdout
 						console = os.Stdout
 					}
 				case "time":
 					switch {
 					case option[2] == "datetime":
-						this.consoleTime = TIME_DATETIME
+						l.consoleTime = TIME_DATETIME
 					case option[2] == "msdatetime":
-						this.consoleTime = TIME_MSDATETIME
+						l.consoleTime = TIME_MSDATETIME
 					case option[2] == "stamp" || option[2] == "timestamp":
-						this.consoleTime = TIME_TIMESTAMP
+						l.consoleTime = TIME_TIMESTAMP
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
-						this.consoleTime = TIME_MSTIMESTAMP
+						l.consoleTime = TIME_MSTIMESTAMP
 					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
-						this.consoleTime = TIME_NONE
+						l.consoleTime = TIME_NONE
 					}
 				case "severity":
 					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						this.consoleSeverity = false
+						l.consoleSeverity = false
 					}
 				case "colors":
 					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						this.consoleColors = false
+						l.consoleColors = false
 					}
 				}
 			}
 		case "syslog":
-			this.syslog = true
-			for _, option := range regexp.MustCompile("([^:=,\\s]+)\\s*[:=]\\s*([^,\\s]+)").FindAllStringSubmatch(target[2], -1) {
+			l.syslog = true
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "remote":
-					this.syslogRemote = option[2]
-					if !regexp.MustCompile(":\\d+$").MatchString(this.syslogRemote) {
-						this.syslogRemote += ":514"
+					l.syslogRemote = option[2]
+					if !regexp.MustCompile(`:\d+$`).MatchString(l.syslogRemote) {
+						l.syslogRemote += ":514"
 					}
 				case "name":
-					this.syslogName = option[2]
+					l.syslogName = option[2]
 				case "facility":
-					this.syslogFacility = facilities[strings.ToLower(option[2])]
+					l.syslogFacility = facilities[strings.ToLower(option[2])]
 				}
 			}
 		case "option":
-			for _, option := range regexp.MustCompile("([^:=,\\s]+)\\s*[:=]\\s*([^,\\s]+)").FindAllStringSubmatch(target[2], -1) {
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
 				case "utc":
 					if option[2] == "1" || option[2] == "true" || option[2] == "on" || option[2] == "yes" {
-						this.optionUTC = true
+						l.optionUTC = true
 					}
 				case "level":
-					this.level = severities[strings.ToLower(option[2])]
+					l.level = severities[strings.ToLower(option[2])]
 				}
 			}
 		}
@@ -246,42 +246,42 @@ func (this *ULog) Load(target string) *ULog {
 
 	if info, err := console.Stat(); err == nil {
 		if info.Mode()&(os.ModeDevice|os.ModeCharDevice) != os.ModeDevice|os.ModeCharDevice {
-			this.consoleColors = false
+			l.consoleColors = false
 		}
 	}
 	if runtime.GOOS == "windows" {
-		this.consoleColors = false
+		l.consoleColors = false
 	}
-	this.Unlock()
-	return this
+	l.Unlock()
+	return l
 }
 
-func (this *ULog) Close() {
-	this.Lock()
-	if this.syslogHandle != nil {
-		this.syslogHandle.Close()
-		this.syslogHandle = nil
+func (l *ULog) Close() {
+	l.Lock()
+	if l.syslogHandle != nil {
+		l.syslogHandle.Close()
+		l.syslogHandle = nil
 	}
-	for path, output := range this.fileOutputs {
+	for path, output := range l.fileOutputs {
 		if output.handle != nil {
 			output.handle.Close()
 		}
-		delete(this.fileOutputs, path)
+		delete(l.fileOutputs, path)
 	}
-	this.Unlock()
+	l.Unlock()
 }
 
-func (this *ULog) SetLevel(level string) {
+func (l *ULog) SetLevel(level string) {
 	level = strings.ToLower(level)
 	switch level {
 	case "error":
-		this.level = LOG_ERR
+		l.level = LOG_ERR
 	case "warning":
-		this.level = LOG_WARNING
+		l.level = LOG_WARNING
 	case "info":
-		this.level = LOG_INFO
+		l.level = LOG_INFO
 	case "debug":
-		this.level = LOG_DEBUG
+		l.level = LOG_DEBUG
 	}
 }
 
@@ -427,9 +427,9 @@ func strftime(layout string, base time.Time) string {
 	return strings.Join(output, "")
 }
 
-func (this *ULog) log(now time.Time, severity int, xlayout interface{}, a ...interface{}) {
+func (l *ULog) log(now time.Time, severity int, xlayout interface{}, a ...interface{}) {
 	var err error
-	if this.level < severity || (!this.syslog && !this.file && !this.console) {
+	if l.level < severity || (!l.syslog && !l.file && !l.console) {
 		return
 	}
 	layout := ""
@@ -447,53 +447,53 @@ func (this *ULog) log(now time.Time, severity int, xlayout interface{}, a ...int
 		layout = xlayout.(string)
 	}
 	layout = strings.TrimSpace(layout)
-	if this.syslog {
-		if this.syslogHandle == nil {
-			this.Lock()
-			if this.syslogHandle == nil {
+	if l.syslog {
+		if l.syslogHandle == nil {
+			l.Lock()
+			if l.syslogHandle == nil {
 				protocol := ""
-				if this.syslogRemote != "" {
+				if l.syslogRemote != "" {
 					protocol = "udp"
 				}
-				if this.syslogHandle, err = DialSyslog(protocol, this.syslogRemote, this.syslogFacility, this.syslogName); err != nil {
-					this.syslogHandle = nil
+				if l.syslogHandle, err = DialSyslog(protocol, l.syslogRemote, l.syslogFacility, l.syslogName); err != nil {
+					l.syslogHandle = nil
 				}
 			}
-			this.Unlock()
+			l.Unlock()
 		}
-		if this.syslogHandle != nil {
+		if l.syslogHandle != nil {
 			switch severity {
 			case LOG_ERR:
-				this.syslogHandle.Err(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Err(fmt.Sprintf(layout, a...))
 			case LOG_WARNING:
-				this.syslogHandle.Warning(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Warning(fmt.Sprintf(layout, a...))
 			case LOG_INFO:
-				this.syslogHandle.Info(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Info(fmt.Sprintf(layout, a...))
 			case LOG_DEBUG:
-				this.syslogHandle.Debug(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Debug(fmt.Sprintf(layout, a...))
 			}
 		}
 	}
-	if this.optionUTC {
+	if l.optionUTC {
 		now = now.UTC()
 	} else {
 		now = now.Local()
 	}
-	if this.file {
-		path := strftime(this.filePath, now)
-		this.Lock()
-		if this.fileOutputs[path] == nil {
+	if l.file {
+		path := strftime(l.filePath, now)
+		l.Lock()
+		if l.fileOutputs[path] == nil {
 			os.MkdirAll(filepath.Dir(path), 0755)
 			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0644); err == nil {
-				this.fileOutputs[path] = &FileOutput{handle: handle}
+				l.fileOutputs[path] = &FileOutput{handle: handle}
 			}
 		}
-		if this.fileOutputs[path] != nil && this.fileOutputs[path].handle != nil {
+		if l.fileOutputs[path] != nil && l.fileOutputs[path].handle != nil {
 			prefix := ""
-			if this.fileFacility != 0 {
-				prefix = fmt.Sprintf("<%d>%s %s[%d]: ", this.fileFacility|severity, now.Format(time.Stamp), this.syslogName, os.Getpid())
+			if l.fileFacility != 0 {
+				prefix = fmt.Sprintf("<%d>%s %s[%d]: ", l.fileFacility|severity, now.Format(time.Stamp), l.syslogName, os.Getpid())
 			} else {
-				switch this.fileTime {
+				switch l.fileTime {
 				case TIME_DATETIME:
 					prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
 				case TIME_MSDATETIME:
@@ -503,27 +503,27 @@ func (this *ULog) log(now time.Time, severity int, xlayout interface{}, a ...int
 				case TIME_MSTIMESTAMP:
 					prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
 				}
-				if this.fileSeverity {
+				if l.fileSeverity {
 					prefix += severityLabels[severity]
 				}
 			}
-			this.fileOutputs[path].handle.WriteString(fmt.Sprintf(prefix+layout+"\n", a...))
-			this.fileOutputs[path].last = now
+			l.fileOutputs[path].handle.WriteString(fmt.Sprintf(prefix+layout+"\n", a...))
+			l.fileOutputs[path].last = now
 		}
-		if now.Sub(this.fileLast) >= 5*time.Second {
-			this.fileLast = now
-			for path, output := range this.fileOutputs {
+		if now.Sub(l.fileLast) >= 5*time.Second {
+			l.fileLast = now
+			for path, output := range l.fileOutputs {
 				if now.Sub(output.last) >= 5*time.Second {
 					output.handle.Close()
-					delete(this.fileOutputs, path)
+					delete(l.fileOutputs, path)
 				}
 			}
 		}
-		this.Unlock()
+		l.Unlock()
 	}
-	if this.console {
+	if l.console {
 		prefix := ""
-		switch this.consoleTime {
+		switch l.consoleTime {
 		case TIME_DATETIME:
 			prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
 		case TIME_MSDATETIME:
@@ -533,41 +533,41 @@ func (this *ULog) log(now time.Time, severity int, xlayout interface{}, a ...int
 		case TIME_MSTIMESTAMP:
 			prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
 		}
-		if this.consoleSeverity {
-			if this.consoleColors {
+		if l.consoleSeverity {
+			if l.consoleColors {
 				prefix += fmt.Sprintf("%s%s\x1b[0m", severityColors[severity], severityLabels[severity])
 			} else {
 				prefix += severityLabels[severity]
 			}
 		}
-		this.Lock()
-		fmt.Fprintf(this.consoleHandle, prefix+layout+"\n", a...)
-		this.Unlock()
+		l.Lock()
+		fmt.Fprintf(l.consoleHandle, prefix+layout+"\n", a...)
+		l.Unlock()
 	}
 }
 
-func (this *ULog) Error(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), LOG_ERR, layout, a...)
+func (l *ULog) Error(layout interface{}, a ...interface{}) {
+	l.log(time.Now(), LOG_ERR, layout, a...)
 }
-func (this *ULog) Warn(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), LOG_WARNING, layout, a...)
+func (l *ULog) Warn(layout interface{}, a ...interface{}) {
+	l.log(time.Now(), LOG_WARNING, layout, a...)
 }
-func (this *ULog) Info(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), LOG_INFO, layout, a...)
+func (l *ULog) Info(layout interface{}, a ...interface{}) {
+	l.log(time.Now(), LOG_INFO, layout, a...)
 }
-func (this *ULog) Debug(layout interface{}, a ...interface{}) {
-	this.log(time.Now(), LOG_DEBUG, layout, a...)
+func (l *ULog) Debug(layout interface{}, a ...interface{}) {
+	l.log(time.Now(), LOG_DEBUG, layout, a...)
 }
 
-func (this *ULog) ErrorTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, LOG_ERR, layout, a...)
+func (l *ULog) ErrorTime(now time.Time, layout interface{}, a ...interface{}) {
+	l.log(now, LOG_ERR, layout, a...)
 }
-func (this *ULog) WarnTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, LOG_WARNING, layout, a...)
+func (l *ULog) WarnTime(now time.Time, layout interface{}, a ...interface{}) {
+	l.log(now, LOG_WARNING, layout, a...)
 }
-func (this *ULog) InfoTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, LOG_INFO, layout, a...)
+func (l *ULog) InfoTime(now time.Time, layout interface{}, a ...interface{}) {
+	l.log(now, LOG_INFO, layout, a...)
 }
-func (this *ULog) DebugTime(now time.Time, layout interface{}, a ...interface{}) {
-	this.log(now, LOG_DEBUG, layout, a...)
+func (l *ULog) DebugTime(now time.Time, layout interface{}, a ...interface{}) {
+	l.log(now, LOG_DEBUG, layout, a...)
 }

@@ -24,36 +24,36 @@ type DYNACERT struct {
 	last         time.Time
 }
 
-func (this *DYNACERT) Add(predicate, public, private string) {
-	this.Lock()
-	if this.certificates == nil {
-		this.certificates = map[string]*CERTIFICATE{}
+func (d *DYNACERT) Add(predicate, public, private string) {
+	d.Lock()
+	if d.certificates == nil {
+		d.certificates = map[string]*CERTIFICATE{}
 	}
-	this.certificates[strings.TrimSpace(predicate)] = &CERTIFICATE{public: strings.TrimSpace(public), private: strings.TrimSpace(private)}
-	this.last = time.Now().Add(-time.Minute)
-	this.Unlock()
+	d.certificates[strings.TrimSpace(predicate)] = &CERTIFICATE{public: strings.TrimSpace(public), private: strings.TrimSpace(private)}
+	d.last = time.Now().Add(-time.Minute)
+	d.Unlock()
 }
 
-func (this *DYNACERT) Clear() {
-	this.Lock()
-	this.certificates = map[string]*CERTIFICATE{}
-	this.Unlock()
+func (d *DYNACERT) Clear() {
+	d.Lock()
+	d.certificates = map[string]*CERTIFICATE{}
+	d.Unlock()
 }
 
-func (this *DYNACERT) Count() int {
-	this.RLock()
-	defer this.RUnlock()
-	return len(this.certificates)
+func (d *DYNACERT) Count() int {
+	d.RLock()
+	defer d.RUnlock()
+	return len(d.certificates)
 }
 
-func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
-	if time.Now().Sub(this.last) >= time.Second*15 {
-		this.Lock()
-		if time.Now().Sub(this.last) >= time.Second*15 {
+func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
+	if time.Since(d.last) >= 15*time.Second {
+		d.Lock()
+		if time.Since(d.last) >= 15*time.Second {
 			var info os.FileInfo
 
-			this.last = time.Now()
-			for _, certificate := range this.certificates {
+			d.last = time.Now()
+			for _, certificate := range d.certificates {
 				if info, err = os.Stat(certificate.public); err == nil {
 					if info.ModTime().Sub(certificate.modified) != 0 {
 						if value, err := tls.LoadX509KeyPair(certificate.public, certificate.private); err == nil {
@@ -64,15 +64,15 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 				}
 			}
 		}
-		this.Unlock()
+		d.Unlock()
 	}
-	this.RLock()
-	defer this.RUnlock()
-	if len(this.certificates) == 0 {
+	d.RLock()
+	defer d.RUnlock()
+	if len(d.certificates) == 0 {
 		return nil, errors.New(`dynacert: no loaded certificate`)
 	}
 	if client != nil && client.ServerName != "" {
-		for predicate, certificate := range this.certificates {
+		for predicate, certificate := range d.certificates {
 			if predicate != "" && predicate != "*" && certificate.certificate != nil {
 				if matcher := rcache.Get(predicate); matcher != nil && matcher.MatchString(client.ServerName) {
 					return certificate.certificate, nil
@@ -80,7 +80,7 @@ func (this *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Cer
 			}
 		}
 	}
-	for predicate, certificate := range this.certificates {
+	for predicate, certificate := range d.certificates {
 		if (predicate == "" || predicate == "*") && certificate.certificate != nil {
 			return certificate.certificate, nil
 		}

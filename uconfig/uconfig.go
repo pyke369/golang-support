@@ -40,7 +40,6 @@ type replacer struct {
 var (
 	escaped   string
 	unescaper *regexp.Regexp
-	requoter  *regexp.Regexp
 	expander  *regexp.Regexp
 	sizer     *regexp.Regexp
 	duration1 *regexp.Regexp
@@ -81,7 +80,7 @@ func escape(input string) string {
 		if input[index:index+1] == `"` && (index == 0 || input[index-1:index] != `\`) {
 			instring = !instring
 		}
-		if instring == true {
+		if instring {
 			offset := strings.IndexAny(escaped, input[index:index+1])
 			if offset >= 0 {
 				output = append(output, []byte(fmt.Sprintf("@%02d@", offset))...)
@@ -109,7 +108,7 @@ func reduce(input interface{}) {
 	if input != nil {
 		switch reflect.TypeOf(input).Kind() {
 		case reflect.Map:
-			for key, _ := range input.(map[string]interface{}) {
+			for key := range input.(map[string]interface{}) {
 				var parts []string
 				for _, value := range strings.Split(key, " ") {
 					if value != "" {
@@ -144,16 +143,16 @@ func New(input string, inline ...bool) (*UConfig, error) {
 	return config, config.Load(input, inline...)
 }
 
-func (this *UConfig) Reload(inline ...bool) error {
-	return this.Load(this.input, inline...)
+func (c *UConfig) Reload(inline ...bool) error {
+	return c.Load(c.input, inline...)
 }
 
-func (this *UConfig) SetSeparator(s string) {
-	this.separator = s
+func (c *UConfig) SetSeparator(separator string) {
+	c.separator = separator
 }
 
-func (this *UConfig) Load(input string, inline ...bool) error {
-	this.Lock()
+func (c *UConfig) Load(input string, inline ...bool) error {
+	c.Lock()
 	base, _ := os.Getwd()
 	content := fmt.Sprintf("/*base:%s*/\n", base)
 	if len(inline) > 0 && inline[0] {
@@ -201,7 +200,7 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 					}
 				}
 			}
-			if nbase != "" && strings.Index(expanded, "\n") >= 0 {
+			if nbase != "" && strings.Contains(expanded, "\n") {
 				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
 			}
 		case "=":
@@ -233,7 +232,7 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 					}
 				}
 			}
-			if nbase != "" && strings.Index(expanded, "\n") >= 0 {
+			if nbase != "" && strings.Contains(expanded, "\n") {
 				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
 			}
 		case "@":
@@ -291,7 +290,7 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 		case "_":
 			expanded = filepath.Base(input)
 		}
-		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:len(content)])
+		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:])
 	}
 
 	var config interface{}
@@ -300,88 +299,88 @@ func (this *UConfig) Load(input string, inline ...bool) error {
 			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
 				if start := strings.LastIndex(content[:syntax.Offset], "\n") + 1; start >= 0 {
 					line := strings.Count(content[:start], "\n") + 1
-					this.Unlock()
+					c.Unlock()
 					return fmt.Errorf("uconfig: %s at line %d near %s", syntax, line, content[start:syntax.Offset])
 				}
 			}
-			this.Unlock()
+			c.Unlock()
 			return err
 		}
 	}
 
-	this.config = config
-	this.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
-	this.cache = map[string]interface{}{}
-	reduce(this.config)
-	this.Unlock()
+	c.config = config
+	c.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
+	c.cache = map[string]interface{}{}
+	reduce(c.config)
+	c.Unlock()
 	return nil
 }
 
-func (this *UConfig) Loaded() bool {
-	this.RLock()
-	defer this.RUnlock()
-	return !(this.config == nil)
+func (c *UConfig) Loaded() bool {
+	c.RLock()
+	defer c.RUnlock()
+	return !(c.config == nil)
 }
 
-func (this *UConfig) Hash() string {
-	this.RLock()
-	defer this.RUnlock()
-	return this.hash
+func (c *UConfig) Hash() string {
+	c.RLock()
+	defer c.RUnlock()
+	return c.hash
 }
 
-func (this *UConfig) String() string {
-	if config, err := json.MarshalIndent(this.config, "  ", "  "); this.config != nil && err == nil {
+func (c *UConfig) String() string {
+	if config, err := json.MarshalIndent(c.config, "  ", "  "); c.config != nil && err == nil {
 		return string(config)
 	}
 	return "{}"
 }
 
-func (this *UConfig) Base(path string) string {
-	parts := strings.Split(path, this.separator)
+func (c *UConfig) Base(path string) string {
+	parts := strings.Split(path, c.separator)
 	return parts[len(parts)-1]
 }
 
-func (this *UConfig) GetPaths(path string) []string {
+func (c *UConfig) GetPaths(path string) []string {
 	var (
-		current interface{} = this.config
+		current interface{} = c.config
 		paths   []string    = []string{}
 	)
 
-	this.RLock()
+	c.RLock()
 	prefix := ""
 	if current == nil || path == "" {
-		this.RUnlock()
+		c.RUnlock()
 		return paths
 	}
-	this.cacheLock.RLock()
-	if this.cache[path] != nil {
-		if paths, ok := this.cache[path].([]string); ok {
-			this.cacheLock.RUnlock()
-			this.RUnlock()
+	c.cacheLock.RLock()
+	if c.cache[path] != nil {
+		if paths, ok := c.cache[path].([]string); ok {
+			c.cacheLock.RUnlock()
+			c.RUnlock()
 			return paths
 		}
 	}
-	this.cacheLock.RUnlock()
+	c.cacheLock.RUnlock()
 	if path != "" {
-		prefix = this.separator
-		for _, part := range strings.Split(path, this.separator) {
+		prefix = c.separator
+		for _, part := range strings.Split(path, c.separator) {
 			kind := reflect.TypeOf(current).Kind()
 			index, err := strconv.Atoi(part)
 			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
-				this.cacheLock.Lock()
-				this.cache[path] = paths
-				this.cacheLock.Unlock()
-				this.RUnlock()
+				c.cacheLock.Lock()
+				c.cache[path] = paths
+				c.cacheLock.Unlock()
+				c.RUnlock()
 				return paths
 			}
 			if kind == reflect.Slice {
 				current = current.([]interface{})[index]
 			} else {
 				if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
-					this.cacheLock.Lock()
-					this.cache[path] = paths
-					this.cacheLock.Unlock()
-					this.RUnlock()
+					c.cacheLock.Lock()
+					c.cache[path] = paths
+					c.cacheLock.Unlock()
+					c.RUnlock()
 					return paths
 				}
 			}
@@ -393,77 +392,77 @@ func (this *UConfig) GetPaths(path string) []string {
 			paths = append(paths, fmt.Sprintf("%s%s%d", path, prefix, index))
 		}
 	case reflect.Map:
-		for key, _ := range current.(map[string]interface{}) {
+		for key := range current.(map[string]interface{}) {
 			paths = append(paths, fmt.Sprintf("%s%s%s", path, prefix, key))
 		}
 	}
-	this.cacheLock.Lock()
-	this.cache[path] = paths
-	this.cacheLock.Unlock()
-	this.RUnlock()
+	c.cacheLock.Lock()
+	c.cache[path] = paths
+	c.cacheLock.Unlock()
+	c.RUnlock()
 	return paths
 }
 
-func (this *UConfig) value(path string) (string, error) {
-	var current interface{} = this.config
+func (c *UConfig) value(path string) (string, error) {
+	var current interface{} = c.config
 
-	this.RLock()
+	c.RLock()
 	if current == nil || path == "" {
-		this.RUnlock()
+		c.RUnlock()
 		return "", errors.New(`uconfig: invalid parameter`)
 	}
-	this.cacheLock.RLock()
-	if this.cache[path] != nil {
-		if current, ok := this.cache[path].(bool); ok && !current {
-			this.cacheLock.RUnlock()
-			this.RUnlock()
+	c.cacheLock.RLock()
+	if c.cache[path] != nil {
+		if current, ok := c.cache[path].(bool); ok && !current {
+			c.cacheLock.RUnlock()
+			c.RUnlock()
 			return "", errors.New(`uconfig: invalid path`)
 		}
-		if current, ok := this.cache[path].(string); ok {
-			this.cacheLock.RUnlock()
-			this.RUnlock()
+		if current, ok := c.cache[path].(string); ok {
+			c.cacheLock.RUnlock()
+			c.RUnlock()
 			return current, nil
 		}
 	}
-	this.cacheLock.RUnlock()
-	for _, part := range strings.Split(path, this.separator) {
+	c.cacheLock.RUnlock()
+	for _, part := range strings.Split(path, c.separator) {
 		kind := reflect.TypeOf(current).Kind()
 		index, err := strconv.Atoi(part)
 		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
-			this.cacheLock.Lock()
-			this.cache[path] = false
-			this.cacheLock.Unlock()
-			this.RUnlock()
+			c.cacheLock.Lock()
+			c.cache[path] = false
+			c.cacheLock.Unlock()
+			c.RUnlock()
 			return "", errors.New(`uconfig: invalid path`)
 		}
 		if kind == reflect.Slice {
 			current = current.([]interface{})[index]
 		} else {
 			if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
-				this.cacheLock.Lock()
-				this.cache[path] = false
-				this.cacheLock.Unlock()
-				this.RUnlock()
+				c.cacheLock.Lock()
+				c.cache[path] = false
+				c.cacheLock.Unlock()
+				c.RUnlock()
 				return "", errors.New(`uconfig: invalid path`)
 			}
 		}
 	}
 	if reflect.TypeOf(current).Kind() == reflect.String {
-		this.cacheLock.Lock()
-		this.cache[path] = current.(string)
-		this.cacheLock.Unlock()
-		this.RUnlock()
+		c.cacheLock.Lock()
+		c.cache[path] = current.(string)
+		c.cacheLock.Unlock()
+		c.RUnlock()
 		return current.(string), nil
 	}
-	this.cacheLock.Lock()
-	this.cache[path] = false
-	this.cacheLock.Unlock()
-	this.RUnlock()
+	c.cacheLock.Lock()
+	c.cache[path] = false
+	c.cacheLock.Unlock()
+	c.RUnlock()
 	return "", errors.New(`uconfig: invalid path`)
 }
 
-func (this *UConfig) GetBoolean(path string, fallback bool) bool {
-	value, err := this.value(path)
+func (c *UConfig) GetBoolean(path string, fallback bool) bool {
+	value, err := c.value(path)
 	if err != nil {
 		return fallback
 	}
@@ -473,22 +472,22 @@ func (this *UConfig) GetBoolean(path string, fallback bool) bool {
 	return false
 }
 
-func (this *UConfig) GetStrings(path string) []string {
+func (c *UConfig) GetStrings(path string) []string {
 	list := []string{}
-	for _, path := range this.GetPaths(path) {
-		list = append(list, this.GetString(path, ""))
+	for _, path := range c.GetPaths(path) {
+		list = append(list, c.GetString(path, ""))
 	}
 	return list
 }
 
-func (this *UConfig) GetString(path string, fallback string) string {
-	return this.GetStringMatch(path, fallback, "")
+func (c *UConfig) GetString(path string, fallback string) string {
+	return c.GetStringMatch(path, fallback, "")
 }
-func (this *UConfig) GetStringMatch(path string, fallback, match string) string {
-	return this.GetStringMatchCaptures(path, fallback, match)[0]
+func (c *UConfig) GetStringMatch(path string, fallback, match string) string {
+	return c.GetStringMatchCaptures(path, fallback, match)[0]
 }
-func (this *UConfig) GetStringMatchCaptures(path string, fallback, match string) []string {
-	value, err := this.value(path)
+func (c *UConfig) GetStringMatchCaptures(path string, fallback, match string) []string {
+	value, err := c.value(path)
 	if err != nil {
 		return []string{fallback}
 	}
@@ -506,11 +505,11 @@ func (this *UConfig) GetStringMatchCaptures(path string, fallback, match string)
 	return []string{value}
 }
 
-func (this *UConfig) GetInteger(path string, fallback int64) int64 {
-	return this.GetIntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
+func (c *UConfig) GetInteger(path string, fallback int64) int64 {
+	return c.GetIntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
-func (this *UConfig) GetIntegerBounds(path string, fallback, min, max int64) int64 {
-	value, err := this.value(path)
+func (c *UConfig) GetIntegerBounds(path string, fallback, min, max int64) int64 {
+	value, err := c.value(path)
 	if err != nil {
 		return fallback
 	}
@@ -527,11 +526,11 @@ func (this *UConfig) GetIntegerBounds(path string, fallback, min, max int64) int
 	return nvalue
 }
 
-func (this *UConfig) GetFloat(path string, fallback float64) float64 {
-	return this.GetFloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
+func (c *UConfig) GetFloat(path string, fallback float64) float64 {
+	return c.GetFloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
-func (this *UConfig) GetFloatBounds(path string, fallback, min, max float64) float64 {
-	value, err := this.value(path)
+func (c *UConfig) GetFloatBounds(path string, fallback, min, max float64) float64 {
+	value, err := c.value(path)
 	if err != nil {
 		return fallback
 	}
@@ -542,11 +541,11 @@ func (this *UConfig) GetFloatBounds(path string, fallback, min, max float64) flo
 	return math.Max(math.Min(nvalue, max), min)
 }
 
-func (this *UConfig) GetSize(path string, fallback int64) int64 {
-	return this.GetSizeBounds(path, fallback, math.MinInt64, math.MaxInt64)
+func (c *UConfig) GetSize(path string, fallback int64) int64 {
+	return c.GetSizeBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
-func (this *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 {
-	value, err := this.value(path)
+func (c *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 {
+	value, err := c.value(path)
 	if err != nil {
 		return fallback
 	}
@@ -573,11 +572,11 @@ func (this *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 
 	return nvalue
 }
 
-func (this *UConfig) GetDuration(path string, fallback float64) float64 {
-	return this.GetDurationBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
+func (c *UConfig) GetDuration(path string, fallback float64) float64 {
+	return c.GetDurationBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
-func (this *UConfig) GetDurationBounds(path string, fallback, min, max float64) float64 {
-	value, err := this.value(path)
+func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) float64 {
+	value, err := c.value(path)
 	if err != nil {
 		return fallback
 	}
@@ -627,7 +626,7 @@ func Args() (args []string) {
 		option := os.Args[index]
 		if args == nil {
 			if option[0] == '-' {
-				if option != "-" && option != "--" && strings.Index(option, "=") < 0 && index < len(os.Args)-1 && os.Args[index+1][0] != '-' {
+				if option != "-" && option != "--" && !strings.Contains(option, "=") && index < len(os.Args)-1 && os.Args[index+1][0] != '-' {
 					index++
 				}
 			} else {

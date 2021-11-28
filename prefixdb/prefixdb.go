@@ -66,15 +66,15 @@ func New() *PrefixDB {
 	return &PrefixDB{strings: map[string]*[3]int{}, numbers: map[float64]*[3]int{}, pairs: map[uint64]*[3]int{}, clusters: map[[16]byte]*cluster{}}
 }
 
-func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, clusters [][]string) {
+func (d *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, clusters [][]string) {
 	prefix.IP = prefix.IP.To16()
 	ones, bits := prefix.Mask.Size()
 	if bits == 32 {
 		ones += 96
 		prefix.Mask = net.CIDRMask(ones, bits+96)
 	}
-	this.Lock()
-	pnode := &this.tree
+	d.Lock()
+	pnode := &d.tree
 	for bit := 0; bit < ones; bit++ {
 		down := 0
 		if (prefix.IP[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
@@ -95,8 +95,8 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 		skeys += strings.Join(cluster, ` `) + ` `
 		ckeys = append(ckeys, cluster)
 	}
-	for key, _ := range data {
-		if strings.Index(skeys, key) < 0 {
+	for key := range data {
+		if !strings.Contains(skeys, key) {
 			lkeys = append(lkeys, key)
 		}
 	}
@@ -109,23 +109,23 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 			}
 			if value, ok := data[key]; ok {
 				index := 0
-				if _, ok := this.strings[key]; !ok {
-					index = len(this.strings)
-					this.strings[key] = &[3]int{1, index}
+				if _, ok := d.strings[key]; !ok {
+					index = len(d.strings)
+					d.strings[key] = &[3]int{1, index}
 				} else {
-					index = this.strings[key][1]
-					this.strings[key][0]++
+					index = d.strings[key][1]
+					d.strings[key][0]++
 				}
 				pair := uint64((uint32(index)&0x0fffffff)|0x10000000) << 32
 				if tvalue, ok := value.(string); ok {
 					if len(tvalue) <= 255 {
 						index = 0
-						if _, ok := this.strings[tvalue]; !ok {
-							index = len(this.strings)
-							this.strings[tvalue] = &[3]int{1, index}
+						if _, ok := d.strings[tvalue]; !ok {
+							index = len(d.strings)
+							d.strings[tvalue] = &[3]int{1, index}
 						} else {
-							index = this.strings[tvalue][1]
-							this.strings[tvalue][0]++
+							index = d.strings[tvalue][1]
+							d.strings[tvalue][0]++
 						}
 						pair |= uint64((uint32(index) & 0x0fffffff) | 0x10000000)
 					} else {
@@ -133,12 +133,12 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 					}
 				} else if tvalue, ok := value.(float64); ok {
 					index = 0
-					if _, ok := this.numbers[tvalue]; !ok {
-						index = len(this.numbers)
-						this.numbers[tvalue] = &[3]int{1, index}
+					if _, ok := d.numbers[tvalue]; !ok {
+						index = len(d.numbers)
+						d.numbers[tvalue] = &[3]int{1, index}
 					} else {
-						index = this.numbers[tvalue][1]
-						this.numbers[tvalue][0]++
+						index = d.numbers[tvalue][1]
+						d.numbers[tvalue][0]++
 					}
 					pair |= uint64((uint32(index) & 0x0fffffff) | 0x20000000)
 				} else if tvalue, ok := value.(bool); ok {
@@ -150,11 +150,11 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 				} else {
 					pair |= uint64(0x50000000)
 				}
-				if _, ok := this.pairs[pair]; !ok {
-					index = len(this.pairs)
-					this.pairs[pair] = &[3]int{1, index}
+				if _, ok := d.pairs[pair]; !ok {
+					index = len(d.pairs)
+					d.pairs[pair] = &[3]int{1, index}
 				} else {
-					this.pairs[pair][0]++
+					d.pairs[pair][0]++
 				}
 				if cindex < len(ckeys)-1 {
 					cpairs = append(cpairs, pair)
@@ -170,17 +170,17 @@ func (this *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, cluster
 			}
 			key := md5.Sum(buffer)
 			index := 0
-			if _, ok := this.clusters[key]; !ok {
-				index = len(this.clusters)
-				this.clusters[key] = &cluster{pairs: cpairs, values: [3]int{1, index}}
+			if _, ok := d.clusters[key]; !ok {
+				index = len(d.clusters)
+				d.clusters[key] = &cluster{pairs: cpairs, values: [3]int{1, index}}
 			} else {
-				index = this.clusters[key].values[1]
-				this.clusters[key].values[0]++
+				index = d.clusters[key].values[1]
+				d.clusters[key].values[0]++
 			}
 			pnode.data = append(pnode.data, 0x7000000000000000|((uint64(index)<<32)&0x0fffffff00000000))
 		}
 	}
-	this.Unlock()
+	d.Unlock()
 }
 
 func wbytes(bytes, value int, data []byte) {
@@ -228,157 +228,157 @@ func wnbits(bits, value0, value1 int, data []byte) {
 		}
 	}
 }
-func (this *PrefixDB) Save(path, description string) (content []byte, err error) {
+func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	// layout header + signature placeholder + description
-	this.Lock()
-	this.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
+	d.Lock()
+	d.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'D', 'E', 'S', 'C', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	if description == "" {
 		description = time.Now().Format(`20060102150405`)
 	}
-	this.Description = description
-	copy(this.data[28:47], []byte(description))
+	d.Description = description
+	copy(d.data[28:47], []byte(description))
 
 	// layout strings dictionary (ordered by fame)
-	this.Strings[0] = 0
-	for key, _ := range this.strings {
-		this.Strings[0] += len(key)
+	d.Strings[0] = 0
+	for key := range d.strings {
+		d.Strings[0] += len(key)
 	}
-	this.Strings[3] = int(math.Ceil(math.Ceil(math.Log2(float64(this.Strings[0]+1))) / 8))
-	this.data = append(this.data, []byte{'S', 'T', 'R', 'S', byte(this.Strings[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
-	this.Strings[2] = len(this.data)
-	this.Strings[1] = len(this.strings)
-	this.Strings[0] += this.Strings[1] * this.Strings[3]
-	flist := make([]*fame, this.Strings[1])
-	for key, values := range this.strings {
+	d.Strings[3] = int(math.Ceil(math.Ceil(math.Log2(float64(d.Strings[0]+1))) / 8))
+	d.data = append(d.data, []byte{'S', 'T', 'R', 'S', byte(d.Strings[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
+	d.Strings[2] = len(d.data)
+	d.Strings[1] = len(d.strings)
+	d.Strings[0] += d.Strings[1] * d.Strings[3]
+	flist := make([]*fame, d.Strings[1])
+	for key, values := range d.strings {
 		flist[values[1]] = &fame{values[0], key}
 	}
 	sort.Sort(byfame(flist))
-	this.data = append(this.data, make([]byte, this.Strings[1]*this.Strings[3])...)
+	d.data = append(d.data, make([]byte, d.Strings[1]*d.Strings[3])...)
 	offset := 0
 	for index, item := range flist {
-		this.strings[item.value.(string)][2] = index
-		this.data = append(this.data, []byte(item.value.(string))...)
-		wbytes(this.Strings[3], offset, this.data[this.Strings[2]+(index*this.Strings[3]):])
+		d.strings[item.value.(string)][2] = index
+		d.data = append(d.data, []byte(item.value.(string))...)
+		wbytes(d.Strings[3], offset, d.data[d.Strings[2]+(index*d.Strings[3]):])
 		offset += len(item.value.(string))
 	}
-	binary.BigEndian.PutUint32(this.data[this.Strings[2]-8:], uint32(this.Strings[0]))
-	binary.BigEndian.PutUint32(this.data[this.Strings[2]-4:], uint32(this.Strings[1]))
-	strings := make([]*fame, this.Strings[1])
-	for key, values := range this.strings {
+	binary.BigEndian.PutUint32(d.data[d.Strings[2]-8:], uint32(d.Strings[0]))
+	binary.BigEndian.PutUint32(d.data[d.Strings[2]-4:], uint32(d.Strings[1]))
+	strings := make([]*fame, d.Strings[1])
+	for key, values := range d.strings {
 		strings[values[1]] = &fame{values[0], key}
 	}
 
 	// layout numbers dictionary (ordered by fame)
-	this.data = append(this.data, []byte{'N', 'U', 'M', 'S', 0, 0, 0, 0, 0, 0, 0, 0}...)
-	this.Numbers[2] = len(this.data)
-	this.Numbers[1] = len(this.numbers)
-	this.Numbers[0] = this.Numbers[1] * 8
-	flist = make([]*fame, this.Numbers[1])
-	for key, values := range this.numbers {
+	d.data = append(d.data, []byte{'N', 'U', 'M', 'S', 0, 0, 0, 0, 0, 0, 0, 0}...)
+	d.Numbers[2] = len(d.data)
+	d.Numbers[1] = len(d.numbers)
+	d.Numbers[0] = d.Numbers[1] * 8
+	flist = make([]*fame, d.Numbers[1])
+	for key, values := range d.numbers {
 		flist[values[1]] = &fame{values[0], key}
 	}
 	sort.Sort(byfame(flist))
-	this.data = append(this.data, make([]byte, this.Numbers[1]*8)...)
+	d.data = append(d.data, make([]byte, d.Numbers[1]*8)...)
 	for index, item := range flist {
-		this.numbers[item.value.(float64)][2] = index
-		binary.BigEndian.PutUint64(this.data[this.Numbers[2]+(index*8):], math.Float64bits(item.value.(float64)))
+		d.numbers[item.value.(float64)][2] = index
+		binary.BigEndian.PutUint64(d.data[d.Numbers[2]+(index*8):], math.Float64bits(item.value.(float64)))
 	}
-	binary.BigEndian.PutUint32(this.data[this.Numbers[2]-8:], uint32(this.Numbers[0]))
-	binary.BigEndian.PutUint32(this.data[this.Numbers[2]-4:], uint32(this.Numbers[1]))
-	numbers := make([]*fame, this.Numbers[1])
-	for key, values := range this.numbers {
+	binary.BigEndian.PutUint32(d.data[d.Numbers[2]-8:], uint32(d.Numbers[0]))
+	binary.BigEndian.PutUint32(d.data[d.Numbers[2]-4:], uint32(d.Numbers[1]))
+	numbers := make([]*fame, d.Numbers[1])
+	for key, values := range d.numbers {
 		numbers[values[1]] = &fame{values[0], key}
 	}
 
 	// layout pairs dictionary (ordered by fame)
-	this.data = append(this.data, []byte{'P', 'A', 'I', 'R', 0, 0, 0, 0, 0, 0, 0, 0}...)
-	this.Pairs[2] = len(this.data)
-	flist = make([]*fame, len(this.pairs))
-	for key, values := range this.pairs {
+	d.data = append(d.data, []byte{'P', 'A', 'I', 'R', 0, 0, 0, 0, 0, 0, 0, 0}...)
+	d.Pairs[2] = len(d.data)
+	flist = make([]*fame, len(d.pairs))
+	for key, values := range d.pairs {
 		flist[values[1]] = &fame{values[0], key}
 	}
 	sort.Sort(byfame(flist))
 	for index, item := range flist {
 		if item.fame > 1 {
-			this.pairs[item.value.(uint64)][2] = index
+			d.pairs[item.value.(uint64)][2] = index
 		} else {
-			delete(this.pairs, item.value.(uint64))
+			delete(d.pairs, item.value.(uint64))
 		}
 	}
-	this.Pairs[1] = len(this.pairs)
-	this.Pairs[0] = this.Pairs[1] * 8
-	this.data = append(this.data, make([]byte, this.Pairs[0])...)
+	d.Pairs[1] = len(d.pairs)
+	d.Pairs[0] = d.Pairs[1] * 8
+	d.data = append(d.data, make([]byte, d.Pairs[0])...)
 	for index, item := range flist {
 		if item.fame <= 1 {
 			break
 		}
-		pair := 0x1000000000000000 | (uint64(this.strings[strings[(item.value.(uint64)>>32)&0x0fffffff].value.(string)][2]) << 32)
+		pair := 0x1000000000000000 | (uint64(d.strings[strings[(item.value.(uint64)>>32)&0x0fffffff].value.(string)][2]) << 32)
 		switch (item.value.(uint64) & 0xf0000000) >> 28 {
 		case 1:
-			pair |= 0x10000000 | uint64(this.strings[strings[item.value.(uint64)&0x0fffffff].value.(string)][2])
+			pair |= 0x10000000 | uint64(d.strings[strings[item.value.(uint64)&0x0fffffff].value.(string)][2])
 		case 2:
-			pair |= 0x20000000 | uint64(this.numbers[numbers[item.value.(uint64)&0x0fffffff].value.(float64)][2])
+			pair |= 0x20000000 | uint64(d.numbers[numbers[item.value.(uint64)&0x0fffffff].value.(float64)][2])
 		default:
 			pair |= item.value.(uint64) & 0xf0000000
 		}
-		binary.BigEndian.PutUint64(this.data[this.Pairs[2]+(index*8):], pair)
+		binary.BigEndian.PutUint64(d.data[d.Pairs[2]+(index*8):], pair)
 	}
-	binary.BigEndian.PutUint32(this.data[this.Pairs[2]-8:], uint32(this.Pairs[0]))
-	binary.BigEndian.PutUint32(this.data[this.Pairs[2]-4:], uint32(this.Pairs[1]))
+	binary.BigEndian.PutUint32(d.data[d.Pairs[2]-8:], uint32(d.Pairs[0]))
+	binary.BigEndian.PutUint32(d.data[d.Pairs[2]-4:], uint32(d.Pairs[1]))
 
 	// layout clusters dictionary (ordered by fame, and reduced for strings, numbers and pairs)
-	this.Clusters[0] = 0
-	for _, cluster := range this.clusters {
+	d.Clusters[0] = 0
+	for _, cluster := range d.clusters {
 		for _, pair := range cluster.pairs {
-			if _, ok := this.pairs[pair]; ok {
-				cluster.data = append(cluster.data, wpbits(0x60, this.pairs[pair][2])...)
+			if _, ok := d.pairs[pair]; ok {
+				cluster.data = append(cluster.data, wpbits(0x60, d.pairs[pair][2])...)
 			} else {
-				cluster.data = append(cluster.data, wpbits(0x10, this.strings[strings[(pair>>32)&0x0fffffff].value.(string)][2])...)
+				cluster.data = append(cluster.data, wpbits(0x10, d.strings[strings[(pair>>32)&0x0fffffff].value.(string)][2])...)
 				switch (pair & 0xf0000000) >> 28 {
 				case 1:
-					cluster.data = append(cluster.data, wpbits(0x10, this.strings[strings[pair&0x0fffffff].value.(string)][2])...)
+					cluster.data = append(cluster.data, wpbits(0x10, d.strings[strings[pair&0x0fffffff].value.(string)][2])...)
 				case 2:
-					cluster.data = append(cluster.data, wpbits(0x20, this.numbers[numbers[pair&0x0fffffff].value.(float64)][2])...)
+					cluster.data = append(cluster.data, wpbits(0x20, d.numbers[numbers[pair&0x0fffffff].value.(float64)][2])...)
 				default:
 					cluster.data = append(cluster.data, byte((pair&0xf0000000)>>24))
 				}
 			}
 		}
-		this.Clusters[0] += len(cluster.data)
+		d.Clusters[0] += len(cluster.data)
 	}
-	this.Clusters[3] = int(math.Ceil(math.Ceil(math.Log2(float64(this.Clusters[0]+1))) / 8))
-	this.data = append(this.data, []byte{'C', 'L', 'U', 'S', byte(this.Clusters[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
-	this.Clusters[2] = len(this.data)
-	this.Clusters[1] = len(this.clusters)
-	this.Clusters[0] += this.Clusters[1] * this.Clusters[3]
-	flist = make([]*fame, this.Clusters[1])
-	for key, cluster := range this.clusters {
+	d.Clusters[3] = int(math.Ceil(math.Ceil(math.Log2(float64(d.Clusters[0]+1))) / 8))
+	d.data = append(d.data, []byte{'C', 'L', 'U', 'S', byte(d.Clusters[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
+	d.Clusters[2] = len(d.data)
+	d.Clusters[1] = len(d.clusters)
+	d.Clusters[0] += d.Clusters[1] * d.Clusters[3]
+	flist = make([]*fame, d.Clusters[1])
+	for key, cluster := range d.clusters {
 		flist[cluster.values[1]] = &fame{cluster.values[0], key}
 	}
 	sort.Sort(byfame(flist))
-	this.data = append(this.data, make([]byte, this.Clusters[1]*this.Clusters[3])...)
+	d.data = append(d.data, make([]byte, d.Clusters[1]*d.Clusters[3])...)
 	offset = 0
 	for index, item := range flist {
-		this.clusters[item.value.([16]byte)].values[2] = index
-		this.data = append(this.data, this.clusters[item.value.([16]byte)].data...)
-		wbytes(this.Clusters[3], offset, this.data[this.Clusters[2]+(index*this.Clusters[3]):])
-		offset += len(this.clusters[item.value.([16]byte)].data)
+		d.clusters[item.value.([16]byte)].values[2] = index
+		d.data = append(d.data, d.clusters[item.value.([16]byte)].data...)
+		wbytes(d.Clusters[3], offset, d.data[d.Clusters[2]+(index*d.Clusters[3]):])
+		offset += len(d.clusters[item.value.([16]byte)].data)
 	}
-	binary.BigEndian.PutUint32(this.data[this.Clusters[2]-8:], uint32(this.Clusters[0]))
-	binary.BigEndian.PutUint32(this.data[this.Clusters[2]-4:], uint32(this.Clusters[1]))
-	clusters := make([]*fame, this.Clusters[1])
-	for key, cluster := range this.clusters {
+	binary.BigEndian.PutUint32(d.data[d.Clusters[2]-8:], uint32(d.Clusters[0]))
+	binary.BigEndian.PutUint32(d.data[d.Clusters[2]-4:], uint32(d.Clusters[1]))
+	clusters := make([]*fame, d.Clusters[1])
+	for key, cluster := range d.clusters {
 		clusters[cluster.values[1]] = &fame{cluster.values[0], key}
 	}
 
 	// layout maps dictionary (reduced for strings, numbers, pairs and clusters)
-	this.Nodes[1] = 1
-	this.data = append(this.data, []byte{'M', 'A', 'P', 'S', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80}...)
-	pnode := &this.tree
-	this.Maps[2] = len(this.data) - 2
-	this.Maps[1] = 1
-	this.Maps[0] = 2
+	d.Nodes[1] = 1
+	d.data = append(d.data, []byte{'M', 'A', 'P', 'S', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80}...)
+	pnode := &d.tree
+	d.Maps[2] = len(d.data) - 2
+	d.Maps[1] = 1
+	d.Maps[0] = 2
 	for {
 		if pnode.down[0] != nil && !pnode.explored[0] {
 			pnode.explored[0] = true
@@ -403,49 +403,49 @@ func (this *PrefixDB) Save(path, description string) (content []byte, err error)
 						last = 0x80
 					}
 					if ((pnode.data[index]>>32)&0xf0000000)>>28 == 7 {
-						data = append(data, wpbits(last|0x70, this.clusters[clusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
+						data = append(data, wpbits(last|0x70, d.clusters[clusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
 					} else {
-						if _, ok := this.pairs[pnode.data[index]]; ok {
-							data = append(data, wpbits(last|0x60, this.pairs[pnode.data[index]][2])...)
+						if _, ok := d.pairs[pnode.data[index]]; ok {
+							data = append(data, wpbits(last|0x60, d.pairs[pnode.data[index]][2])...)
 						} else {
-							data = append(data, wpbits(0x10, this.strings[strings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
+							data = append(data, wpbits(0x10, d.strings[strings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
 							switch (pnode.data[index] & 0xf0000000) >> 28 {
 							case 1:
-								data = append(data, wpbits(last|0x10, this.strings[strings[pnode.data[index]&0x0fffffff].value.(string)][2])...)
+								data = append(data, wpbits(last|0x10, d.strings[strings[pnode.data[index]&0x0fffffff].value.(string)][2])...)
 							case 2:
-								data = append(data, wpbits(last|0x20, this.numbers[numbers[pnode.data[index]&0x0fffffff].value.(float64)][2])...)
+								data = append(data, wpbits(last|0x20, d.numbers[numbers[pnode.data[index]&0x0fffffff].value.(float64)][2])...)
 							default:
 								data = append(data, last|byte((pnode.data[index]&0xf0000000)>>24))
 							}
 						}
 					}
 				}
-				this.data = append(this.data, data...)
-				pnode.offset = this.Maps[0]
-				this.Maps[0] += len(data)
-				this.Maps[1]++
+				d.data = append(d.data, data...)
+				pnode.offset = d.Maps[0]
+				d.Maps[0] += len(data)
+				d.Maps[1]++
 			}
 		} else if pnode.id == 0 {
-			pnode.id = this.Nodes[1]
-			this.Nodes[1]++
+			pnode.id = d.Nodes[1]
+			d.Nodes[1]++
 		}
 	}
-	binary.BigEndian.PutUint32(this.data[this.Maps[2]-8:], uint32(this.Maps[0]))
-	binary.BigEndian.PutUint32(this.data[this.Maps[2]-4:], uint32(this.Maps[1]))
+	binary.BigEndian.PutUint32(d.data[d.Maps[2]-8:], uint32(d.Maps[0]))
+	binary.BigEndian.PutUint32(d.data[d.Maps[2]-4:], uint32(d.Maps[1]))
 
 	// layout nodes tree
-	this.Nodes[3] = int(math.Ceil(math.Ceil(math.Log2(float64(this.Nodes[1]+this.Maps[0]+1)))/4) * 4)
-	this.data = append(this.data, []byte{'N', 'O', 'D', 'E', byte(this.Nodes[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
-	this.Nodes[2] = len(this.data)
-	this.Nodes[0] = this.Nodes[1] * ((2 * this.Nodes[3]) / 8)
-	this.data = append(this.data, make([]byte, this.Nodes[0])...)
-	pnode = &this.tree
+	d.Nodes[3] = int(math.Ceil(math.Ceil(math.Log2(float64(d.Nodes[1]+d.Maps[0]+1)))/4) * 4)
+	d.data = append(d.data, []byte{'N', 'O', 'D', 'E', byte(d.Nodes[3]), 0, 0, 0, 0, 0, 0, 0, 0}...)
+	d.Nodes[2] = len(d.data)
+	d.Nodes[0] = d.Nodes[1] * ((2 * d.Nodes[3]) / 8)
+	d.data = append(d.data, make([]byte, d.Nodes[0])...)
+	pnode = &d.tree
 	next := [2]int{}
 	for {
-		if (pnode == &this.tree || pnode.id != 0) && !pnode.emitted {
+		if (pnode == &d.tree || pnode.id != 0) && !pnode.emitted {
 			pnode.emitted = true
 			for index := 0; index <= 1; index++ {
-				next[index] = this.Nodes[1]
+				next[index] = d.Nodes[1]
 				if pnode.down[index] != nil {
 					if pnode.down[index].id != 0 {
 						next[index] = pnode.down[index].id
@@ -454,7 +454,7 @@ func (this *PrefixDB) Save(path, description string) (content []byte, err error)
 					}
 				}
 			}
-			wnbits(this.Nodes[3], next[0], next[1], this.data[this.Nodes[2]+(pnode.id*((2*this.Nodes[3])/8)):])
+			wnbits(d.Nodes[3], next[0], next[1], d.data[d.Nodes[2]+(pnode.id*((2*d.Nodes[3])/8)):])
 		}
 		if pnode.down[0] != nil && !pnode.explored[2] {
 			pnode.explored[2] = true
@@ -469,29 +469,29 @@ func (this *PrefixDB) Save(path, description string) (content []byte, err error)
 			break
 		}
 	}
-	binary.BigEndian.PutUint32(this.data[this.Nodes[2]-8:], uint32(this.Nodes[0]))
-	binary.BigEndian.PutUint32(this.data[this.Nodes[2]-4:], uint32(this.Nodes[1]))
+	binary.BigEndian.PutUint32(d.data[d.Nodes[2]-8:], uint32(d.Nodes[0]))
+	binary.BigEndian.PutUint32(d.data[d.Nodes[2]-4:], uint32(d.Nodes[1]))
 
 	// finalize header
-	this.tree, this.strings, this.numbers, this.pairs, this.clusters = node{}, map[string]*[3]int{}, map[float64]*[3]int{}, map[uint64]*[3]int{}, map[[16]byte]*cluster{}
-	hash := md5.Sum(this.data[24:])
-	copy(this.data[8:], hash[:])
-	this.Total = len(this.data)
+	d.tree, d.strings, d.numbers, d.pairs, d.clusters = node{}, map[string]*[3]int{}, map[float64]*[3]int{}, map[uint64]*[3]int{}, map[[16]byte]*cluster{}
+	hash := md5.Sum(d.data[24:])
+	copy(d.data[8:], hash[:])
+	d.Total = len(d.data)
 
 	// save database
 	if path != "" {
 		if path == "-" {
-			_, err = os.Stdout.Write(this.data)
+			_, err = os.Stdout.Write(d.data)
 		} else {
-			err = ioutil.WriteFile(path, this.data, 0644)
+			err = ioutil.WriteFile(path, d.data, 0644)
 		}
 	}
 
-	this.Unlock()
-	return this.data, err
+	d.Unlock()
+	return d.data, err
 }
 
-func (this *PrefixDB) Load(path string) error {
+func (d *PrefixDB) Load(path string) error {
 	if data, err := ioutil.ReadFile(path); err != nil {
 		return err
 	} else {
@@ -504,65 +504,65 @@ func (this *PrefixDB) Load(path string) error {
 			if len(data) < 24 || fmt.Sprintf("%x", md5.Sum(data[24:])) != fmt.Sprintf("%x", data[8:24]) {
 				return errors.New(`prefixdb: checksum is invalid`)
 			}
-			this.Lock()
-			this.data = data
-			this.Total = len(data)
-			this.Version = version
-			this.Path = path
+			d.Lock()
+			d.data = data
+			d.Total = len(data)
+			d.Version = version
+			d.Path = path
 			offset := 24
-			if this.Total >= offset+4 && string(data[offset:offset+4]) == "DESC" {
+			if d.Total >= offset+4 && string(data[offset:offset+4]) == "DESC" {
 				offset += 4
-				if this.Total >= offset+20 {
+				if d.Total >= offset+20 {
 					index := 0
 					if index = bytes.Index(data[offset:offset+20], []byte{0}); index < 0 {
 						index = 20
 					}
-					this.Description = fmt.Sprintf("%s", data[offset:offset+index])
+					d.Description = string(data[offset : offset+index])
 					offset += 20
-					if this.Total >= offset+4 && string(data[offset:offset+4]) == "STRS" {
+					if d.Total >= offset+4 && string(data[offset:offset+4]) == "STRS" {
 						offset += 4
-						if this.Total >= offset+9 {
-							this.Strings[3] = int(data[offset])
-							this.Strings[2] = offset + 9
-							this.Strings[1] = int(binary.BigEndian.Uint32(this.data[offset+5:]))
-							this.Strings[0] = int(binary.BigEndian.Uint32(this.data[offset+1:]))
-							offset += 9 + this.Strings[0]
-							if this.Total >= offset+4 && string(data[offset:offset+4]) == "NUMS" {
+						if d.Total >= offset+9 {
+							d.Strings[3] = int(data[offset])
+							d.Strings[2] = offset + 9
+							d.Strings[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+							d.Strings[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+							offset += 9 + d.Strings[0]
+							if d.Total >= offset+4 && string(data[offset:offset+4]) == "NUMS" {
 								offset += 4
-								if this.Total >= offset+8 {
-									this.Numbers[2] = offset + 8
-									this.Numbers[1] = int(binary.BigEndian.Uint32(this.data[offset+4:]))
-									this.Numbers[0] = int(binary.BigEndian.Uint32(this.data[offset:]))
-									offset += 8 + this.Numbers[0]
-									if this.Total >= offset+4 && string(data[offset:offset+4]) == "PAIR" {
+								if d.Total >= offset+8 {
+									d.Numbers[2] = offset + 8
+									d.Numbers[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+									d.Numbers[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+									offset += 8 + d.Numbers[0]
+									if d.Total >= offset+4 && string(data[offset:offset+4]) == "PAIR" {
 										offset += 4
-										if this.Total >= offset+8 {
-											this.Pairs[2] = offset + 8
-											this.Pairs[1] = int(binary.BigEndian.Uint32(this.data[offset+4:]))
-											this.Pairs[0] = int(binary.BigEndian.Uint32(this.data[offset:]))
-											offset += 8 + this.Pairs[0]
-											if this.Total >= offset+4 && string(data[offset:offset+4]) == "CLUS" {
+										if d.Total >= offset+8 {
+											d.Pairs[2] = offset + 8
+											d.Pairs[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+											d.Pairs[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+											offset += 8 + d.Pairs[0]
+											if d.Total >= offset+4 && string(data[offset:offset+4]) == "CLUS" {
 												offset += 4
-												this.Clusters[3] = int(data[offset])
-												this.Clusters[2] = offset + 9
-												this.Clusters[1] = int(binary.BigEndian.Uint32(this.data[offset+5:]))
-												this.Clusters[0] = int(binary.BigEndian.Uint32(this.data[offset+1:]))
-												offset += 9 + this.Clusters[0]
-												if this.Total >= offset+4 && string(data[offset:offset+4]) == "MAPS" {
+												d.Clusters[3] = int(data[offset])
+												d.Clusters[2] = offset + 9
+												d.Clusters[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+												d.Clusters[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+												offset += 9 + d.Clusters[0]
+												if d.Total >= offset+4 && string(data[offset:offset+4]) == "MAPS" {
 													offset += 4
-													if this.Total >= offset+8 {
-														this.Maps[2] = offset + 8
-														this.Maps[1] = int(binary.BigEndian.Uint32(this.data[offset+4:]))
-														this.Maps[0] = int(binary.BigEndian.Uint32(this.data[offset:]))
-														offset += 8 + this.Maps[0]
-														if this.Total >= offset+9 && string(data[offset:offset+4]) == "NODE" {
+													if d.Total >= offset+8 {
+														d.Maps[2] = offset + 8
+														d.Maps[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+														d.Maps[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+														offset += 8 + d.Maps[0]
+														if d.Total >= offset+9 && string(data[offset:offset+4]) == "NODE" {
 															offset += 4
-															this.Nodes[3] = int(data[offset])
-															this.Nodes[2] = offset + 9
-															this.Nodes[1] = int(binary.BigEndian.Uint32(this.data[offset+5:]))
-															this.Nodes[0] = int(binary.BigEndian.Uint32(this.data[offset+1:]))
-															if offset+9+this.Nodes[0] != this.Total {
-																this.Nodes[2] = 0
+															d.Nodes[3] = int(data[offset])
+															d.Nodes[2] = offset + 9
+															d.Nodes[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+															d.Nodes[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+															if offset+9+d.Nodes[0] != d.Total {
+																d.Nodes[2] = 0
 															}
 														}
 													}
@@ -576,8 +576,8 @@ func (this *PrefixDB) Load(path string) error {
 					}
 				}
 			}
-			this.Unlock()
-			if this.Strings[2] == 0 || this.Numbers[2] == 0 || this.Pairs[2] == 0 || this.Clusters[2] == 0 || this.Maps[2] == 0 || this.Nodes[2] == 0 {
+			d.Unlock()
+			if d.Strings[2] == 0 || d.Numbers[2] == 0 || d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 {
 				return errors.New(`prefixdb: structure is invalid`)
 			}
 		}
@@ -646,34 +646,34 @@ func rbytes(width int, data []byte) (value int) {
 	}
 	return value
 }
-func (this *PrefixDB) rstring(index int) string {
-	count, offset, width := this.Strings[1], this.Strings[2], this.Strings[3]
+func (d *PrefixDB) rstring(index int) string {
+	count, offset, width := d.Strings[1], d.Strings[2], d.Strings[3]
 	if index >= count {
 		return ""
 	}
-	start, end := rbytes(width, this.data[offset+(index*width):]), 0
+	start, end := rbytes(width, d.data[offset+(index*width):]), 0
 	if index < count-1 {
-		end = rbytes(width, this.data[offset+(index+1)*width:])
+		end = rbytes(width, d.data[offset+(index+1)*width:])
 	} else {
-		end = this.Strings[0] - (count * width)
+		end = d.Strings[0] - (count * width)
 	}
-	return string(this.data[offset+(count*width)+start : offset+(count*width)+end])
+	return string(d.data[offset+(count*width)+start : offset+(count*width)+end])
 }
-func (this *PrefixDB) rnumber(index int) float64 {
-	if index >= this.Numbers[1] {
+func (d *PrefixDB) rnumber(index int) float64 {
+	if index >= d.Numbers[1] {
 		return 0.0
 	}
-	return math.Float64frombits(binary.BigEndian.Uint64(this.data[this.Numbers[2]+(index*8):]))
+	return math.Float64frombits(binary.BigEndian.Uint64(d.data[d.Numbers[2]+(index*8):]))
 }
-func (this *PrefixDB) rpair(index int, pairs map[string]interface{}) {
-	if index < this.Pairs[1] {
-		pair := binary.BigEndian.Uint64(this.data[this.Pairs[2]+(index*8):])
-		if key := this.rstring(int((pair >> 32) & 0x0fffffff)); key != "" {
+func (d *PrefixDB) rpair(index int, pairs map[string]interface{}) {
+	if index < d.Pairs[1] {
+		pair := binary.BigEndian.Uint64(d.data[d.Pairs[2]+(index*8):])
+		if key := d.rstring(int((pair >> 32) & 0x0fffffff)); key != "" {
 			switch (pair & 0xf0000000) >> 28 {
 			case 1:
-				pairs[key] = this.rstring(int(pair & 0x0fffffff))
+				pairs[key] = d.rstring(int(pair & 0x0fffffff))
 			case 2:
-				pairs[key] = this.rnumber(int(pair & 0x0fffffff))
+				pairs[key] = d.rnumber(int(pair & 0x0fffffff))
 			case 3:
 				pairs[key] = true
 			case 4:
@@ -682,31 +682,31 @@ func (this *PrefixDB) rpair(index int, pairs map[string]interface{}) {
 		}
 	}
 }
-func (this *PrefixDB) rcluster(index int, pairs map[string]interface{}) {
-	count, offset, width := this.Clusters[1], this.Clusters[2], this.Clusters[3]
+func (d *PrefixDB) rcluster(index int, pairs map[string]interface{}) {
+	count, offset, width := d.Clusters[1], d.Clusters[2], d.Clusters[3]
 	if index < count {
-		start, end := rbytes(width, this.data[offset+(index*width):]), 0
+		start, end := rbytes(width, d.data[offset+(index*width):]), 0
 		if index < count-1 {
-			end = rbytes(width, this.data[offset+(index+1)*width:])
+			end = rbytes(width, d.data[offset+(index+1)*width:])
 		} else {
-			end = this.Clusters[0] - (count * width)
+			end = d.Clusters[0] - (count * width)
 		}
 		start += offset + (count * width)
 		end += offset + (count * width)
 		key := ""
 		for start < end {
-			section, index, size, _ := rpbits(this.data[start:])
+			section, index, size, _ := rpbits(d.data[start:])
 			switch section {
 			case 1:
 				if key != "" {
-					pairs[key] = this.rstring(index)
+					pairs[key] = d.rstring(index)
 					key = ""
 				} else {
-					key = this.rstring(index)
+					key = d.rstring(index)
 				}
 			case 2:
 				if key != "" {
-					pairs[key] = this.rnumber(index)
+					pairs[key] = d.rnumber(index)
 					key = ""
 				}
 			case 3:
@@ -725,51 +725,51 @@ func (this *PrefixDB) rcluster(index int, pairs map[string]interface{}) {
 					key = ""
 				}
 			case 6:
-				this.rpair(index, pairs)
+				d.rpair(index, pairs)
 			}
 			start += size
 		}
 	}
 }
-func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (output map[string]interface{}, err error) {
+func (d *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (output map[string]interface{}, err error) {
 	output = input
-	if this.data == nil || this.Total == 0 || this.Version == 0 || this.Strings[2] == 0 || this.Numbers[2] == 0 ||
-		this.Pairs[2] == 0 || this.Clusters[2] == 0 || this.Maps[2] == 0 || this.Nodes[2] == 0 || address == nil {
+	if d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
+		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || address == nil {
 		err = errors.New(`prefixdb: record not found`)
 	} else {
 		address = address.To16()
 		offset := 0
-		this.RLock()
+		d.RLock()
 		for bit := 0; bit < 128; bit++ {
 			down := 0
 			if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
 				down = 1
 			}
-			offset = rnbits(this.Nodes[3], offset, down, this.data[this.Nodes[2]:])
-			if offset == this.Nodes[1] || offset == 0 {
+			offset = rnbits(d.Nodes[3], offset, down, d.data[d.Nodes[2]:])
+			if offset == d.Nodes[1] || offset == 0 {
 				break
 			}
 			if output == nil {
 				output = map[string]interface{}{}
 			}
-			if offset > this.Nodes[1] {
-				offset -= this.Nodes[1]
-				if offset < this.Maps[0] {
-					offset += this.Maps[2]
+			if offset > d.Nodes[1] {
+				offset -= d.Nodes[1]
+				if offset < d.Maps[0] {
+					offset += d.Maps[2]
 					key := ""
-					for offset < this.Maps[2]+this.Maps[0] {
-						section, index, size, last := rpbits(this.data[offset:])
+					for offset < d.Maps[2]+d.Maps[0] {
+						section, index, size, last := rpbits(d.data[offset:])
 						switch section {
 						case 1:
 							if key != "" {
-								output[key] = this.rstring(index)
+								output[key] = d.rstring(index)
 								key = ""
 							} else {
-								key = this.rstring(index)
+								key = d.rstring(index)
 							}
 						case 2:
 							if key != "" {
-								output[key] = this.rnumber(index)
+								output[key] = d.rnumber(index)
 								key = ""
 							}
 						case 3:
@@ -788,9 +788,9 @@ func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (outp
 								key = ""
 							}
 						case 6:
-							this.rpair(index, output)
+							d.rpair(index, output)
 						case 7:
-							this.rcluster(index, output)
+							d.rcluster(index, output)
 						}
 						if last {
 							break
@@ -801,7 +801,7 @@ func (this *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (outp
 				break
 			}
 		}
-		this.RUnlock()
+		d.RUnlock()
 	}
 	return output, err
 }

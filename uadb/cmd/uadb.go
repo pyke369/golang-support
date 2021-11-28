@@ -122,7 +122,7 @@ func lookup() {
 	for _, agent := range os.Args[3:] {
 		fmt.Printf("- %s\n", agent)
 		lookup, keys := db.Lookup(agent, true), []string{}
-		for key, _ := range lookup {
+		for key := range lookup {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
@@ -172,7 +172,7 @@ func bench() {
 				close(queue)
 				waiter.Wait()
 				fmt.Printf("\r- lookup %d user-agents (found %d / %d unknown / %v)\n",
-					total, atomic.LoadInt32(&found), total-atomic.LoadInt32(&found), time.Now().Sub(start))
+					total, atomic.LoadInt32(&found), total-atomic.LoadInt32(&found), time.Since(start))
 			}
 			time.Sleep(time.Second)
 		}

@@ -269,27 +269,27 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 	return
 }
 
-func (this *Socket) IsClient() bool {
-	return this.client
+func (s *Socket) IsClient() bool {
+	return s.client
 }
 
-func (this *Socket) IsConnected() bool {
-	return this.connected
+func (s *Socket) IsConnected() bool {
+	return s.connected
 }
 
-func (this *Socket) Write(mode byte, data []byte) (err error) {
+func (s *Socket) Write(mode byte, data []byte) (err error) {
 	var mask []byte
 
 	length := len(data)
 	if (mode == WEBSOCKET_OPCODE_TEXT || mode == WEBSOCKET_OPCODE_BLOB) && length > 0 {
-		this.dlock.Lock()
-		defer this.dlock.Unlock()
-		frames := length / this.config.FragmentSize
-		if length%this.config.FragmentSize != 0 {
+		s.dlock.Lock()
+		defer s.dlock.Unlock()
+		frames := length / s.config.FragmentSize
+		if length%s.config.FragmentSize != 0 {
 			frames++
 		}
 		for frame := 1; frame <= frames; frame++ {
-			fin, offset, size := byte(0), (frame-1)*this.config.FragmentSize, this.config.FragmentSize
+			fin, offset, size := byte(0), (frame-1)*s.config.FragmentSize, s.config.FragmentSize
 			if frame == frames {
 				fin, size = WEBSOCKET_FIN, length-offset
 			}
@@ -308,15 +308,15 @@ func (this *Socket) Write(mode byte, data []byte) (err error) {
 				payload = append(payload, []byte{0, 0, 0, 0, 0, 0, 0, 0})
 				binary.BigEndian.PutUint64(payload[1], uint64(size))
 			}
-			if this.client {
+			if s.client {
 				payload[0][1] |= WEBSOCKET_MASK
 				mask = rmask()
 				payload = append(payload, mask)
 				xor(mask, data[offset:offset+size])
 			}
 			payload = append(payload, data[offset:offset+size])
-			err = this.send(payload)
-			if this.client {
+			err = s.send(payload)
+			if s.client {
 				xor(mask, data[offset:offset+size])
 			}
 			if err != nil {
@@ -327,16 +327,16 @@ func (this *Socket) Write(mode byte, data []byte) (err error) {
 	return
 }
 
-func (this *Socket) Close(code int) {
-	this.clock.Lock()
-	if !this.closing && this.connected {
-		this.closing = true
-		this.clock.Unlock()
-		if this.config != nil && this.config.CloseHandler != nil {
-			this.config.CloseHandler(this, code)
+func (s *Socket) Close(code int) {
+	s.clock.Lock()
+	if !s.closing && s.connected {
+		s.closing = true
+		s.clock.Unlock()
+		if s.config != nil && s.config.CloseHandler != nil {
+			s.config.CloseHandler(s, code)
 		}
 		payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_CLOSE, 0}}
-		if this.client {
+		if s.client {
 			payload[0][1] |= WEBSOCKET_MASK
 			payload = append(payload, rmask())
 		}
@@ -344,46 +344,46 @@ func (this *Socket) Close(code int) {
 			payload[0][1] |= 2
 			payload = append(payload, []byte{0, 0})
 			binary.BigEndian.PutUint16(payload[len(payload)-1], uint16(code))
-			if this.client {
+			if s.client {
 				xor(payload[1], payload[2])
 			}
 		}
-		this.send(payload)
-		this.connected = false
-		this.conn.Close()
+		s.send(payload)
+		s.connected = false
+		s.conn.Close()
 	} else {
-		this.clock.Unlock()
+		s.clock.Unlock()
 	}
 }
 
-func (this *Socket) send(payload net.Buffers) (err error) {
-	if !this.connected {
+func (s *Socket) send(payload net.Buffers) (err error) {
+	if !s.connected {
 		return errors.New(`websocket: not connected`)
 	}
-	this.wlock.Lock()
+	s.wlock.Lock()
 	lnow := atomic.LoadInt64(&now)
-	if time.Duration(lnow-this.slast) >= time.Second {
-		this.slast = lnow
-		this.conn.SetWriteDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(this.config.WriteTimeout)))
+	if time.Duration(lnow-s.slast) >= time.Second {
+		s.slast = lnow
+		s.conn.SetWriteDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
 	}
-	if _, err = payload.WriteTo(this.conn); err != nil {
-		this.wlock.Unlock()
-		this.Close(0)
+	if _, err = payload.WriteTo(s.conn); err != nil {
+		s.wlock.Unlock()
+		s.Close(0)
 	} else {
-		this.wlock.Unlock()
+		s.wlock.Unlock()
 	}
 	return
 }
 
-func (this *Socket) receive(buffered io.Reader) {
+func (s *Socket) receive(buffered io.Reader) {
 	var data, control []byte
 	var err error
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
 	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&now), 0, byte(0), 0, 0, false
-	buffer, roffset, woffset, read := bslab.Get(this.config.ReadSize, nil), 0, 0, 0
+	buffer, roffset, woffset, read := bslab.Get(s.config.ReadSize, nil), 0, 0, 0
 	buffer = buffer[:cap(buffer)]
-	if !this.client {
+	if !s.client {
 		smask += 4
 	}
 close:
@@ -395,15 +395,15 @@ close:
 		}
 
 		lnow := atomic.LoadInt64(&now)
-		if time.Duration(lnow-this.rlast) >= time.Second {
-			this.rlast = lnow
-			this.conn.SetReadDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(this.config.ProbeTimeout)))
+		if time.Duration(lnow-s.rlast) >= time.Second {
+			s.rlast = lnow
+			s.conn.SetReadDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout)))
 		}
 		if buffered != nil {
 			read, err = buffered.Read(buffer[woffset:])
 			buffered = nil
 		} else {
-			read, err = this.conn.Read(buffer[woffset:])
+			read, err = s.conn.Read(buffer[woffset:])
 		}
 
 		if read > 0 {
@@ -413,13 +413,13 @@ close:
 				if size < 0 {
 					if woffset-roffset >= 2 {
 						fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
-						if (this.client && (buffer[roffset+1]&WEBSOCKET_MASK) != 0) || (!this.client && (buffer[roffset+1]&WEBSOCKET_MASK) == 0) ||
+						if (s.client && (buffer[roffset+1]&WEBSOCKET_MASK) != 0) || (!s.client && (buffer[roffset+1]&WEBSOCKET_MASK) == 0) ||
 							(fin == 0 && opcode >= WEBSOCKET_OPCODE_CLOSE && opcode <= WEBSOCKET_OPCODE_PONG) ||
 							(opcode != 0 && opcode != WEBSOCKET_OPCODE_TEXT && opcode != WEBSOCKET_OPCODE_BLOB && (opcode < WEBSOCKET_OPCODE_CLOSE || opcode > WEBSOCKET_OPCODE_PONG)) {
 							code = WEBSOCKET_ERROR_PROTOCOL
 							break close
 						}
-						if !this.client && woffset-roffset < 2+smask {
+						if !s.client && woffset-roffset < 2+smask {
 							size = -1
 							break
 						}
@@ -435,7 +435,7 @@ close:
 								break
 							}
 							size = int(binary.BigEndian.Uint16(buffer[roffset+2:]))
-							if !this.client {
+							if !s.client {
 								copy(mask, buffer[roffset+4:])
 							}
 							roffset += 4 + smask
@@ -445,17 +445,17 @@ close:
 								break
 							}
 							size = int(binary.BigEndian.Uint64(buffer[roffset+2:]))
-							if !this.client {
+							if !s.client {
 								copy(mask, buffer[roffset+10:])
 							}
 							roffset += 10 + smask
 						} else {
-							if !this.client {
+							if !s.client {
 								copy(mask, buffer[roffset+2:])
 							}
 							roffset += 2 + smask
 						}
-						if (opcode <= WEBSOCKET_OPCODE_BLOB && size == 0) || (opcode > WEBSOCKET_OPCODE_BLOB && size > 125) || (fin == 1 && size > this.config.MessageSize) {
+						if (opcode <= WEBSOCKET_OPCODE_BLOB && size == 0) || (opcode > WEBSOCKET_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
 							code = WEBSOCKET_ERROR_OVERSIZED
 							break close
 						}
@@ -473,7 +473,7 @@ close:
 							data = bslab.Get(dsize, nil)
 						}
 						max := int(math.Min(float64(woffset-roffset), float64(size)))
-						if len(data)+max > this.config.MessageSize {
+						if len(data)+max > s.config.MessageSize {
 							code = WEBSOCKET_ERROR_OVERSIZED
 							break close
 						}
@@ -481,7 +481,7 @@ close:
 						size -= max
 						roffset += max
 						if size <= 0 && len(data) >= dsize {
-							if !this.client {
+							if !s.client {
 								xor(mask, data[doffset:dsize])
 							}
 							doffset = dsize
@@ -491,8 +491,8 @@ close:
 									break close
 								}
 								keep := false
-								if this.config.MessageHandler != nil {
-									keep = this.config.MessageHandler(this, int(dmode), data)
+								if s.config.MessageHandler != nil {
+									keep = s.config.MessageHandler(s, int(dmode), data)
 								}
 								if !keep {
 									bslab.Put(data)
@@ -510,7 +510,7 @@ close:
 						size -= max
 						roffset += max
 						if size <= 0 {
-							if !this.client {
+							if !s.client {
 								xor(mask, control)
 							}
 							switch opcode {
@@ -521,13 +521,13 @@ close:
 								break close
 							case WEBSOCKET_OPCODE_PING:
 								payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_PONG, byte(len(control))}}
-								if this.client {
+								if s.client {
 									payload[0][1] |= WEBSOCKET_MASK
 									payload = append(payload, rmask())
 									xor(payload[1], control)
 								}
 								payload = append(payload, control)
-								if err := this.send(payload); err != nil {
+								if err := s.send(payload); err != nil {
 									break close
 								}
 							}
@@ -547,11 +547,11 @@ close:
 		if err != nil {
 			if err, ok := err.(net.Error); ok && err.Timeout() {
 				payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_PING, 0}}
-				if this.client {
+				if s.client {
 					payload[0][1] |= WEBSOCKET_MASK
 					payload = append(payload, rmask())
 				}
-				if err := this.send(payload); err != nil {
+				if err := s.send(payload); err != nil {
 					break close
 				}
 			} else {
@@ -561,14 +561,14 @@ close:
 			break close
 		}
 
-		if atomic.LoadInt64(&now)-seen >= this.config.InactiveTimeout {
+		if atomic.LoadInt64(&now)-seen >= s.config.InactiveTimeout {
 			break close
 		}
 	}
 	bslab.Put(buffer)
 	bslab.Put(control)
 	bslab.Put(data)
-	this.Close(code)
+	s.Close(code)
 }
 
 func rmask() []byte {

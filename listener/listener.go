@@ -15,8 +15,8 @@ type TCPListener struct {
 	callback func(*net.TCPConn)
 }
 
-func (this *TCPListener) Accept() (net.Conn, error) {
-	connection, err := this.AcceptTCP()
+func (l *TCPListener) Accept() (net.Conn, error) {
+	connection, err := l.AcceptTCP()
 	if err != nil {
 		return nil, err
 	}
@@ -29,14 +29,14 @@ func (this *TCPListener) Accept() (net.Conn, error) {
 				syscall.SetsockoptInt(int(handle), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
 			})
 	}
-	if this.read > 0 {
-		connection.SetReadBuffer(this.read)
+	if l.read > 0 {
+		connection.SetReadBuffer(l.read)
 	}
-	if this.write > 0 {
-		connection.SetWriteBuffer(this.write)
+	if l.write > 0 {
+		connection.SetWriteBuffer(l.write)
 	}
-	if this.callback != nil {
-		this.callback(connection)
+	if l.callback != nil {
+		l.callback(connection)
 	}
 	return connection, nil
 }
