@@ -12,6 +12,7 @@ import (
 )
 
 type CERTIFICATE struct {
+	predicate   string
 	public      string
 	private     string
 	certificate *tls.Certificate
@@ -20,23 +21,23 @@ type CERTIFICATE struct {
 
 type DYNACERT struct {
 	sync.RWMutex
-	certificates map[string]*CERTIFICATE
+	certificates []*CERTIFICATE
 	last         time.Time
 }
 
 func (d *DYNACERT) Add(predicate, public, private string) {
 	d.Lock()
 	if d.certificates == nil {
-		d.certificates = map[string]*CERTIFICATE{}
+		d.certificates = []*CERTIFICATE{}
 	}
-	d.certificates[strings.TrimSpace(predicate)] = &CERTIFICATE{public: strings.TrimSpace(public), private: strings.TrimSpace(private)}
+	d.certificates = append(d.certificates, &CERTIFICATE{predicate: strings.TrimSpace(predicate), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	d.last = time.Now().Add(-time.Minute)
 	d.Unlock()
 }
 
 func (d *DYNACERT) Clear() {
 	d.Lock()
-	d.certificates = map[string]*CERTIFICATE{}
+	d.certificates = []*CERTIFICATE{}
 	d.Unlock()
 }
 
@@ -72,16 +73,16 @@ func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certif
 		return nil, errors.New(`dynacert: no loaded certificate`)
 	}
 	if client != nil && client.ServerName != "" {
-		for predicate, certificate := range d.certificates {
-			if predicate != "" && predicate != "*" && certificate.certificate != nil {
-				if matcher := rcache.Get(predicate); matcher != nil && matcher.MatchString(client.ServerName) {
+		for _, certificate := range d.certificates {
+			if certificate.predicate != "" && certificate.predicate != "*" && certificate.certificate != nil {
+				if matcher := rcache.Get(certificate.predicate); matcher != nil && matcher.MatchString(client.ServerName) {
 					return certificate.certificate, nil
 				}
 			}
 		}
 	}
-	for predicate, certificate := range d.certificates {
-		if (predicate == "" || predicate == "*") && certificate.certificate != nil {
+	for _, certificate := range d.certificates {
+		if (certificate.predicate == "" || certificate.predicate == "*") && certificate.certificate != nil {
 			return certificate.certificate, nil
 		}
 	}
