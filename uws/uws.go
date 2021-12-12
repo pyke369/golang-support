@@ -3,6 +3,7 @@ package uws
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
@@ -25,6 +26,7 @@ import (
 	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uuid"
+	"golang.org/x/net/http/httpproxy"
 )
 
 const (
@@ -43,6 +45,7 @@ const (
 )
 
 type Config struct {
+	Proxy           func(*url.URL) (*url.URL, error)
 	TLSConfig       *tls.Config
 	Headers         map[string]string
 	Protocols       []string
@@ -72,9 +75,13 @@ type Socket struct {
 	slast, rlast                          int64
 }
 
-var now int64
+var (
+	proxy func(*url.URL) (*url.URL, error)
+	now   int64
+)
 
 func init() {
+	proxy = httpproxy.FromEnvironment().ProxyFunc()
 	atomic.StoreInt64(&now, time.Now().UnixNano())
 	go func() {
 		for {
@@ -87,6 +94,9 @@ func init() {
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	if config == nil {
 		config = &Config{}
+	}
+	if config.Proxy == nil {
+		config.Proxy = proxy
 	}
 	config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
 	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
@@ -102,10 +112,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 256<<10)
 	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
-	if parts, err := url.Parse(endpoint); err == nil {
+	if url, err := url.Parse(endpoint); err == nil {
+		proxy, _ := config.Proxy(url)
 		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
-			var conn net.Conn
-
 			nonce := base64.StdEncoding.EncodeToString(uuid.BUUID())
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
@@ -121,8 +130,14 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			for name, value := range config.Headers {
 				request.Header.Add(name, value)
 			}
-			if value, err := net.DialTimeout("tcp", parts.Host, config.ConnectTimeout); err == nil {
-				conn = value
+
+			start, scheme, address := time.Now(), url.Scheme, url.Host
+			if proxy != nil {
+				scheme, address = proxy.Scheme, proxy.Host
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), config.ConnectTimeout)
+			defer cancel()
+			if conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address); err == nil {
 				if tconn, ok := conn.(*net.TCPConn); ok {
 					if config.ReadBufferSize != 0 {
 						tconn.SetReadBuffer(config.ReadBufferSize)
@@ -131,49 +146,105 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						tconn.SetWriteBuffer(config.WriteBufferSize)
 					}
 				}
+				if scheme == "https" {
+					if config.TLSConfig == nil {
+						config.TLSConfig = &tls.Config{}
+					}
+					config.TLSConfig.ServerName = address
+					if value, _, err := net.SplitHostPort(address); err == nil {
+						config.TLSConfig.ServerName = value
+					}
+					conn = tls.Client(conn, config.TLSConfig)
+					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
+						conn.Close()
+						return nil, fmt.Errorf(`websocket: %v`, err)
+					}
+				}
+				if proxy != nil {
+					host, port := url.Host, "0"
+					if value1, value2, err := net.SplitHostPort(host); err == nil {
+						host, port = value1, value2
+					}
+					if port == "0" {
+						if url.Scheme == "https" {
+							port = "443"
+						} else {
+							port = "80"
+						}
+					}
+					payload := fmt.Sprintf("CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n", host, port, host, port)
+					if user := proxy.User; user != nil {
+						password, _ := user.Password()
+						payload += fmt.Sprintf("Proxy-Authorization: basic %s\r\n", base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)))
+					}
+					payload += "\r\n"
+
+					conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
+					if _, err := conn.Write([]byte(payload)); err != nil {
+						conn.Close()
+						return nil, fmt.Errorf(`websocket: %v`, err)
+					}
+					conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
+					if response, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
+						response.Body.Close()
+						if response.StatusCode != 200 {
+							conn.Close()
+							return nil, fmt.Errorf(`websocket: proxy connection error`)
+						}
+					} else {
+						conn.Close()
+						return nil, fmt.Errorf(`websocket: %v`, err)
+					}
+
+					if url.Scheme == "https" {
+						if config.TLSConfig == nil {
+							config.TLSConfig = &tls.Config{}
+						}
+						config.TLSConfig.ServerName = host
+						conn = tls.Client(conn, config.TLSConfig)
+						if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
+							conn.Close()
+							return nil, fmt.Errorf(`websocket: %v`, err)
+						}
+					}
+				}
+
+				conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
+				if err := request.Write(conn); err != nil {
+					conn.Close()
+					return nil, fmt.Errorf(`websocket: %v`, err)
+				}
+				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
+				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
+					skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
+					ckey, path := sha1.Sum([]byte(nonce+WEBSOCKET_UUID)), url.Path
+					if path == "" {
+						path = "/"
+					}
+					if response.StatusCode != http.StatusSwitchingProtocols || strings.ToLower(response.Header.Get("Connection")) != "upgrade" ||
+						strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) {
+						response.Body.Close()
+						conn.Close()
+						return nil, fmt.Errorf(`websocket: invalid protocol upgrade (status %d)`, response.StatusCode)
+					}
+					protocol := response.Header.Get("Sec-WebSocket-Protocol")
+					if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
+						response.Body.Close()
+						conn.Close()
+						return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
+					}
+					ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol, Context: config.Context,
+						config: config, client: true, conn: conn, connected: true}
+					go ws.receive(nil)
+					if config.OpenHandler != nil {
+						config.OpenHandler(ws)
+					}
+				} else {
+					conn.Close()
+					return nil, err
+				}
 			} else {
 				return nil, fmt.Errorf(`websocket: %v`, err)
-			}
-			if strings.HasPrefix(endpoint, "https:") {
-				if config.TLSConfig == nil {
-					config.TLSConfig = &tls.Config{}
-				}
-				if value, _, err := net.SplitHostPort(parts.Host); err == nil {
-					parts.Host = value
-				}
-				config.TLSConfig.ServerName = parts.Host
-				conn = tls.Client(conn, config.TLSConfig)
-			}
-			conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout))
-			if err := request.Write(conn); err != nil {
-				conn.Close()
-				return nil, fmt.Errorf(`websocket: %v`, err)
-			}
-			conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
-			if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
-				skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
-				ckey, path := sha1.Sum([]byte(nonce+WEBSOCKET_UUID)), parts.Path
-				if path == "" {
-					path = "/"
-				}
-				if response.StatusCode != http.StatusSwitchingProtocols || strings.ToLower(response.Header.Get("Connection")) != "upgrade" ||
-					strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) {
-					response.Body.Close()
-					return nil, fmt.Errorf(`websocket: invalid protocol upgrade (status %d)`, response.StatusCode)
-				}
-				protocol := response.Header.Get("Sec-WebSocket-Protocol")
-				if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
-					response.Body.Close()
-					return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
-				}
-				ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol, Context: config.Context,
-					config: config, client: true, conn: conn, connected: true}
-				go ws.receive(nil)
-				if config.OpenHandler != nil {
-					config.OpenHandler(ws)
-				}
-			} else {
-				return nil, err
 			}
 		} else {
 			return nil, fmt.Errorf(`websocket: %v`, err)
