@@ -99,17 +99,17 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		config.Proxy = proxy
 	}
 	config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
-	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
+	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 1<<20)
 	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 	config.ConnectTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
 	config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	if config.ReadBufferSize != 0 {
-		config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 256<<10)
+		config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 32<<20)
 	}
 	if config.WriteBufferSize != 0 {
-		config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 256<<10)
+		config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 32<<20)
 	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if url, err := url.Parse(endpoint); err == nil {
@@ -305,16 +305,16 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				config = &Config{}
 			}
 			config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
-			config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 256<<10)
+			config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 1<<20)
 			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 			config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
 			config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			if config.ReadBufferSize != 0 {
-				config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 256<<10)
+				config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 32<<20)
 			}
 			if config.WriteBufferSize != 0 {
-				config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 256<<10)
+				config.WriteBufferSize = cval(config.WriteBufferSize, 4<<10, 4<<10, 32<<20)
 			}
 			if tconn, ok := conn.(*net.TCPConn); ok {
 				if config.ReadBufferSize != 0 {
