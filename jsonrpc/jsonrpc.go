@@ -248,7 +248,7 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 		if json.Unmarshal(input, &requests) != nil {
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 		} else {
-			if len(requests) == 0 || len(requests) > 1024 {
+			if len(requests) == 0 || len(requests) > 1024 || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 			} else {
 				running, sink := 0, make(chan *RESPONSE, 1024)
