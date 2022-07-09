@@ -20,9 +20,9 @@ func main() {
 		options.PrintDefaults()
 	},
 	}
-	options.String("output", "static.go", "the generated output file path")
+	options.String("output", "resources.go", "the generated output file path")
 	options.String("pkgname", "main", "the package name to use in the generated output")
-	options.String("funcname", "resources", "the function name to use in the generated output")
+	options.String("funcname", "Resources", "the function name prefix to use in the generated output")
 	options.String("default", "index.html", "the document to act as default")
 	options.String("exclude", "", "an optionnal pattern of paths to exclude")
 	options.Bool("main", false, "whether to generate a main func or not")
