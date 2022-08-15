@@ -8,9 +8,7 @@ import (
 
 func FQDN() (string, string) {
 	if hostname, err := os.Hostname(); err == nil {
-		if addresses, err := net.LookupHost(hostname); err != nil {
-			return hostname, "*"
-		} else {
+		if addresses, err := net.LookupHost(hostname); err == nil {
 			for _, address := range addresses {
 				if hostnames, err := net.LookupAddr(address); err == nil && len(hostnames) > 0 {
 					for _, hostname := range hostnames {
@@ -23,6 +21,7 @@ func FQDN() (string, string) {
 				}
 			}
 		}
+		return hostname, "*"
 	}
 	return "unknown", "*"
 }
