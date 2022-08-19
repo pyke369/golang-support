@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -110,7 +110,7 @@ func DefaultTransport(input []byte, tcontext interface{}) (output []byte, err er
 		request.Header.Set("Content-Type", "application/json")
 		client := &http.Client{Transport: options.Transport, Timeout: options.Timeout}
 		if response, err := client.Do(request); err == nil {
-			output, _ = ioutil.ReadAll(response.Body)
+			output, _ = io.ReadAll(response.Body)
 			response.Body.Close()
 			if response.StatusCode/100 != 2 || len(output) == 0 {
 				return nil, fmt.Errorf("jsonrpc: HTTP error %d", response.StatusCode)

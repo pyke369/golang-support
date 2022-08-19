@@ -4,7 +4,6 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"net"
@@ -209,7 +208,7 @@ func PasswordConfig(input string, config *uconfig.UConfig, path string) bool {
 }
 func PasswordFile(input, path string) bool {
 	lines := []string{}
-	if content, err := ioutil.ReadFile(path); err == nil {
+	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
 			line = strings.TrimSpace(line)
 			if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {

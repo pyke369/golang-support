@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -194,7 +194,7 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 			nbase := ""
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
-					if mcontent, err := ioutil.ReadFile(element); err == nil {
+					if mcontent, err := os.ReadFile(element); err == nil {
 						nbase = filepath.Dir(element)
 						expanded += string(mcontent)
 					}
@@ -206,7 +206,7 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 		case "=":
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
-					if mcontent, err := ioutil.ReadFile(element); err == nil {
+					if mcontent, err := os.ReadFile(element); err == nil {
 						for _, line := range strings.Split(string(mcontent), "\n") {
 							line = strings.TrimSpace(line)
 							if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {
@@ -241,7 +241,7 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 			}
 			if response, err := requester.Get(arguments[0]); err == nil {
 				if (response.StatusCode / 100) == 2 {
-					if mcontent, err := ioutil.ReadAll(response.Body); err == nil {
+					if mcontent, err := io.ReadAll(response.Body); err == nil {
 						expanded += string(mcontent)
 					}
 				}

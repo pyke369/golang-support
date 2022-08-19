@@ -6,7 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"mime"
 	"net/http"
@@ -69,7 +69,7 @@ func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
 			if mime := mime.TypeByExtension(filepath.Ext(rpath)); mime != "" {
 				pack.Mime = mime
 			}
-			content, _ := ioutil.ReadFile(path)
+			content, _ := os.ReadFile(path)
 			compressed := bytes.Buffer{}
 			compressor.Reset(&compressed)
 			compressor.Write(content)
@@ -152,7 +152,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	if uncompress {
 		decompressor := guzpool.Get().(*gzip.Reader)
 		decompressor.Reset(bytes.NewReader(pack[rpath].raw))
-		content, err = ioutil.ReadAll(decompressor)
+		content, err = io.ReadAll(decompressor)
 		decompressor.Close()
 		guzpool.Put(decompressor)
 	}

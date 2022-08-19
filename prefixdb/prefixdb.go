@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"net"
 	"os"
@@ -483,7 +482,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		if path == "-" {
 			_, err = os.Stdout.Write(d.data)
 		} else {
-			err = ioutil.WriteFile(path, d.data, 0644)
+			err = os.WriteFile(path, d.data, 0644)
 		}
 	}
 
@@ -492,7 +491,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 }
 
 func (d *PrefixDB) Load(path string) error {
-	if data, err := ioutil.ReadFile(path); err != nil {
+	if data, err := os.ReadFile(path); err != nil {
 		return err
 	} else {
 		if len(data) < 8 || string(data[0:4]) != "PFDB" {

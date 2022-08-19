@@ -3,7 +3,7 @@ package uadb
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -69,7 +69,7 @@ func New(size ...int) *UADB {
 }
 
 func (db *UADB) Load(path string) error {
-	if payload, err := ioutil.ReadFile(path); err != nil {
+	if payload, err := os.ReadFile(path); err != nil {
 		return err
 	} else {
 		loaded := New()
