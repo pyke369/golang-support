@@ -65,9 +65,9 @@ func Decode(token, secret string) (claims map[string]interface{}, err error) {
 	}
 	if _, ok := claims["exp"]; ok {
 		if expire, ok := claims["exp"].(float64); !ok {
-			return nil, fmt.Errorf("jwt: invalid expiration claim")
+			return claims, fmt.Errorf("jwt: invalid expiration claim")
 		} else if time.Now().After(time.Unix(int64(expire), 0)) {
-			return nil, fmt.Errorf("jwt: expired token")
+			return claims, fmt.Errorf("jwt: expired token")
 		}
 	}
 	return
