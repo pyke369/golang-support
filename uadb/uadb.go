@@ -1,12 +1,14 @@
 package uadb
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
@@ -22,11 +24,13 @@ type UADB struct {
 	Agents   [][8]string          `json:"agents"`   // [ match_expr, ua_family, ua_company, ua_type, device_type, os_family, os_name, os_company ]
 	Devices  [][2]string          `json:"devices"`  // [ match_expr, device_type ]
 	Systems  [][4]string          `json:"systems"`  // [ match_expr, os_family, os_name, os_company ]
-	Crawlers map[string][5]string `json:"crawlers"` // user-agent -> [ ua_family, ua_name, ua_company, ua_version, ua_type ]
+	Crawlers map[string][5]string `json:"crawlers"` // user-agent -> [ ua_family, ua_name, ua_company, ua_version, ua_type ]
 	lock     sync.RWMutex
 	cache    map[string]*cache
 	last     time.Time
 	max      int
+	hit      int64
+	miss     int64
 }
 
 var fields = []string{"ua_family", "ua_name", "ua_company", "ua_type", "ua_version", "os_family", "os_name", "os_company", "device_type"}
@@ -61,8 +65,8 @@ func tocode(input string) string {
 }
 
 func New(size ...int) *UADB {
-	max := 10000
-	if len(size) > 0 && size[0] >= 100 && size[0] <= 50000 {
+	max := 250000
+	if len(size) > 0 && size[0] >= 1000 && size[0] <= 500000 {
 		max = size[0]
 	}
 	return &UADB{Crawlers: map[string][5]string{}, cache: map[string]*cache{}, max: max}
@@ -90,14 +94,17 @@ func (db *UADB) Load(path string) error {
 
 func (db *UADB) Lookup(ua string, withcode ...bool) (output map[string]string) {
 
+	ckey := fmt.Sprintf("%x", md5.Sum([]byte(ua)))
 	db.lock.RLock()
-	if cache := db.cache[ua]; cache != nil {
+	if cache := db.cache[ckey]; cache != nil {
 		output = cache.value
-		db.cache[ua].last = int(time.Now().Unix())
+		cache.last = int(time.Now().Unix())
+		atomic.AddInt64(&(db.hit), 1)
 	}
 	db.lock.RUnlock()
 
 	if output == nil {
+		atomic.AddInt64(&(db.miss), 1)
 		output = map[string]string{}
 		for _, field := range fields {
 			output[field] = "unknown"
@@ -194,9 +201,9 @@ func (db *UADB) Lookup(ua string, withcode ...bool) (output map[string]string) {
 		}
 
 		db.lock.Lock()
-		db.cache[ua] = &cache{value: output, last: int(time.Now().Unix())}
+		db.cache[ckey] = &cache{value: output, last: int(time.Now().Unix())}
 		max := int(float64(db.max) * 1.2)
-		if len(db.cache) >= max && time.Since(db.last) >= 5*time.Second {
+		if len(db.cache) >= max && time.Since(db.last) >= 15*time.Second {
 			db.last = time.Now()
 			sorter := []string{}
 			for key, value := range db.cache {
@@ -223,4 +230,10 @@ func (db *UADB) Lookup(ua string, withcode ...bool) (output map[string]string) {
 	}
 
 	return
+}
+
+func (db *UADB) Stats() (int, int64, int64) {
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+	return len(db.cache), atomic.LoadInt64(&(db.hit)), atomic.LoadInt64(&(db.miss))
 }
