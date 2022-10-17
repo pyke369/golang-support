@@ -65,7 +65,7 @@ func tocode(input string) string {
 }
 
 func New(size ...int) *UADB {
-	max := 250000
+	max := 500000
 	if len(size) > 0 && size[0] >= 1000 && size[0] <= 500000 {
 		max = size[0]
 	}
