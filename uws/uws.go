@@ -62,12 +62,12 @@ type Config struct {
 	OpenHandler     func(*Socket)
 	MessageHandler  func(*Socket, int, []byte) bool
 	CloseHandler    func(*Socket, int)
-	Context         interface{}
+	Context         any
 }
 
 type Socket struct {
 	Path, Origin, Agent, Remote, Protocol string
-	Context                               interface{}
+	Context                               any
 	config                                *Config
 	conn                                  net.Conn
 	connected, client, closing            bool

@@ -32,7 +32,7 @@ type RPACK struct {
 var (
 	x2ntable [32]uint32
 	guzpool  = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &gzip.Reader{}
 		}}
 )

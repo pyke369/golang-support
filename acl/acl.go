@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -26,21 +27,12 @@ func CIDR(input string, values []string) (match bool) {
 		if err != nil {
 			remote = input
 		}
-		if remote := net.ParseIP(remote); remote != nil {
+		if remote, err := netip.ParseAddr(remote); err == nil {
 			for _, value := range values {
-				_, network, _ := net.ParseCIDR(value)
-				if network == nil {
-					if address := net.ParseIP(value); address != nil {
-						if address.To4() != nil {
-							value += "/32"
-						} else {
-							value += "/128"
-						}
-						_, network, _ = net.ParseCIDR(value)
+				if network, err := netip.ParsePrefix(value); err == nil {
+					if network.Contains(remote) {
+						return true
 					}
-				}
-				if network != nil && network.Contains(remote) {
-					return true
 				}
 			}
 		}

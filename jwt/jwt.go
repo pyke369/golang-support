@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-func Encode(claims map[string]interface{}, expire time.Time, secret string) (token string, err error) {
+func Encode(claims map[string]any, expire time.Time, secret string) (token string, err error) {
 	token = base64.RawURLEncoding.EncodeToString([]byte(`{"typ":"JWT","alg":"HS256"}`)) + "."
 	if claims == nil {
-		claims = map[string]interface{}{}
+		claims = map[string]any{}
 	}
 	if !expire.IsZero() {
 		claims["exp"] = expire.Unix()
@@ -29,7 +29,7 @@ func Encode(claims map[string]interface{}, expire time.Time, secret string) (tok
 	return
 }
 
-func Decode(token, secret string) (claims map[string]interface{}, err error) {
+func Decode(token, secret string) (claims map[string]any, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("jwt: invalid token format")

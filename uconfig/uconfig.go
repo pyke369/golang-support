@@ -23,9 +23,9 @@ import (
 
 type UConfig struct {
 	input     string
-	config    interface{}
+	config    any
 	hash      string
-	cache     map[string]interface{}
+	cache     map[string]any
 	separator string
 	cacheLock sync.RWMutex
 	sync.RWMutex
@@ -104,11 +104,11 @@ func unescape(input string) string {
 	})
 }
 
-func reduce(input interface{}) {
+func reduce(input any) {
 	if input != nil {
 		switch reflect.TypeOf(input).Kind() {
 		case reflect.Map:
-			for key := range input.(map[string]interface{}) {
+			for key := range input.(map[string]any) {
 				var parts []string
 				for _, value := range strings.Split(key, " ") {
 					if value != "" {
@@ -116,19 +116,19 @@ func reduce(input interface{}) {
 					}
 				}
 				if len(parts) > 1 {
-					if input.(map[string]interface{})[parts[0]] == nil || reflect.TypeOf(input.(map[string]interface{})[parts[0]]).Kind() != reflect.Map {
-						input.(map[string]interface{})[parts[0]] = make(map[string]interface{})
+					if input.(map[string]any)[parts[0]] == nil || reflect.TypeOf(input.(map[string]any)[parts[0]]).Kind() != reflect.Map {
+						input.(map[string]any)[parts[0]] = make(map[string]any)
 					}
-					input.(map[string]interface{})[parts[0]].(map[string]interface{})[parts[1]] = input.(map[string]interface{})[key]
-					delete(input.(map[string]interface{}), key)
+					input.(map[string]any)[parts[0]].(map[string]any)[parts[1]] = input.(map[string]any)[key]
+					delete(input.(map[string]any), key)
 				}
 			}
-			for _, value := range input.(map[string]interface{}) {
+			for _, value := range input.(map[string]any) {
 				reduce(value)
 			}
 		case reflect.Slice:
-			for index := 0; index < len(input.([]interface{})); index++ {
-				reduce(input.([]interface{})[index])
+			for index := 0; index < len(input.([]any)); index++ {
+				reduce(input.([]any)[index])
 			}
 		}
 	}
@@ -293,7 +293,7 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:])
 	}
 
-	var config interface{}
+	var config any
 	if err := json.Unmarshal([]byte(content), &config); err != nil {
 		if err := json.Unmarshal([]byte("{"+content+"}"), &config); err != nil {
 			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
@@ -310,7 +310,7 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 
 	c.config = config
 	c.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
-	c.cache = map[string]interface{}{}
+	c.cache = map[string]any{}
 	reduce(c.config)
 	c.Unlock()
 	return nil
@@ -342,8 +342,8 @@ func (c *UConfig) Base(path string) string {
 
 func (c *UConfig) GetPaths(path string) []string {
 	var (
-		current interface{} = c.config
-		paths   []string    = []string{}
+		current any      = c.config
+		paths   []string = []string{}
 	)
 
 	c.RLock()
@@ -366,7 +366,7 @@ func (c *UConfig) GetPaths(path string) []string {
 		for _, part := range strings.Split(path, c.separator) {
 			kind := reflect.TypeOf(current).Kind()
 			index, err := strconv.Atoi(part)
-			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
+			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]any)))) || (kind != reflect.Slice && kind != reflect.Map) {
 				c.cacheLock.Lock()
 				c.cache[path] = paths
 				c.cacheLock.Unlock()
@@ -374,9 +374,9 @@ func (c *UConfig) GetPaths(path string) []string {
 				return paths
 			}
 			if kind == reflect.Slice {
-				current = current.([]interface{})[index]
+				current = current.([]any)[index]
 			} else {
-				if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
+				if current = current.(map[string]any)[strings.TrimSpace(part)]; current == nil {
 					c.cacheLock.Lock()
 					c.cache[path] = paths
 					c.cacheLock.Unlock()
@@ -388,11 +388,11 @@ func (c *UConfig) GetPaths(path string) []string {
 	}
 	switch reflect.TypeOf(current).Kind() {
 	case reflect.Slice:
-		for index := 0; index < len(current.([]interface{})); index++ {
+		for index := 0; index < len(current.([]any)); index++ {
 			paths = append(paths, fmt.Sprintf("%s%s%d", path, prefix, index))
 		}
 	case reflect.Map:
-		for key := range current.(map[string]interface{}) {
+		for key := range current.(map[string]any) {
 			paths = append(paths, fmt.Sprintf("%s%s%s", path, prefix, key))
 		}
 	}
@@ -404,7 +404,7 @@ func (c *UConfig) GetPaths(path string) []string {
 }
 
 func (c *UConfig) value(path string) (string, error) {
-	var current interface{} = c.config
+	var current any = c.config
 
 	c.RLock()
 	if current == nil || path == "" {
@@ -428,7 +428,7 @@ func (c *UConfig) value(path string) (string, error) {
 	for _, part := range strings.Split(path, c.separator) {
 		kind := reflect.TypeOf(current).Kind()
 		index, err := strconv.Atoi(part)
-		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]interface{})))) || (kind != reflect.Slice && kind != reflect.Map) {
+		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]any)))) || (kind != reflect.Slice && kind != reflect.Map) {
 			c.cacheLock.Lock()
 			c.cache[path] = false
 			c.cacheLock.Unlock()
@@ -436,9 +436,9 @@ func (c *UConfig) value(path string) (string, error) {
 			return "", errors.New(`uconfig: invalid path`)
 		}
 		if kind == reflect.Slice {
-			current = current.([]interface{})[index]
+			current = current.([]any)[index]
 		} else {
-			if current = current.(map[string]interface{})[strings.TrimSpace(part)]; current == nil {
+			if current = current.(map[string]any)[strings.TrimSpace(part)]; current == nil {
 				c.cacheLock.Lock()
 				c.cache[path] = false
 				c.cacheLock.Unlock()

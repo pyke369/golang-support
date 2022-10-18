@@ -116,7 +116,7 @@ type ULog struct {
 	syslogFacility        int
 	optionUTC             bool
 	level                 int
-	fields                map[string]interface{}
+	fields                map[string]any
 	sync.Mutex
 }
 
@@ -146,7 +146,7 @@ func (l *ULog) Load(target string) *ULog {
 	l.syslogFacility = LOG_DAEMON
 	l.optionUTC = false
 	l.level = LOG_INFO
-	l.fields = map[string]interface{}{}
+	l.fields = map[string]any{}
 	console := os.Stderr
 	for _, target := range regexp.MustCompile(`(file|console|syslog|option)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
@@ -286,16 +286,16 @@ func (l *ULog) SetLevel(level string) {
 	}
 }
 
-func (l *ULog) SetField(key string, value interface{}) {
+func (l *ULog) SetField(key string, value any) {
 	l.fields[key] = value
 }
-func (l *ULog) SetFields(fields map[string]interface{}) {
+func (l *ULog) SetFields(fields map[string]any) {
 	for key, value := range fields {
 		l.fields[key] = value
 	}
 }
 func (l *ULog) ClearFields() {
-	l.fields = map[string]interface{}{}
+	l.fields = map[string]any{}
 }
 
 func strftime(layout string, base time.Time) string {
@@ -440,23 +440,23 @@ func strftime(layout string, base time.Time) string {
 	return strings.Join(output, "")
 }
 
-func (l *ULog) log(now time.Time, severity int, input interface{}, a ...interface{}) {
+func (l *ULog) log(now time.Time, severity int, input any, a ...any) {
 	var err error
 	if l.level < severity || (!l.syslog && !l.file && !l.console) {
 		return
 	}
 	layout := ""
-	if current, ok := input.(map[string]interface{}); ok {
+	if current, ok := input.(map[string]any); ok {
 		var buffer bytes.Buffer
 
 		for key, value := range l.fields {
 			parts := strings.Split(key, ".")
 			for index := 0; index < len(parts)-1; index++ {
-				if next, ok := current[parts[index]].(map[string]interface{}); ok {
+				if next, ok := current[parts[index]].(map[string]any); ok {
 					current = next
 				} else {
-					current[parts[index]] = map[string]interface{}{}
-					current = current[parts[index]].(map[string]interface{})
+					current[parts[index]] = map[string]any{}
+					current = current[parts[index]].(map[string]any)
 				}
 			}
 			if current[parts[len(parts)-1]] == nil {
@@ -467,7 +467,7 @@ func (l *ULog) log(now time.Time, severity int, input interface{}, a ...interfac
 		encoder.SetEscapeHTML(false)
 		if err := encoder.Encode(input); err == nil {
 			layout = "%s"
-			a = []interface{}{bytes.TrimSpace(buffer.Bytes())}
+			a = []any{bytes.TrimSpace(buffer.Bytes())}
 		}
 	} else if _, ok := input.(string); ok {
 		layout = input.(string)
@@ -572,28 +572,28 @@ func (l *ULog) log(now time.Time, severity int, input interface{}, a ...interfac
 	}
 }
 
-func (l *ULog) Error(layout interface{}, a ...interface{}) {
+func (l *ULog) Error(layout any, a ...any) {
 	l.log(time.Now(), LOG_ERR, layout, a...)
 }
-func (l *ULog) Warn(layout interface{}, a ...interface{}) {
+func (l *ULog) Warn(layout any, a ...any) {
 	l.log(time.Now(), LOG_WARNING, layout, a...)
 }
-func (l *ULog) Info(layout interface{}, a ...interface{}) {
+func (l *ULog) Info(layout any, a ...any) {
 	l.log(time.Now(), LOG_INFO, layout, a...)
 }
-func (l *ULog) Debug(layout interface{}, a ...interface{}) {
+func (l *ULog) Debug(layout any, a ...any) {
 	l.log(time.Now(), LOG_DEBUG, layout, a...)
 }
 
-func (l *ULog) ErrorTime(now time.Time, layout interface{}, a ...interface{}) {
+func (l *ULog) ErrorTime(now time.Time, layout any, a ...any) {
 	l.log(now, LOG_ERR, layout, a...)
 }
-func (l *ULog) WarnTime(now time.Time, layout interface{}, a ...interface{}) {
+func (l *ULog) WarnTime(now time.Time, layout any, a ...any) {
 	l.log(now, LOG_WARNING, layout, a...)
 }
-func (l *ULog) InfoTime(now time.Time, layout interface{}, a ...interface{}) {
+func (l *ULog) InfoTime(now time.Time, layout any, a ...any) {
 	l.log(now, LOG_INFO, layout, a...)
 }
-func (l *ULog) DebugTime(now time.Time, layout interface{}, a ...interface{}) {
+func (l *ULog) DebugTime(now time.Time, layout any, a ...any) {
 	l.log(now, LOG_DEBUG, layout, a...)
 }

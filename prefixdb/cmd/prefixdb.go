@@ -61,7 +61,7 @@ func mkjson() {
 				} else {
 					if fields := jsonMatcher.FindStringSubmatch(strings.TrimSpace(line)); fields != nil {
 						if _, prefix, err := net.ParseCIDR(fields[1]); err == nil {
-							data := map[string]interface{}{}
+							data := map[string]any{}
 							json.Unmarshal([]byte(fields[2]), &data)
 							pfdb.Add(*prefix, data, [][]string{[]string{"key1", "key2"}})
 							count++
@@ -122,7 +122,7 @@ func mkoui() {
 								}
 							}
 							if _, prefix, err := net.ParseCIDR(fmt.Sprintf("%s/%d", address, mask)); err == nil {
-								pfdb.Add(*prefix, map[string]interface{}{"company": data.Company}, nil)
+								pfdb.Add(*prefix, map[string]any{"company": data.Company}, nil)
 								count++
 							}
 						}
@@ -217,7 +217,7 @@ func mkcity() {
 							if _, prefix, err := net.ParseCIDR(fields[0]); err == nil {
 								latitude, _ := strconv.ParseFloat(fields[7], 64)
 								longitude, _ := strconv.ParseFloat(fields[8], 64)
-								pfdb.Add(*prefix, map[string]interface{}{
+								pfdb.Add(*prefix, map[string]any{
 									"continent_code": locations[id].ContinentCode,
 									"continent_name": locations[id].ContinentName,
 									"country_code":   locations[id].CountryCode,
@@ -282,7 +282,7 @@ func mkasn() {
 						}
 						if asnum, _ := strconv.Atoi(fields[1][1]); asnum != 0 {
 							if _, prefix, err := net.ParseCIDR(fields[0][1]); err == nil {
-								pfdb.Add(*prefix, map[string]interface{}{
+								pfdb.Add(*prefix, map[string]any{
 									"as_number": fmt.Sprintf("AS%d", asnum),
 									"as_name":   fields[2][1],
 								}, nil)
@@ -332,17 +332,13 @@ func lookup() {
 				fmt.Fprintf(os.Stderr, "\r- loading database [%s] failed (%v)\n", os.Args[index], err)
 			}
 		} else {
-			if ip := net.ParseIP(os.Args[index]); ip == nil {
-				fmt.Fprintf(os.Stderr, "- lookup           [%s] failed (not a valid IP address)", os.Args[index])
-			} else {
-				fmt.Fprintf(os.Stderr, "- lookup           [%s] ", os.Args[index])
-				lookup := map[string]interface{}{}
-				for _, database := range databases {
-					lookup, _ = database.Lookup(ip, lookup)
-				}
-				data, _ := json.Marshal(lookup)
-				fmt.Printf("%s\n", data)
+			fmt.Fprintf(os.Stderr, "- lookup           [%s] ", os.Args[index])
+			lookup := map[string]any{}
+			for _, database := range databases {
+				lookup, _ = database.Lookup(os.Args[index], lookup)
 			}
+			data, _ := json.Marshal(lookup)
+			fmt.Printf("%s\n", data)
 		}
 	}
 }
@@ -370,15 +366,12 @@ func server() {
 		if value := parameters.Get("remote"); value != "" {
 			remote = value
 		}
-		lookup := map[string]interface{}{}
-		if ip := net.ParseIP(remote); ip != nil {
-			lookup["ip"] = string(ip)
-			for _, database := range databases {
-				lookup, _ = database.Lookup(ip, lookup)
-			}
-			data, _ := json.Marshal(lookup)
-			response.Write(data)
+		lookup := map[string]any{"ip": remote}
+		for _, database := range databases {
+			lookup, _ = database.Lookup(remote, lookup)
 		}
+		data, _ := json.Marshal(lookup)
+		response.Write(data)
 	})
 	parts := strings.Split(os.Args[2], ",")
 	server := &http.Server{Addr: strings.TrimLeft(parts[0], "*"), ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}

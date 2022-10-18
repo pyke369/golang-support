@@ -38,9 +38,9 @@ type CONTEXT_KEY string
 
 type CALL struct {
 	Method       string
-	Params       interface{}
+	Params       any
 	Notification bool
-	Result       interface{}
+	Result       any
 	Error        *ERROR
 	Id           string
 	id           string
@@ -50,32 +50,32 @@ type TRANSPORT_OPTIONS struct {
 	URL       string
 	Headers   map[string]string
 	Timeout   time.Duration
-	Context   interface{}
+	Context   any
 	Transport *http.Transport
 }
-type TRANSPORT func([]byte, interface{}) ([]byte, error)
+type TRANSPORT func([]byte, any) ([]byte, error)
 
 type REQUEST struct {
 	JSONRPC string
-	Id      interface{}
+	Id      any
 	Method  string
-	Params  interface{}
+	Params  any
 }
 type RESPONSE struct {
-	Id     interface{}
-	Result interface{}
+	Id     any
+	Result any
 	Error  *ERROR
 }
 type ERROR struct {
 	Code    int
 	Message string
-	Data    interface{}
+	Data    any
 }
 type ROUTE struct {
 	Handler HANDLER
-	Opaque  interface{}
+	Opaque  any
 }
-type HANDLER func(map[string]interface{}, interface{}) (interface{}, *ERROR)
+type HANDLER func(map[string]any, any) (any, *ERROR)
 
 var httpDefaultTransport *http.Transport
 
@@ -86,7 +86,7 @@ func init() {
 	httpDefaultTransport.DisableCompression = true
 }
 
-func DefaultTransport(input []byte, tcontext interface{}) (output []byte, err error) {
+func DefaultTransport(input []byte, tcontext any) (output []byte, err error) {
 	options := tcontext.(TRANSPORT_OPTIONS)
 	if options.URL == "" {
 		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
@@ -211,7 +211,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 	return calls, nil
 }
 
-func Call(calls []*CALL, transport TRANSPORT, tcontext interface{}) (results []*CALL, err error) {
+func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, err error) {
 	if len(calls) == 0 {
 		return nil, errors.New(`jsonrpc: no call provided`)
 	}
@@ -232,11 +232,11 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext interface{}) (results []*
 	return Response(output, calls)
 }
 
-func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ...interface{}) (output []byte) {
+func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ...any) (output []byte) {
 	input = bytes.TrimSpace(input)
 	output = []byte{}
 	batch := true
-	requests, responses := []REQUEST{}, map[interface{}]*RESPONSE{}
+	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
 	if len(input) == 0 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 	} else {
@@ -303,14 +303,14 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 							}
 							continue
 						} else if kind == reflect.Slice {
-							params := map[string]interface{}{}
-							for index, value := range request.Params.([]interface{}) {
+							params := map[string]any{}
+							for index, value := range request.Params.([]any) {
 								params[fmt.Sprintf("_%d", index)] = value
 							}
 							request.Params = params
 						}
 					} else {
-						request.Params = map[string]interface{}{}
+						request.Params = map[string]any{}
 					}
 					running++
 					go func(request REQUEST) {
@@ -323,7 +323,7 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 						if opaque == nil && len(options) > 0 {
 							opaque = options[0]
 						}
-						if result, err := routes[request.Method].Handler(request.Params.(map[string]interface{}), opaque); err != nil {
+						if result, err := routes[request.Method].Handler(request.Params.(map[string]any), opaque); err != nil {
 							sink <- &RESPONSE{Id: request.Id, Error: err}
 						} else {
 							sink <- &RESPONSE{Id: request.Id, Result: result}
@@ -403,19 +403,19 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 	return output
 }
 
-func Bool(value interface{}) bool {
+func Bool(value any) bool {
 	if cast, ok := value.(bool); ok {
 		return cast
 	}
 	return false
 }
-func String(value interface{}) string {
+func String(value any) string {
 	if cast, ok := value.(string); ok {
 		return cast
 	}
 	return ""
 }
-func Number(value interface{}) float64 {
+func Number(value any) float64 {
 	if value != nil {
 		switch reflect.TypeOf(value).Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -429,13 +429,13 @@ func Number(value interface{}) float64 {
 	return 0.0
 }
 
-func Slice(value interface{}) []interface{} {
-	if cast, ok := value.([]interface{}); ok {
+func Slice(value any) []any {
+	if cast, ok := value.([]any); ok {
 		return cast
 	}
-	return []interface{}{}
+	return []any{}
 }
-func StringSlice(value interface{}, extra ...bool) []string {
+func StringSlice(value any, extra ...bool) []string {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := value.([]string); ok {
 		if !noempty {
@@ -450,7 +450,7 @@ func StringSlice(value interface{}, extra ...bool) []string {
 		return returned
 	}
 	returned := []string{}
-	if cast, ok := value.([]interface{}); ok {
+	if cast, ok := value.([]any); ok {
 		for _, item := range cast {
 			if cast, ok := item.(string); ok {
 				if !noempty || strings.TrimSpace(cast) != "" {
@@ -461,12 +461,12 @@ func StringSlice(value interface{}, extra ...bool) []string {
 	}
 	return returned
 }
-func NumberSlice(value interface{}) []float64 {
+func NumberSlice(value any) []float64 {
 	if cast, ok := value.([]float64); ok {
 		return cast
 	}
 	returned := []float64{}
-	if cast, ok := value.([]interface{}); ok {
+	if cast, ok := value.([]any); ok {
 		for _, item := range cast {
 			if cast, ok := item.(float64); ok {
 				returned = append(returned, cast)
@@ -476,13 +476,13 @@ func NumberSlice(value interface{}) []float64 {
 	return returned
 }
 
-func Map(value interface{}) map[string]interface{} {
-	if cast, ok := value.(map[string]interface{}); ok {
+func Map(value any) map[string]any {
+	if cast, ok := value.(map[string]any); ok {
 		return cast
 	}
-	return map[string]interface{}{}
+	return map[string]any{}
 }
-func StringMap(value interface{}, extra ...bool) map[string]string {
+func StringMap(value any, extra ...bool) map[string]string {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := value.(map[string]string); ok {
 		if !noempty {
@@ -497,7 +497,7 @@ func StringMap(value interface{}, extra ...bool) map[string]string {
 		return returned
 	}
 	returned := map[string]string{}
-	if cast, ok := value.(map[string]interface{}); ok {
+	if cast, ok := value.(map[string]any); ok {
 		for key, item := range cast {
 			if cast, ok := item.(string); ok {
 				if !noempty || strings.TrimSpace(cast) != "" {
@@ -508,12 +508,12 @@ func StringMap(value interface{}, extra ...bool) map[string]string {
 	}
 	return returned
 }
-func NumberMap(value interface{}) map[string]float64 {
+func NumberMap(value any) map[string]float64 {
 	if cast, ok := value.(map[string]float64); ok {
 		return cast
 	}
 	returned := map[string]float64{}
-	if cast, ok := value.(map[string]interface{}); ok {
+	if cast, ok := value.(map[string]any); ok {
 		for key, item := range cast {
 			if cast, ok := item.(float64); ok {
 				returned[key] = cast

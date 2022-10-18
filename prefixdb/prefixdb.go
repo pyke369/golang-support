@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
@@ -19,7 +20,7 @@ const VERSION = 0x00010000
 
 type fame struct {
 	fame  int
-	value interface{}
+	value any
 }
 type byfame []*fame
 
@@ -65,7 +66,7 @@ func New() *PrefixDB {
 	return &PrefixDB{strings: map[string]*[3]int{}, numbers: map[float64]*[3]int{}, pairs: map[uint64]*[3]int{}, clusters: map[[16]byte]*cluster{}}
 }
 
-func (d *PrefixDB) Add(prefix net.IPNet, data map[string]interface{}, clusters [][]string) {
+func (d *PrefixDB) Add(prefix net.IPNet, data map[string]any, clusters [][]string) {
 	prefix.IP = prefix.IP.To16()
 	ones, bits := prefix.Mask.Size()
 	if bits == 32 {
@@ -664,7 +665,7 @@ func (d *PrefixDB) rnumber(index int) float64 {
 	}
 	return math.Float64frombits(binary.BigEndian.Uint64(d.data[d.Numbers[2]+(index*8):]))
 }
-func (d *PrefixDB) rpair(index int, pairs map[string]interface{}) {
+func (d *PrefixDB) rpair(index int, pairs map[string]any) {
 	if index < d.Pairs[1] {
 		pair := binary.BigEndian.Uint64(d.data[d.Pairs[2]+(index*8):])
 		if key := d.rstring(int((pair >> 32) & 0x0fffffff)); key != "" {
@@ -681,7 +682,7 @@ func (d *PrefixDB) rpair(index int, pairs map[string]interface{}) {
 		}
 	}
 }
-func (d *PrefixDB) rcluster(index int, pairs map[string]interface{}) {
+func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 	count, offset, width := d.Clusters[1], d.Clusters[2], d.Clusters[3]
 	if index < count {
 		start, end := rbytes(width, d.data[offset+(index*width):]), 0
@@ -730,77 +731,81 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]interface{}) {
 		}
 	}
 }
-func (d *PrefixDB) Lookup(address net.IP, input map[string]interface{}) (output map[string]interface{}, err error) {
+func (d *PrefixDB) Lookup(value string, input map[string]any) (output map[string]any, err error) {
 	output = input
 	if d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
-		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || address == nil {
+		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || value == "" {
 		err = errors.New(`prefixdb: record not found`)
 	} else {
-		address = address.To16()
-		offset := 0
-		d.RLock()
-		for bit := 0; bit < 128; bit++ {
-			down := 0
-			if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
-				down = 1
-			}
-			offset = rnbits(d.Nodes[3], offset, down, d.data[d.Nodes[2]:])
-			if offset == d.Nodes[1] || offset == 0 {
-				break
-			}
-			if output == nil {
-				output = map[string]interface{}{}
-			}
-			if offset > d.Nodes[1] {
-				offset -= d.Nodes[1]
-				if offset < d.Maps[0] {
-					offset += d.Maps[2]
-					key := ""
-					for offset < d.Maps[2]+d.Maps[0] {
-						section, index, size, last := rpbits(d.data[offset:])
-						switch section {
-						case 1:
-							if key != "" {
-								output[key] = d.rstring(index)
-								key = ""
-							} else {
-								key = d.rstring(index)
-							}
-						case 2:
-							if key != "" {
-								output[key] = d.rnumber(index)
-								key = ""
-							}
-						case 3:
-							if key != "" {
-								output[key] = true
-								key = ""
-							}
-						case 4:
-							if key != "" {
-								output[key] = false
-								key = ""
-							}
-						case 5:
-							if key != "" {
-								output[key] = nil
-								key = ""
-							}
-						case 6:
-							d.rpair(index, output)
-						case 7:
-							d.rcluster(index, output)
-						}
-						if last {
-							break
-						}
-						offset += size
-					}
+		value, nerr := netip.ParseAddr(value)
+		if nerr != nil {
+			err = fmt.Errorf(`prefixdb: %v`, nerr)
+		} else {
+			address, offset := value.As16(), 0
+			d.RLock()
+			for bit := 0; bit < 128; bit++ {
+				down := 0
+				if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
+					down = 1
 				}
-				break
+				offset = rnbits(d.Nodes[3], offset, down, d.data[d.Nodes[2]:])
+				if offset == d.Nodes[1] || offset == 0 {
+					break
+				}
+				if output == nil {
+					output = map[string]any{}
+				}
+				if offset > d.Nodes[1] {
+					offset -= d.Nodes[1]
+					if offset < d.Maps[0] {
+						offset += d.Maps[2]
+						key := ""
+						for offset < d.Maps[2]+d.Maps[0] {
+							section, index, size, last := rpbits(d.data[offset:])
+							switch section {
+							case 1:
+								if key != "" {
+									output[key] = d.rstring(index)
+									key = ""
+								} else {
+									key = d.rstring(index)
+								}
+							case 2:
+								if key != "" {
+									output[key] = d.rnumber(index)
+									key = ""
+								}
+							case 3:
+								if key != "" {
+									output[key] = true
+									key = ""
+								}
+							case 4:
+								if key != "" {
+									output[key] = false
+									key = ""
+								}
+							case 5:
+								if key != "" {
+									output[key] = nil
+									key = ""
+								}
+							case 6:
+								d.rpair(index, output)
+							case 7:
+								d.rcluster(index, output)
+							}
+							if last {
+								break
+							}
+							offset += size
+						}
+					}
+					break
+				}
 			}
+			d.RUnlock()
 		}
-		d.RUnlock()
 	}
 	return output, err
 }
