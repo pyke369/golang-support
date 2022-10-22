@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"regexp"
 	"strconv"
@@ -358,7 +359,10 @@ func server() {
 	}
 	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		remote, _, _ := net.SplitHostPort(request.RemoteAddr)
+		remote := request.RemoteAddr
+		if value, err := netip.ParseAddrPort(remote); err == nil {
+			remote = value.Addr().String()
+		}
 		if value := request.Header.Get("X-Forwarded-For"); value != "" {
 			remote = strings.Split(value, ",")[0]
 		}

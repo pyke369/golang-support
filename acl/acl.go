@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"net"
 	"net/netip"
 	"os"
 	"strconv"
@@ -23,9 +22,9 @@ func init() {
 
 func CIDR(input string, values []string) (match bool) {
 	if len(values) > 0 {
-		remote, _, err := net.SplitHostPort(input)
-		if err != nil {
-			remote = input
+		remote := input
+		if value, err := netip.ParseAddrPort(remote); err == nil {
+			remote = value.Addr().String()
 		}
 		if remote, err := netip.ParseAddr(remote); err == nil {
 			for _, value := range values {
