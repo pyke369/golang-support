@@ -181,7 +181,7 @@ func main() {
 }
 
 func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte, mime string, modified int64, err error) {
-	if rpath == "" && pack != nil {
+	if rpath == "." && pack != nil {
 		for name, entry := range pack {
 			if entry.Default {
 				rpath = name
