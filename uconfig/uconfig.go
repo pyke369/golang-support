@@ -481,7 +481,10 @@ func (c *UConfig) GetStrings(path string) []string {
 }
 
 func (c *UConfig) GetString(path string, fallback string) string {
-	return c.GetStringMatch(path, fallback, "")
+	if value, err := c.value(path); err == nil {
+		return value
+	}
+	return fallback
 }
 func (c *UConfig) GetStringMatch(path string, fallback, match string) string {
 	return c.GetStringMatchCaptures(path, fallback, match)[0]
