@@ -1,21 +1,30 @@
 package rcache
 
 import (
-	"crypto/md5"
+	"hash/crc32"
+	"reflect"
 	"regexp"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 var (
-	cache map[[16]byte]*regexp.Regexp = map[[16]byte]*regexp.Regexp{}
+	cache map[uint32]*regexp.Regexp = map[uint32]*regexp.Regexp{}
 	hit   int64
 	miss  int64
 	lock  sync.RWMutex
 )
 
 func Get(expression string) *regexp.Regexp {
-	key := md5.Sum([]byte(expression))
+	var slice []byte
+
+	hslice := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
+	hstring := (*reflect.StringHeader)(unsafe.Pointer(&expression))
+	hslice.Data = hstring.Data
+	hslice.Cap = hstring.Len
+	hslice.Len = hstring.Len
+	key := crc32.ChecksumIEEE(slice)
 	lock.RLock()
 	if cache[key] != nil {
 		atomic.AddInt64(&hit, 1)
