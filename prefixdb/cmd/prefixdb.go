@@ -336,7 +336,7 @@ func lookup() {
 			fmt.Fprintf(os.Stderr, "- lookup           [%s] ", os.Args[index])
 			lookup := map[string]any{}
 			for _, database := range databases {
-				lookup, _ = database.Lookup(os.Args[index], lookup)
+				database.Lookup(os.Args[index], lookup)
 			}
 			data, _ := json.Marshal(lookup)
 			fmt.Printf("%s\n", data)
@@ -372,7 +372,7 @@ func server() {
 		}
 		lookup := map[string]any{"ip": remote}
 		for _, database := range databases {
-			lookup, _ = database.Lookup(remote, lookup)
+			database.Lookup(remote, lookup)
 		}
 		data, _ := json.Marshal(lookup)
 		response.Write(data)
@@ -388,7 +388,7 @@ func server() {
 }
 
 func usage(status int) {
-	fmt.Fprintf(os.Stderr, "usage: prefixdb <action> [parameters...]\n\n"+
+	fmt.Fprintf(os.Stderr, "xx_usage: prefixdb <action> [parameters...]\n\n"+
 		"help                                                                  show this help screen\n"+
 		"json   <database[@<description>]> <JSON prefixes>...                  build database from generic JSON-formatted prefixes lists\n"+
 		"oui    <database[@<description>]> <JSON OUI>...                       build database from macadress.io JSON OUI lists\n"+

@@ -98,6 +98,9 @@ func (db *UADB) Load(path string) error {
 func (db *UADB) Lookup(ua string, output map[string]string, withcode ...bool) {
 	var slice []byte
 
+	if output == nil {
+		return
+	}
 	hslice := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
 	hstring := (*reflect.StringHeader)(unsafe.Pointer(&ua))
 	hslice.Data = hstring.Data

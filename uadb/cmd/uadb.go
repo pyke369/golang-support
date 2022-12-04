@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,7 +102,7 @@ func build() {
 				fmt.Fprintf(os.Stderr, "- loaded %d crawler(s)\n", len(target.Crawlers))
 
 				if payload, err := json.Marshal(target); err == nil {
-					if ioutil.WriteFile(os.Args[2], payload, 0644) == nil {
+					if os.WriteFile(os.Args[2], payload, 0644) == nil {
 						fmt.Fprintf(os.Stderr, "- saved target database %s (%d bytes)\n", os.Args[2], len(payload))
 					}
 				}
@@ -121,7 +120,8 @@ func lookup() {
 	fmt.Printf("- loaded database version %s\n", db.Version)
 	for _, agent := range os.Args[3:] {
 		fmt.Printf("- %s\n", agent)
-		lookup, keys := db.Lookup(agent, true), []string{}
+		lookup, keys := make(map[string]string, 24), []string{}
+		db.Lookup(agent, lookup, true)
 		for key := range lookup {
 			keys = append(keys, key)
 		}
@@ -143,14 +143,16 @@ func bench() {
 	for {
 		for round := 1; round <= 5; round++ {
 			total, found, start := int32(0), int32(0), time.Now()
-			if agents, err := ioutil.ReadFile(os.Args[3]); err == nil {
+			if agents, err := os.ReadFile(os.Args[3]); err == nil {
 				queue, waiter := make(chan string, concurrency), sync.WaitGroup{}
 				for index := 1; index <= concurrency; index++ {
 					waiter.Add(1)
 					go func() {
 						for {
 							if agent := <-queue; agent != "" {
-								if lookup := db.Lookup(agent, false); lookup["ua_family"] != "unknown" {
+								lookup := make(map[string]string, 24)
+								db.Lookup(agent, lookup, false)
+								if lookup["ua_family"] != "unknown" {
 									atomic.AddInt32(&found, 1)
 								}
 								continue
@@ -203,8 +205,8 @@ func server() {
 	}()
 
 	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
-		code := strings.ToLower(request.URL.Query().Get("code"))
-		lookup := db.Lookup(request.Header.Get("User-Agent"), code == "1" || code == "true" || code == "on" || code == "yes")
+		lookup, code := make(map[string]string, 24), strings.ToLower(request.URL.Query().Get("code"))
+		db.Lookup(request.Header.Get("User-Agent"), lookup, code == "1" || code == "true" || code == "on" || code == "yes")
 		if request.Method == http.MethodHead {
 			for key, value := range lookup {
 				response.Header().Set("X-"+strings.ReplaceAll(key, "_", "-"), value)
