@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/pyke369/golang-support/uhash"
 )
 
 const (
@@ -31,41 +33,6 @@ type CHash struct {
 
 func init() {
 	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
-}
-
-func mmhash2(key []byte, keySize int) uint32 {
-	var magic, hash, current, value uint32 = 0x5bd1e995, uint32(0x4d4d4832 ^ keySize), 0, 0
-
-	if keySize < 0 {
-		keySize = len(key)
-	}
-	for keySize >= 4 {
-		value = uint32(key[current]) | uint32(key[current+1])<<8 |
-			uint32(key[current+2])<<16 | uint32(key[current+3])<<24
-		value *= magic
-		value ^= value >> 24
-		value *= magic
-		hash *= magic
-		hash ^= value
-		current += 4
-		keySize -= 4
-	}
-	if keySize >= 3 {
-		hash ^= uint32(key[current+2]) << 16
-	}
-	if keySize >= 2 {
-		hash ^= uint32(key[current+1]) << 8
-	}
-	if keySize >= 1 {
-		hash ^= uint32(key[current])
-	}
-	if keySize != 0 {
-		hash *= magic
-	}
-	hash ^= hash >> 13
-	hash *= magic
-	hash ^= hash >> 15
-	return hash
 }
 
 type ByHash []item
@@ -104,7 +71,7 @@ func (c *CHash) freeze() {
 				key = append(key[:0], tname...)
 				key = strconv.AppendInt(key, int64(weight), 10)
 				key = strconv.AppendInt(key, int64(replica), 10)
-				c.ring[offset] = item{mmhash2(key, -1), target}
+				c.ring[offset] = item{uhash.Murmur2(key, -1), target}
 				offset++
 			}
 		}
@@ -293,7 +260,7 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 		c.RUnlock()
 		return []string{}
 	}
-	hash := mmhash2([]byte(candidate), -1)
+	hash := uhash.Murmur2([]byte(candidate), -1)
 	if hash > c.ring[0].hash && hash <= c.ring[c.ringSize-1].hash {
 		start = c.ringSize / 2
 		span := start / 2
