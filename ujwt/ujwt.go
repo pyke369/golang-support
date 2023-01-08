@@ -1,4 +1,4 @@
-package jwt
+package ujwt
 
 import (
 	"crypto"
@@ -27,7 +27,7 @@ func Encode(claims map[string]any, expire time.Time, secret string, kid ...strin
 		rest := []byte(secret)
 		for {
 			if block, rest = pem.Decode(rest); block == nil {
-				return "", fmt.Errorf("jwt: invalid private key")
+				return "", fmt.Errorf("ujwt: invalid private key")
 			}
 			if block.Type == "RSA PRIVATE KEY" || block.Type == "EC PRIVATE KEY" {
 				if block.Type == "RSA PRIVATE KEY" {
@@ -64,12 +64,12 @@ func Encode(claims map[string]any, expire time.Time, secret string, kid ...strin
 	} else if alg == "RS256" {
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("jwt: %v", err)
+			return "", fmt.Errorf("ujwt: %v", err)
 		}
 		sum := sha256.Sum256([]byte(token))
 		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 		if err != nil {
-			return "", fmt.Errorf("jwt: %v", err)
+			return "", fmt.Errorf("ujwt: %v", err)
 		}
 		token += "." + base64.RawURLEncoding.EncodeToString(signature)
 	} else if alg == "ES256" {
@@ -77,15 +77,15 @@ func Encode(claims map[string]any, expire time.Time, secret string, kid ...strin
 
 		key, err := x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("jwt: %v", err)
+			return "", fmt.Errorf("ujwt: %v", err)
 		}
 		if key.Curve.Params().BitSize != 256 {
-			return "", fmt.Errorf("jwt: invalid elliptic curve size %d", key.Curve.Params().BitSize)
+			return "", fmt.Errorf("ujwt: invalid elliptic curve size %d", key.Curve.Params().BitSize)
 		}
 		sum := sha256.Sum256([]byte(token))
 		r, s, err := ecdsa.Sign(rand.Reader, key, sum[:])
 		if err != nil {
-			return "", fmt.Errorf("jwt: %v", err)
+			return "", fmt.Errorf("ujwt: %v", err)
 		}
 		r.FillBytes(signature[:32])
 		s.FillBytes(signature[32:])
@@ -97,7 +97,7 @@ func Encode(claims map[string]any, expire time.Time, secret string, kid ...strin
 func Decode(token string, secrets []string) (claims map[string]any, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("jwt: invalid token format")
+		return nil, fmt.Errorf("ujwt: invalid token format")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
@@ -108,7 +108,7 @@ func Decode(token string, secrets []string) (claims map[string]any, err error) {
 		return nil, err
 	}
 	if (header["typ"] != "" && header["typ"] != "JWT") || (header["alg"] != "none" && header["alg"] != "HS256" && header["alg"] != "RS256" && header["alg"] != "ES256") {
-		return nil, fmt.Errorf("jwt: unsupported token format")
+		return nil, fmt.Errorf("ujwt: unsupported token format")
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
@@ -154,7 +154,7 @@ func Decode(token string, secrets []string) (claims map[string]any, err error) {
 			}
 		}
 		if !pass {
-			return nil, fmt.Errorf("jwt: invalid signature")
+			return nil, fmt.Errorf("ujwt: invalid signature")
 		}
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
@@ -166,9 +166,9 @@ func Decode(token string, secrets []string) (claims map[string]any, err error) {
 	}
 	if _, ok := claims["exp"]; ok {
 		if expire, ok := claims["exp"].(float64); !ok {
-			return claims, fmt.Errorf("jwt: invalid expiration claim")
+			return claims, fmt.Errorf("ujwt: invalid expiration claim")
 		} else if time.Now().After(time.Unix(int64(expire), 0)) {
-			return claims, fmt.Errorf("jwt: expired token")
+			return claims, fmt.Errorf("ujwt: expired token")
 		}
 	}
 	return
