@@ -1,11 +1,11 @@
 package acl
 
 import (
+	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
 	"math"
-	"math/rand"
 	"net/netip"
 	"os"
 	"strconv"
@@ -16,31 +16,27 @@ import (
 	"github.com/pyke369/golang-support/uconfig"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
-}
-
-func CIDR(input string, values []string) (match bool) {
+func CIDR(input string, values []string, fallback bool) (match bool, index int) {
 	if len(values) > 0 {
-		remote := input
-		if value, err := netip.ParseAddrPort(remote); err == nil {
-			remote = value.Addr().String()
+		if value, err := netip.ParseAddrPort(input); err == nil {
+			input = value.Addr().String()
 		}
-		if remote, err := netip.ParseAddr(remote); err == nil {
+		if remote, err := netip.ParseAddr(input); err == nil {
 			for _, value := range values {
 				if network, err := netip.ParsePrefix(value); err == nil {
 					if network.Contains(remote) {
-						return true
+						return true, index
 					}
 				}
+				index++
 			}
 		}
-		return false
+		return false, -1
 	}
-	return true
+	return fallback, -1
 }
-func CIDRConfig(input string, config *uconfig.UConfig, path string) bool {
-	return CIDR(input, config.GetStrings(path))
+func CIDRConfig(input string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
+	return CIDR(input, config.GetStrings(path), fallback)
 }
 
 // see https://akkadia.org/drepper/SHA-crypt.txt
@@ -159,45 +155,49 @@ func Crypt512(key, salt string, rounds int) (output string) {
 	return output + string(C[:86])
 }
 
-func Password(input string, values []string) bool {
-	login, password := "", strings.TrimSpace(input)
-	if parts := strings.Split(input, ":"); len(parts) >= 2 {
-		login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-	}
-	for _, value := range values {
-		check := strings.TrimSpace(value)
-		if len(check) > 1 && check[0] == '@' {
-			if PasswordFile(input, strings.TrimSpace(check[1:])) {
-				return true
-			}
-		} else {
-			if login != "" {
-				if parts := strings.Split(value, ":"); len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
-					continue
-				} else {
-					check = strings.TrimSpace(parts[1])
-				}
-			}
-			if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[1] == "6" && parts[2] != "" && parts[3] != "" {
-				rounds, salt := 5000, parts[2]
-				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
-					rounds, _ = strconv.Atoi(parts[2][7:])
-					salt = parts[3]
-				}
-				if Crypt512(password, salt, rounds) == check {
-					return true
-				}
-			} else if password == check {
-				return true
-			}
+func Password(input string, values []string, fallback bool) (match bool, index int) {
+	if len(values) > 0 {
+		login, password := "", strings.TrimSpace(input)
+		if parts := strings.Split(input, ":"); len(parts) >= 2 {
+			login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		}
+		for _, value := range values {
+			check := strings.TrimSpace(value)
+			if len(check) > 1 && check[0] == '@' {
+				if match, _ := PasswordFile(input, strings.TrimSpace(check[1:]), fallback); match {
+					return true, index
+				}
+			} else {
+				if login != "" {
+					if parts := strings.Split(value, ":"); len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
+						continue
+					} else {
+						check = strings.TrimSpace(parts[1])
+					}
+				}
+				if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[1] == "6" && parts[2] != "" && parts[3] != "" {
+					rounds, salt := 5000, parts[2]
+					if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
+						rounds, _ = strconv.Atoi(parts[2][7:])
+						salt = parts[3]
+					}
+					if Crypt512(password, salt, rounds) == check {
+						return true, index
+					}
+				} else if password == check {
+					return true, index
+				}
+			}
+			index++
+		}
+		return false, -1
 	}
-	return false
+	return fallback, -1
 }
-func PasswordConfig(input string, config *uconfig.UConfig, path string) bool {
-	return Password(input, config.GetStrings(path))
+func PasswordConfig(input string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
+	return Password(input, config.GetStrings(path), fallback)
 }
-func PasswordFile(input, path string) bool {
+func PasswordFile(input, path string, fallback bool) (match bool, index int) {
 	lines := []string{}
 	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
@@ -207,7 +207,7 @@ func PasswordFile(input, path string) bool {
 			}
 		}
 	}
-	return Password(input, lines)
+	return Password(input, lines, fallback)
 }
 
 type RANGE struct {
@@ -216,7 +216,7 @@ type RANGE struct {
 	times [2]int
 }
 
-func Ranges(input time.Time, values []string) (match bool) {
+func Ranges(input time.Time, values []string, fallback bool) (match bool, index int) {
 	if len(values) > 0 {
 		ranges, matcher1, matcher2, matcher3, days := []RANGE{},
 			rcache.Get(`^(\d{4}-\d{2}-\d{2})?-(\d{4}-\d{2}-\d{2})?$`),
@@ -257,14 +257,15 @@ func Ranges(input time.Time, values []string) (match bool) {
 			if (!entry.dates[0].IsZero() && now.Sub(entry.dates[0]) < 0) || (!entry.dates[1].IsZero() && now.Sub(entry.dates[1]) > 0) ||
 				(entry.days[0] != 0 && day < entry.days[0]) || (entry.days[1] != 0 && day > entry.days[1]) ||
 				(entry.times[0] != 0 && stamp < entry.times[0]) || (entry.times[1] != 0 && stamp > entry.times[1]) {
+				index++
 				continue
 			}
-			return true
+			return true, index
 		}
-		return false
+		return false, -1
 	}
-	return true
+	return fallback, -1
 }
-func RangesConfig(input time.Time, config *uconfig.UConfig, path string) bool {
-	return Ranges(input, config.GetStrings(path))
+func RangesConfig(input time.Time, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
+	return Ranges(input, config.GetStrings(path), fallback)
 }
