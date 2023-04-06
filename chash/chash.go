@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/pyke369/golang-support/uhash"
 )
@@ -29,10 +28,6 @@ type CHash struct {
 	replicas uint8
 	frozen   bool
 	sync.RWMutex
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
 }
 
 type ByHash []item

@@ -135,7 +135,6 @@ func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
 	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start))
 	if handle, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
 		random := make([]byte, 64)
-		rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
 		rand.Read(random)
 		uid := fmt.Sprintf("rpack_%8.8x", md5.Sum(random))
 		fmt.Fprintf(handle,

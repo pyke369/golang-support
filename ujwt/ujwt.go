@@ -149,7 +149,7 @@ func Decode(token string, secrets []string) (claims map[string]any, err error) {
 					}
 				}
 			}
-			if pass == true {
+			if pass {
 				break
 			}
 		}

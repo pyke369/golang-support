@@ -3,13 +3,7 @@ package uuid
 import (
 	"fmt"
 	"math/rand"
-	"os"
-	"time"
 )
-
-func init() {
-	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
-}
 
 func BUUID() []byte {
 	var entropy = make([]byte, 16)
