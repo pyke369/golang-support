@@ -1,43 +1,32 @@
 package rcache
 
 import (
-	"hash/crc32"
-	"reflect"
 	"regexp"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 )
 
 var (
-	cache map[uint32]*regexp.Regexp = map[uint32]*regexp.Regexp{}
+	cache map[string]*regexp.Regexp = map[string]*regexp.Regexp{}
 	hit   int64
 	miss  int64
 	lock  sync.RWMutex
 )
 
 func Get(expression string) *regexp.Regexp {
-	var slice []byte
-
-	hslice := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
-	hstring := (*reflect.StringHeader)(unsafe.Pointer(&expression))
-	hslice.Data = hstring.Data
-	hslice.Cap = hstring.Len
-	hslice.Len = hstring.Len
-	key := crc32.ChecksumIEEE(slice)
 	lock.RLock()
-	if cache[key] != nil {
+	if cache[expression] != nil {
 		atomic.AddInt64(&hit, 1)
 		defer lock.RUnlock()
-		return cache[key]
+		return cache[expression]
 	}
 	atomic.AddInt64(&miss, 1)
 	lock.RUnlock()
 	if regex, err := regexp.Compile(expression); err == nil {
 		lock.Lock()
 		defer lock.Unlock()
-		cache[key] = regex
-		return cache[key]
+		cache[expression] = regex
+		return cache[expression]
 	}
 	return nil
 }
