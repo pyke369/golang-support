@@ -435,6 +435,12 @@ func Slice(value any) []any {
 	}
 	return []any{}
 }
+func SliceItem(value []any, index int) any {
+	if index >= len(value) {
+		return nil
+	}
+	return value[index]
+}
 func StringSlice(value any, extra ...bool) []string {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := value.([]string); ok {
@@ -460,6 +466,12 @@ func StringSlice(value any, extra ...bool) []string {
 		}
 	}
 	return returned
+}
+func StringSliceItem(value []string, index int) string {
+	if index >= len(value) {
+		return ""
+	}
+	return value[index]
 }
 func NumberSlice(value any) []float64 {
 	if cast, ok := value.([]float64); ok {
