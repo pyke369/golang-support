@@ -403,134 +403,160 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 	return output
 }
 
-func Bool(value any) bool {
-	if cast, ok := value.(bool); ok {
+func Bool(input any) bool {
+	if cast, ok := input.(bool); ok {
 		return cast
 	}
 	return false
 }
-func String(value any) string {
-	if cast, ok := value.(string); ok {
+func String(input any) string {
+	if cast, ok := input.(string); ok {
 		return cast
 	}
 	return ""
 }
-func Number(value any) float64 {
-	if value != nil {
-		switch reflect.TypeOf(value).Kind() {
+func Number(input any) float64 {
+	if input != nil {
+		switch reflect.TypeOf(input).Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			return float64(reflect.ValueOf(value).Int())
+			return float64(reflect.ValueOf(input).Int())
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			return float64(reflect.ValueOf(value).Uint())
+			return float64(reflect.ValueOf(input).Uint())
 		case reflect.Float32, reflect.Float64:
-			return reflect.ValueOf(value).Float()
+			return reflect.ValueOf(input).Float()
 		}
 	}
 	return 0.0
 }
 
-func Slice(value any) []any {
-	if cast, ok := value.([]any); ok {
+func Slice(input any) []any {
+	if cast, ok := input.([]any); ok {
 		return cast
 	}
 	return []any{}
 }
-func SliceItem(value []any, index int) any {
-	if index >= len(value) {
+func SliceItem(input []any, index int) any {
+	if index >= len(input) {
 		return nil
 	}
-	return value[index]
+	return input[index]
 }
-func StringSlice(value any, extra ...bool) []string {
+func StringSlice(input any, extra ...bool) (output []string) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := value.([]string); ok {
+	if cast, ok := input.([]string); ok {
 		if !noempty {
 			return cast
 		}
-		returned := []string{}
+		output = []string{}
 		for _, item := range cast {
 			if strings.TrimSpace(item) != "" {
-				returned = append(returned, item)
+				output = append(output, item)
 			}
 		}
-		return returned
+		return
 	}
-	returned := []string{}
-	if cast, ok := value.([]any); ok {
+	output = []string{}
+	if cast, ok := input.([]any); ok {
 		for _, item := range cast {
-			if cast, ok := item.(string); ok {
-				if !noempty || strings.TrimSpace(cast) != "" {
-					returned = append(returned, cast)
-				}
+			value := String(item)
+			if !noempty || strings.TrimSpace(value) != "" {
+				output = append(output, value)
 			}
 		}
 	}
-	return returned
+	return
 }
-func StringSliceItem(value []string, index int) string {
-	if index >= len(value) {
+func StringSliceItem(input []string, index int) string {
+	if index >= len(input) {
 		return ""
 	}
-	return value[index]
+	return input[index]
 }
-func NumberSlice(value any) []float64 {
-	if cast, ok := value.([]float64); ok {
-		return cast
+func NumberSlice(input any, extra ...bool) (output []float64) {
+	noempty := len(extra) > 0 && extra[0]
+	if cast, ok := input.([]float64); ok {
+		if !noempty {
+			return cast
+		}
+		output = []float64{}
+		for _, value := range cast {
+			if value != 0 {
+				output = append(output, value)
+			}
+		}
+		return
 	}
-	returned := []float64{}
-	if cast, ok := value.([]any); ok {
+	output = []float64{}
+	if cast, ok := input.([]any); ok {
 		for _, item := range cast {
-			if cast, ok := item.(float64); ok {
-				returned = append(returned, cast)
+			value := Number(item)
+			if !noempty || value != 0 {
+				output = append(output, value)
 			}
 		}
 	}
-	return returned
+	return
+}
+func NumberSliceItem(input []float64, index int) float64 {
+	if index >= len(input) {
+		return 0.0
+	}
+	return input[index]
 }
 
-func Map(value any) map[string]any {
-	if cast, ok := value.(map[string]any); ok {
+func Map(input any) map[string]any {
+	if cast, ok := input.(map[string]any); ok {
 		return cast
 	}
 	return map[string]any{}
 }
-func StringMap(value any, extra ...bool) map[string]string {
+func StringMap(input any, extra ...bool) (output map[string]string) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := value.(map[string]string); ok {
+	if cast, ok := input.(map[string]string); ok {
 		if !noempty {
 			return cast
 		}
-		returned := map[string]string{}
-		for key, item := range cast {
-			if strings.TrimSpace(item) != "" {
-				returned[key] = item
+		output = map[string]string{}
+		for key, value := range cast {
+			if strings.TrimSpace(value) != "" {
+				output[key] = value
 			}
 		}
-		return returned
+		return
 	}
-	returned := map[string]string{}
-	if cast, ok := value.(map[string]any); ok {
+	output = map[string]string{}
+	if cast, ok := input.(map[string]any); ok {
 		for key, item := range cast {
-			if cast, ok := item.(string); ok {
-				if !noempty || strings.TrimSpace(cast) != "" {
-					returned[key] = cast
-				}
+			value := String(item)
+			if !noempty || strings.TrimSpace(value) != "" {
+				output[key] = value
 			}
 		}
 	}
-	return returned
+	return
 }
-func NumberMap(value any) map[string]float64 {
-	if cast, ok := value.(map[string]float64); ok {
-		return cast
+func NumberMap(input any, extra ...bool) (output map[string]float64) {
+	noempty := len(extra) > 0 && extra[0]
+	if cast, ok := input.(map[string]float64); ok {
+		if !noempty {
+			return cast
+		}
+		output = map[string]float64{}
+		for key, value := range cast {
+			if value != 0 {
+				output[key] = value
+			}
+		}
+		return
 	}
-	returned := map[string]float64{}
-	if cast, ok := value.(map[string]any); ok {
+	output = map[string]float64{}
+	if cast, ok := input.(map[string]any); ok {
 		for key, item := range cast {
-			if cast, ok := item.(float64); ok {
-				returned[key] = cast
+			value := Number(item)
+			if !noempty || value != 0 {
+				output[key] = value
 			}
 		}
 	}
-	return returned
+	return
 }
