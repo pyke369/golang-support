@@ -429,9 +429,16 @@ func Number(input any) float64 {
 	return 0.0
 }
 
-func Slice(input any) []any {
+func Slice(input any) (output []any) {
 	if cast, ok := input.([]any); ok {
 		return cast
+	}
+	if value := reflect.ValueOf(input); value.Kind() == reflect.Slice {
+		output = make([]any, value.Len())
+		for index := 0; index < value.Len(); index++ {
+			output[index] = value.Index(index).Interface()
+		}
+		return
 	}
 	return []any{}
 }
