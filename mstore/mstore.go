@@ -66,7 +66,7 @@ var (
 )
 
 type metric struct {
-	store       *mstore
+	store       *Store
 	name        string
 	path        string
 	description string
@@ -79,7 +79,7 @@ type chunk struct {
 	handle *os.File
 	data   []byte
 }
-type mstore struct {
+type Store struct {
 	prefix string
 	sync.Mutex
 	metrics map[string]*metric
@@ -92,7 +92,7 @@ type entry struct {
 }
 
 // store private api
-func (s *mstore) chunk(path string, size int, create bool) (data []byte, err error) {
+func (s *Store) chunk(path string, size int, create bool) (data []byte, err error) {
 	if size < 4 {
 		return nil, errors.New("mstore: invalid size")
 	}
@@ -136,7 +136,7 @@ func (s *mstore) chunk(path string, size int, create bool) (data []byte, err err
 	s.chunks[path] = chunk
 	return chunk.data, nil
 }
-func (s *mstore) cleanup() {
+func (s *Store) cleanup() {
 	s.Lock()
 	defer s.Unlock()
 	now := time.Now()
@@ -153,7 +153,7 @@ func (s *mstore) cleanup() {
 }
 
 // store public api
-func NewStore(prefix string) (store *mstore, err error) {
+func NewStore(prefix string) (store *Store, err error) {
 	os.MkdirAll(prefix, 0755)
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
@@ -162,9 +162,9 @@ func NewStore(prefix string) (store *mstore, err error) {
 		for range time.Tick(time.Minute) {
 		}
 	}()
-	return &mstore{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
+	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
 }
-func (s *mstore) Metric(name string) *metric {
+func (s *Store) Metric(name string) *metric {
 	if name == "" {
 		return nil
 	}
@@ -176,7 +176,7 @@ func (s *mstore) Metric(name string) *metric {
 	s.metrics[name] = &metric{store: s, name: name}
 	return s.metrics[name]
 }
-func (s *mstore) List(prefix string) (names []string) {
+func (s *Store) List(prefix string) (names []string) {
 	names = []string{}
 	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
@@ -186,7 +186,7 @@ func (s *mstore) List(prefix string) (names []string) {
 	})
 	return
 }
-func (s *mstore) Get(start, end time.Time, interval, aggregate int, names map[string][][]int) (result map[string]any) {
+func (s *Store) Get(start, end time.Time, interval, aggregate int, names map[string][][]int) (result map[string]any) {
 	result = map[string]any{}
 	if count := len(names); count > 0 {
 		queue := make(chan []any)
