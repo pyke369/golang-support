@@ -44,32 +44,31 @@ var (
 	sizer     *regexp.Regexp
 	duration1 *regexp.Regexp
 	duration2 *regexp.Regexp
-	replacers [16]replacer
+	replacers [15]replacer
 )
 
 func init() {
-	escaped = "{}[],#/*;:= "                                                                                                          // match characters within quotes to escape
-	unescaper = regexp.MustCompile(`@\d+@`)                                                                                           // match escaped characters (to reverse previous escaping)
-	expander = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                               // match external content macros
-	sizer = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)                                                                  // match size value
-	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                                                                     // match duration value form1 (free)
-	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)                                                    // match duration value form2 (timecode)
-	replacers[0] = replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false}                                                // remove # and // commented portions
-	replacers[1] = replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true}                                                             // remove /* */ commented portions
-	replacers[2] = replacer{regexp.MustCompile(`(?m)^\s+`), ``, false}                                                                // trim leading spaces
-	replacers[3] = replacer{regexp.MustCompile(`(?m)\s+$`), ``, false}                                                                // trim trailing spaces
-	replacers[4] = replacer{regexp.MustCompile("(?s)(^|[\r\n]+)\\[([^\\]\r\n]+?)\\](.+?)((?:[\r\n]+\\[)|$)"), "$1$2\n{$3\n}$4", true} // convert INI sections into JSON objects
-	replacers[5] = replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false}                                 // add missing key-value separators
-	replacers[6] = replacer{regexp.MustCompile(`(?m);$`), `,`, false}                                                                 // replace ; line terminators by ,
-	replacers[7] = replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false}                                                        // replace = key-value separators by :
-	replacers[8] = replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false}                                          // add missing objects/arrays , separators
-	replacers[9] = replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false}                                                // add missing values trailing , seperators
-	replacers[10] = replacer{regexp.MustCompile(`(^|[,{\[]+\s*)([^:{\[]+?)(\s*[{\[])`), `$1$2:$3`, true}                              // add missing key-(object/array-)value separator
-	replacers[11] = replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false}                                                // add missing quotes around keys
-	replacers[12] = replacer{regexp.MustCompile("([:,\\[\\s]+)([^\",\\[\\]{}\n\r]+?)(\\s*[,\\]}])"), `$1"$2"$3`, false}               // add missing quotes around values
-	replacers[13] = replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false}                                                          // add still issing objects/arrays , separators
-	replacers[14] = replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false}                                                      // trim leading and trailing spaces in quoted strings
-	replacers[15] = replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false}                                                         // remove objets/arrays last element extra ,
+	escaped = "{}[],#/*;:= "                                                                                               // match characters within quotes to escape
+	unescaper = regexp.MustCompile(`@\d+@`)                                                                                // match escaped characters (to reverse previous escaping)
+	expander = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                    // match external content macros
+	sizer = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)                                                       // match size value
+	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                                                          // match duration value form1 (free)
+	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)                                         // match duration value form2 (timecode)
+	replacers[0] = replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false}                                     // remove # and // commented portions
+	replacers[1] = replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true}                                                  // remove /* */ commented portions
+	replacers[2] = replacer{regexp.MustCompile(`(?m)^\s+`), ``, false}                                                     // trim leading spaces
+	replacers[3] = replacer{regexp.MustCompile(`(?m)\s+$`), ``, false}                                                     // trim trailing spaces
+	replacers[4] = replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false}                      // add missing key-value separators
+	replacers[5] = replacer{regexp.MustCompile(`(?m);$`), `,`, false}                                                      // replace ; line terminators by ,
+	replacers[6] = replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false}                                             // replace = key-value separators by :
+	replacers[7] = replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false}                               // add missing objects/arrays , separators
+	replacers[8] = replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false}                                     // add missing values trailing , seperators
+	replacers[9] = replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true}                          // add missing key-(object/array-)value separator
+	replacers[10] = replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false}                                     // add missing quotes around keys
+	replacers[11] = replacer{regexp.MustCompile("([:,\\[\\s]+)([^\",\\[\\]{}\\s\n\r]+?)(\\s*[,\\]}])"), `$1"$2"$3`, false} // add missing quotes around values
+	replacers[12] = replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false}                                               // add still issing objects/arrays , separators
+	replacers[13] = replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false}                                           // trim leading and trailing spaces in quoted strings
+	replacers[14] = replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false}                                              // remove objets/arrays last element extra ,
 }
 
 func escape(input string) string {

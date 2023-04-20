@@ -158,10 +158,6 @@ func NewStore(prefix string) (store *Store, err error) {
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
 	}
-	go func() {
-		for range time.Tick(time.Minute) {
-		}
-	}()
 	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
 }
 func (s *Store) Metric(name string) *metric {
