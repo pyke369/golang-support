@@ -1,6 +1,7 @@
 package uconfig
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/json"
 	"errors"
@@ -328,8 +329,14 @@ func (c *UConfig) Hash() string {
 }
 
 func (c *UConfig) String() string {
-	if config, err := json.MarshalIndent(c.config, "  ", "  "); c.config != nil && err == nil {
-		return string(config)
+	if c.config != nil {
+		config := &bytes.Buffer{}
+		encoder := json.NewEncoder(config)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+		if encoder.Encode(c.config) == nil {
+			return string(config.Bytes())
+		}
 	}
 	return "{}"
 }
