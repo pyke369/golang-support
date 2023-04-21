@@ -335,7 +335,7 @@ func (c *UConfig) String() string {
 		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
 		if encoder.Encode(c.config) == nil {
-			return string(config.Bytes())
+			return config.String()
 		}
 	}
 	return "{}"
@@ -467,13 +467,15 @@ func (c *UConfig) value(path string) (string, error) {
 	return "", errors.New(`uconfig: invalid path`)
 }
 
-func (c *UConfig) GetBoolean(path string, fallback bool) bool {
-	value, err := c.value(path)
-	if err != nil {
-		return fallback
+func (c *UConfig) GetBoolean(path string, fallback ...bool) bool {
+	if value, err := c.value(path); err == nil {
+		if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "yes" || value == "true" {
+			return true
+		}
+		return false
 	}
-	if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "yes" || value == "true" {
-		return true
+	if len(fallback) > 0 {
+		return fallback[0]
 	}
 	return false
 }
@@ -486,11 +488,14 @@ func (c *UConfig) GetStrings(path string) []string {
 	return list
 }
 
-func (c *UConfig) GetString(path string, fallback string) string {
+func (c *UConfig) GetString(path string, fallback ...string) string {
 	if value, err := c.value(path); err == nil {
 		return value
 	}
-	return fallback
+	if len(fallback) > 0 {
+		return fallback[0]
+	}
+	return ""
 }
 func (c *UConfig) GetStringMatch(path string, fallback, match string) string {
 	return c.GetStringMatchCaptures(path, fallback, match)[0]
