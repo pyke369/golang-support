@@ -50,13 +50,13 @@ const (
 )
 
 var (
-	modeNames = map[int]string{
+	ModeNames = map[int]string{
 		ModeGauge:   "gauge",
 		ModeCounter: "counter",
 		ModeText:    "text",
 		ModeBinary:  "binary",
 	}
-	aggregateNames = map[int]string{
+	AggregateNames = map[int]string{
 		AggregateMin:   "min",
 		AggregateMax:   "max",
 		AggregateAvg:   "avg",
@@ -498,7 +498,7 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 			}
 			if _, ok := duplicates[(column[0]<<8)+aggregate]; !ok {
 				duplicates[(column[0]<<8)+aggregate] = true
-				result["columns"] = append(result["columns"].([][]any), []any{column[0], modeNames[m.columns[column[0]].Mode], aggregateNames[aggregate], m.columns[column[0]].Description})
+				result["columns"] = append(result["columns"].([][]any), []any{column[0], ModeNames[m.columns[column[0]].Mode], AggregateNames[aggregate], m.columns[column[0]].Description})
 				offset := 1
 				if m.interval > 120 {
 					offset++
