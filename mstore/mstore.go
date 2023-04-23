@@ -636,7 +636,7 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 											if length == 0 {
 												values[index] = entry.value
 											}
-										case AggregateLast:
+										case AggregateLast, AggregateAvg:
 											values[index] = entry.value
 										}
 									}
