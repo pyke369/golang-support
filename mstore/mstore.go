@@ -182,7 +182,7 @@ func (s *Store) List(prefix string) (names []string) {
 	})
 	return
 }
-func (s *Store) Get(start, end time.Time, interval, aggregate int, names map[string][][]int) (result map[string]any) {
+func (s *Store) Get(start, end time.Time, interval int, names map[string][][]int) (result map[string]any) {
 	result = map[string]any{}
 	if count := len(names); count > 0 {
 		queue := make(chan []any)
