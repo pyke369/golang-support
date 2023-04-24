@@ -191,7 +191,7 @@ func (s *Store) Get(start, end time.Time, interval int, names map[string][][]int
 				if value, err := s.Metric(name).Get(start, end, interval, columns); err == nil {
 					queue <- []any{name, value}
 				} else {
-					queue <- []any{name, err.Error()}
+					queue <- []any{name, map[string]string{"error": err.Error()}}
 				}
 			}(name, columns)
 		}
