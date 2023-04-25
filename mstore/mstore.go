@@ -73,6 +73,7 @@ type metric struct {
 	interval    int
 	size        int
 	columns     []*Column
+	sync.Mutex
 }
 type chunk struct {
 	last   time.Time
@@ -482,6 +483,8 @@ func (m *metric) PutAt(mtime time.Time, values ...any) error {
 	return err
 }
 func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (result map[string]any, err error) {
+	m.Lock()
+	defer m.Unlock()
 	if err := m.meta(false); err != nil {
 		return nil, err
 	}
