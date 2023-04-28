@@ -23,10 +23,7 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 	if rconnection, err := connection.SyscallConn(); err == nil {
 		rconnection.Control(
 			func(handle uintptr) {
-				syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, syscall.SO_KEEPALIVE, 1)
-				syscall.SetsockoptInt(int(handle), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, 60)
-				syscall.SetsockoptInt(int(handle), syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, 10)
-				syscall.SetsockoptInt(int(handle), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
+				setOptions(int(handle))
 			})
 	}
 	if l.read > 0 {
