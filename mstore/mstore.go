@@ -492,12 +492,18 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 	mapping, duplicates := [][]int{}, map[int]bool{}
 	for _, column := range columns {
 		if len(column) > 0 && column[0] < len(m.columns) {
-			aggregate := 0
+			aggregate, min, max := 0, -1, -1
 			if len(column) > 1 {
 				aggregate = column[1]
 			}
 			if aggregate <= 0 || aggregate > AggregateLast {
 				aggregate = AggregateAvg
+			}
+			if len(column) > 2 {
+				min = column[2]
+			}
+			if len(column) > 3 {
+				max = column[3]
 			}
 			if _, ok := duplicates[(column[0]<<8)+aggregate]; !ok {
 				duplicates[(column[0]<<8)+aggregate] = true
@@ -509,7 +515,7 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 				for index := 0; index < column[0]; index++ {
 					offset += m.columns[index].Size
 				}
-				mapping = append(mapping, []int{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate})
+				mapping = append(mapping, []int{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate, min, max})
 			}
 		}
 	}
@@ -556,47 +562,7 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 						case ModeGauge:
 							msteps[index]++
 							value := m.get(item[2], data[offset+item[3]:])
-							switch item[4] {
-							case AggregateMin:
-								if values[index].(int64) < 0 || value < values[index].(int64) {
-									values[index] = value
-								}
-							case AggregateMax:
-								if value > values[index].(int64) {
-									values[index] = value
-								}
-							case AggregateAvg:
-								if values[index].(int64) < 0 {
-									values[index] = value
-								} else {
-									values[index] = values[index].(int64) + value
-								}
-							case AggregateFirst:
-								if values[index].(int64) < 0 {
-									values[index] = value
-								}
-							case AggregateLast:
-								values[index] = value
-							}
-
-						case ModeCounter:
-							value, delta, pvalue, pdelta := m.get(item[2], data[offset+item[3]:]), 0, int64(-1), 0
-							if m.interval > 120 {
-								delta = int(binary.BigEndian.Uint16(data[offset:]) & 0x7fff)
-							} else {
-								delta = int(data[offset] & 0x7f)
-							}
-							if offset-m.size >= 4 && data[offset-m.size]&0x80 != 0 {
-								pvalue = m.get(item[2], data[offset-m.size+item[3]:])
-								if m.interval > 120 {
-									pdelta = int(binary.BigEndian.Uint16(data[offset-m.size:]) & 0x7fff)
-								} else {
-									pdelta = int(data[offset-m.size] & 0x7f)
-								}
-							}
-							if pvalue >= 0 {
-								value = (value - pvalue) / int64(m.interval+delta-pdelta)
-								msteps[index]++
+							if (item[5] < 0 || (item[5] >= 0 && value >= int64(item[5]))) && (item[6] < 0 || (item[6] >= 0 && value <= int64(item[6]))) {
 								switch item[4] {
 								case AggregateMin:
 									if values[index].(int64) < 0 || value < values[index].(int64) {
@@ -618,6 +584,50 @@ func (m *metric) Get(start, end time.Time, interval int, columns [][]int) (resul
 									}
 								case AggregateLast:
 									values[index] = value
+								}
+							}
+
+						case ModeCounter:
+							value, delta, pvalue, pdelta := m.get(item[2], data[offset+item[3]:]), 0, int64(-1), 0
+							if m.interval > 120 {
+								delta = int(binary.BigEndian.Uint16(data[offset:]) & 0x7fff)
+							} else {
+								delta = int(data[offset] & 0x7f)
+							}
+							if offset-m.size >= 4 && data[offset-m.size]&0x80 != 0 {
+								pvalue = m.get(item[2], data[offset-m.size+item[3]:])
+								if m.interval > 120 {
+									pdelta = int(binary.BigEndian.Uint16(data[offset-m.size:]) & 0x7fff)
+								} else {
+									pdelta = int(data[offset-m.size] & 0x7f)
+								}
+							}
+							if pvalue >= 0 {
+								value = (value - pvalue) / int64(m.interval+delta-pdelta)
+								msteps[index]++
+								if (item[5] < 0 || (item[5] >= 0 && value >= int64(item[5]))) && (item[6] < 0 || (item[6] >= 0 && value <= int64(item[6]))) {
+									switch item[4] {
+									case AggregateMin:
+										if values[index].(int64) < 0 || value < values[index].(int64) {
+											values[index] = value
+										}
+									case AggregateMax:
+										if value > values[index].(int64) {
+											values[index] = value
+										}
+									case AggregateAvg:
+										if values[index].(int64) < 0 {
+											values[index] = value
+										} else {
+											values[index] = values[index].(int64) + value
+										}
+									case AggregateFirst:
+										if values[index].(int64) < 0 {
+											values[index] = value
+										}
+									case AggregateLast:
+										values[index] = value
+									}
 								}
 							}
 
