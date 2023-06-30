@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pyke369/golang-support/rcache"
 )
@@ -339,6 +340,32 @@ func (c *UConfig) String() string {
 		}
 	}
 	return "{}"
+}
+
+func (c *UConfig) Path(input ...string) string {
+	total, count, separator := 0, 0, len(c.separator)
+	for _, value := range input {
+		if length := len(value); length > 0 {
+			total += length
+			count++
+		}
+	}
+	if total == 0 {
+		return ""
+	}
+	total += (count - 1) * separator
+	result, offset := make([]byte, total), 0
+	for _, value := range input {
+		if length := len(value); length > 0 {
+			if offset > 0 {
+				copy(result[offset:], c.separator)
+				offset += separator
+			}
+			copy(result[offset:], value)
+			offset += length
+		}
+	}
+	return unsafe.String(unsafe.SliceData(result), total)
 }
 
 func (c *UConfig) Base(path string) string {
