@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -110,7 +110,7 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
 		return nil, fmt.Errorf("ssh: invalid mode")
 	}
-	if _, _, err := net.SplitHostPort(remote); err != nil {
+	if _, err := netip.ParseAddrPort(remote); err != nil {
 		if options.Mode == XML {
 			remote += ":830"
 		} else {

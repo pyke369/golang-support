@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"net/netip"
 	"os"
 	"sort"
@@ -66,18 +65,18 @@ func New() *PrefixDB {
 	return &PrefixDB{strings: map[string]*[3]int{}, numbers: map[float64]*[3]int{}, pairs: map[uint64]*[3]int{}, clusters: map[[16]byte]*cluster{}}
 }
 
-func (d *PrefixDB) Add(prefix net.IPNet, data map[string]any, clusters [][]string) {
-	prefix.IP = prefix.IP.To16()
-	ones, bits := prefix.Mask.Size()
-	if bits == 32 {
+func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]string) {
+	address, ones := prefix.Addr(), prefix.Bits()
+	if address.Is4() {
+		address = netip.AddrFrom16(address.As16())
 		ones += 96
-		prefix.Mask = net.CIDRMask(ones, bits+96)
 	}
+	bits := address.As16()
 	d.Lock()
 	pnode := &d.tree
 	for bit := 0; bit < ones; bit++ {
 		down := 0
-		if (prefix.IP[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
+		if (bits[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
 			down = 1
 		}
 		if pnode.down[down] == nil {

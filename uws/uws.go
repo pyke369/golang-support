@@ -15,7 +15,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,8 +153,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						config.TLSConfig = &tls.Config{}
 					}
 					config.TLSConfig.ServerName = address
-					if value, _, err := net.SplitHostPort(address); err == nil {
-						config.TLSConfig.ServerName = value
+					if value, err := netip.ParseAddrPort(address); err == nil {
+						config.TLSConfig.ServerName = value.Addr().String()
 					}
 					conn = tls.Client(conn, config.TLSConfig)
 					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
@@ -162,8 +164,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				}
 				if proxy != nil {
 					host, port := url.Host, "0"
-					if value1, value2, err := net.SplitHostPort(host); err == nil {
-						host, port = value1, value2
+					if value, err := netip.ParseAddrPort(host); err == nil {
+						host, port = value.Addr().String(), strconv.FormatInt(int64(value.Port()), 10)
 					}
 					if port == "0" {
 						if url.Scheme == "https" {

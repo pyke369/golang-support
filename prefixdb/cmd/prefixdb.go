@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -61,10 +60,10 @@ func mkjson() {
 					break
 				} else {
 					if fields := jsonMatcher.FindStringSubmatch(strings.TrimSpace(line)); fields != nil {
-						if _, prefix, err := net.ParseCIDR(fields[1]); err == nil {
+						if prefix, err := netip.ParsePrefix(fields[1]); err == nil {
 							data := map[string]any{}
 							json.Unmarshal([]byte(fields[2]), &data)
-							pfdb.Add(*prefix, data, [][]string{[]string{"key1", "key2"}})
+							pfdb.Add(prefix, data, [][]string{[]string{"key1", "key2"}})
 							count++
 						}
 					}
@@ -122,8 +121,8 @@ func mkoui() {
 									address += ":"
 								}
 							}
-							if _, prefix, err := net.ParseCIDR(fmt.Sprintf("%s/%d", address, mask)); err == nil {
-								pfdb.Add(*prefix, map[string]any{"company": data.Company}, nil)
+							if prefix, err := netip.ParsePrefix(fmt.Sprintf("%s/%d", address, mask)); err == nil {
+								pfdb.Add(prefix, map[string]any{"company": data.Company}, nil)
 								count++
 							}
 						}
@@ -192,7 +191,8 @@ func mkcity() {
 			}
 		}
 		handle.Close()
-		fmt.Fprintf(os.Stderr, "\r- loaded locations [%s] (%.3fs - %d entries)\n", os.Args[3], float64(time.Since(start))/float64(time.Second), len(locations))
+		time.Sleep(time.Millisecond)
+		fmt.Fprintf(os.Stderr, "\r- loaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
 	}
 
 	clusters := [][]string{
@@ -215,10 +215,10 @@ func mkcity() {
 							id, _ = strconv.Atoi(fields[2])
 						}
 						if id != 0 && locations[id] != nil {
-							if _, prefix, err := net.ParseCIDR(fields[0]); err == nil {
+							if prefix, err := netip.ParsePrefix(fields[0]); err == nil {
 								latitude, _ := strconv.ParseFloat(fields[7], 64)
 								longitude, _ := strconv.ParseFloat(fields[8], 64)
-								pfdb.Add(*prefix, map[string]any{
+								pfdb.Add(prefix, map[string]any{
 									"continent_code": locations[id].ContinentCode,
 									"continent_name": locations[id].ContinentName,
 									"country_code":   locations[id].CountryCode,
@@ -245,7 +245,8 @@ func mkcity() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			time.Sleep(time.Millisecond)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
 		}
 	}
 
@@ -282,8 +283,8 @@ func mkasn() {
 							fields[index][1] = strings.Trim(fields[index][1], `"`)
 						}
 						if asnum, _ := strconv.Atoi(fields[1][1]); asnum != 0 {
-							if _, prefix, err := net.ParseCIDR(fields[0][1]); err == nil {
-								pfdb.Add(*prefix, map[string]any{
+							if prefix, err := netip.ParsePrefix(fields[0][1]); err == nil {
+								pfdb.Add(prefix, map[string]any{
 									"as_number": fmt.Sprintf("AS%d", asnum),
 									"as_name":   fields[2][1],
 								}, nil)
@@ -298,7 +299,8 @@ func mkasn() {
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			time.Sleep(time.Millisecond)
+			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
 		}
 	}
 
