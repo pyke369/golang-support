@@ -30,17 +30,7 @@ const (
 	AggregateAvg   = 3
 	AggregateFirst = 4
 	AggregateLast  = 5
-)
 
-type Column struct {
-	Mode        int
-	Size        int
-	Description string
-	sync.Mutex
-	mapping []map[int]*entry
-}
-
-const (
 	magic       = 0x53544f52
 	minInterval = 10
 	maxInterval = 3600
@@ -48,6 +38,40 @@ const (
 	maxSamples  = 1440
 	metaSize    = 8 + maxColumns*38 + 128 + 4
 )
+
+type Store struct {
+	prefix string
+	sync.Mutex
+	metrics map[string]*metric
+	chunks  map[string]*chunk
+	last    time.Time
+}
+type Column struct {
+	Mode        int
+	Size        int
+	Description string
+	sync.Mutex
+	mapping []map[int]*entry
+}
+type metric struct {
+	store       *Store
+	name        string
+	path        string
+	description string
+	interval    int
+	size        int
+	columns     []*Column
+	sync.Mutex
+}
+type chunk struct {
+	last   time.Time
+	handle *os.File
+	data   []byte
+}
+type entry struct {
+	index int
+	value []byte
+}
 
 var (
 	ModeNames = map[int]string{
@@ -65,33 +89,6 @@ var (
 	}
 )
 
-type metric struct {
-	store       *Store
-	name        string
-	path        string
-	description string
-	interval    int
-	size        int
-	columns     []*Column
-	sync.Mutex
-}
-type chunk struct {
-	last   time.Time
-	handle *os.File
-	data   []byte
-}
-type Store struct {
-	prefix string
-	sync.Mutex
-	metrics map[string]*metric
-	chunks  map[string]*chunk
-	last    time.Time
-}
-type entry struct {
-	index int
-	value []byte
-}
-
 // store private api
 func (s *Store) chunk(path string, size int, create bool) (data []byte, err error) {
 	if size < 4 {
@@ -104,13 +101,22 @@ func (s *Store) chunk(path string, size int, create bool) (data []byte, err erro
 			return nil, errors.New("mstore: size mismatch")
 		}
 		chunk.last = time.Now()
-		return chunk.data, nil
+		if !create || chunk.handle != nil {
+			return chunk.data, nil
+		}
 	}
 	chunk, flags, created := &chunk{}, os.O_RDWR, false
 	if create {
 		flags |= os.O_CREATE
 	}
 	if _, err := os.Stat(path); err != nil {
+		if !create {
+			if info, err := os.Stat(filepath.Dir(path)); err == nil && info.IsDir() {
+				chunk.last, chunk.data = time.Now(), make([]byte, size)
+				s.chunks[path] = chunk
+				return chunk.data, nil
+			}
+		}
 		created = true
 	}
 	if chunk.handle, err = os.OpenFile(path, flags, 0644); err != nil {
@@ -145,8 +151,10 @@ func (s *Store) cleanup() {
 		s.last = now
 		for path, chunk := range s.chunks {
 			if now.Sub(chunk.last) >= time.Minute {
-				unix.Munmap(chunk.data)
-				chunk.handle.Close()
+				if chunk.handle != nil {
+					unix.Munmap(chunk.data)
+					chunk.handle.Close()
+				}
 				delete(s.chunks, path)
 			}
 		}
