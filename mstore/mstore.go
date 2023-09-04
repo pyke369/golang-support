@@ -23,16 +23,18 @@ import (
 )
 
 const (
-	ModeGauge      = 0x47415547
-	ModeCounter    = 0x434f554e
-	ModeText       = 0x54455854
-	ModeBinary     = 0x44415441
-	AggregateMin   = 1
-	AggregateMax   = 2
-	AggregateAvg   = 3
-	AggregateFirst = 4
-	AggregateLast  = 5
-	AggregateCount = 6
+	ModeGauge   = 0x47415547
+	ModeCounter = 0x434f554e
+	ModeText    = 0x54455854
+	ModeBinary  = 0x44415441
+
+	AggregateMinimum    = 1
+	AggregateMaximum    = 2
+	AggregateAverage    = 3
+	AggregateFirst      = 4
+	AggregateLast       = 5
+	AggregateHistogram  = 6
+	AggregatePercentile = 7
 
 	magic       = 0x53544f52
 	minInterval = 10
@@ -90,23 +92,27 @@ var (
 		"binary":  ModeBinary,
 	}
 	AggregateNames = map[int64]string{
-		AggregateMin:   "min",
-		AggregateMax:   "max",
-		AggregateAvg:   "avg",
-		AggregateFirst: "first",
-		AggregateLast:  "last",
-		AggregateCount: "count",
+		AggregateMinimum:    "minimum",
+		AggregateMaximum:    "maximum",
+		AggregateAverage:    "average",
+		AggregateFirst:      "first",
+		AggregateLast:       "last",
+		AggregateHistogram:  "histogram",
+		AggregatePercentile: "percentile",
 	}
 	AggregateIndexes = map[string]int64{
-		"min":     AggregateMin,
-		"minimum": AggregateMin,
-		"max":     AggregateMax,
-		"maximum": AggregateMax,
-		"avg":     AggregateAvg,
-		"average": AggregateAvg,
-		"first":   AggregateFirst,
-		"last":    AggregateLast,
-		"count":   AggregateCount,
+		"min":        AggregateMinimum,
+		"minimum":    AggregateMinimum,
+		"max":        AggregateMaximum,
+		"maximum":    AggregateMaximum,
+		"avg":        AggregateAverage,
+		"average":    AggregateAverage,
+		"first":      AggregateFirst,
+		"last":       AggregateLast,
+		"histo":      AggregateHistogram,
+		"histogram":  AggregateHistogram,
+		"percent":    AggregatePercentile,
+		"percentile": AggregatePercentile,
 	}
 )
 
@@ -667,8 +673,8 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if len(column) > 1 {
 				aggregate = column[1]
 			}
-			if aggregate <= 0 || aggregate > AggregateCount {
-				aggregate = AggregateAvg
+			if aggregate <= 0 || aggregate > AggregatePercentile {
+				aggregate = AggregateAverage
 			}
 			if len(column) > 2 {
 				min = column[2]
@@ -730,7 +736,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 					}
 					if len(values) == 0 {
 						for _, item := range mapping {
-							if item[4] == AggregateCount {
+							if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 								values = append(values, map[string]int{})
 							} else {
 								switch item[1] {
@@ -747,22 +753,22 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 						case ModeGauge:
 							msteps[index]++
 							value := m.get(item[2], data[offset+item[3]:])
-							if item[4] == AggregateCount {
+							if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 								if item[5] > 0 {
 									value /= item[5]
 								}
 								values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
 							} else if value >= item[5] && value <= item[6] {
 								switch item[4] {
-								case AggregateMin:
+								case AggregateMinimum:
 									if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
 										values[index] = value
 									}
-								case AggregateMax:
+								case AggregateMaximum:
 									if value > values[index].(int64) {
 										values[index] = value
 									}
-								case AggregateAvg:
+								case AggregateAverage:
 									if values[index].(int64) == math.MinInt64 {
 										values[index] = value
 									} else {
@@ -795,22 +801,22 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 							if pvalue >= 0 {
 								msteps[index]++
 								value = (value - pvalue) / int64(m.interval+delta-pdelta)
-								if item[4] == AggregateCount {
+								if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 									if item[5] > 0 {
 										value /= item[5]
 									}
 									values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
 								} else if value >= item[5] && value <= item[6] {
 									switch item[4] {
-									case AggregateMin:
+									case AggregateMinimum:
 										if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
 											values[index] = value
 										}
-									case AggregateMax:
+									case AggregateMaximum:
 										if value > values[index].(int64) {
 											values[index] = value
 										}
-									case AggregateAvg:
+									case AggregateAverage:
 										if values[index].(int64) == math.MinInt64 {
 											values[index] = value
 										} else {
@@ -830,7 +836,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 							if value := m.get(item[2], data[offset+item[3]:]); value != 0 {
 								if m.mapping(int(item[0]), false) == nil {
 									if entry, ok := m.columns[item[0]].mapping[1][int(value)]; ok {
-										if item[4] == AggregateCount {
+										if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 											value := string(entry.value)
 											if item[1] == ModeBinary {
 												value = base64.StdEncoding.EncodeToString(entry.value)
@@ -839,11 +845,11 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 										} else {
 											length := len(values[index].([]byte))
 											switch item[4] {
-											case AggregateMin:
+											case AggregateMinimum:
 												if length == 0 || len(entry.value) < length {
 													values[index] = entry.value
 												}
-											case AggregateMax:
+											case AggregateMaximum:
 												if len(entry.value) > length {
 													values[index] = entry.value
 												}
@@ -851,7 +857,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 												if length == 0 {
 													values[index] = entry.value
 												}
-											case AggregateLast, AggregateAvg:
+											case AggregateLast, AggregateAverage:
 												values[index] = entry.value
 											}
 										}
@@ -872,14 +878,49 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if step >= steps || !current.Before(end) {
 				if len(values) == len(mapping) {
 					for index, item := range mapping {
-						if item[4] == AggregateAvg && (item[1] == ModeGauge || item[1] == ModeCounter) && msteps[index] > 0 {
+						if item[4] == AggregateAverage && (item[1] == ModeGauge || item[1] == ModeCounter) && msteps[index] > 0 {
 							if values[index].(int64) == math.MinInt64 {
 								values[index] = int64(0)
 							} else {
 								values[index] = values[index].(int64) / int64(msteps[index])
 							}
 						}
-						if item[4] != AggregateCount {
+						if item[4] == AggregatePercentile {
+							if item[1] == ModeGauge || item[1] == ModeCounter {
+								list, total := make([][2]int64, 0, len(values[index].(map[string]int))), 0
+								for key, count := range values[index].(map[string]int) {
+									if value, err := strconv.ParseInt(key, 10, 64); err == nil {
+										list = append(list, [2]int64{value, int64(count)})
+										total += count
+									}
+								}
+								values[index] = 0
+								if total != 0 {
+									sort.Slice(list, func(a, b int) bool { return list[a][0] < list[b][0] })
+									if item[6] == int64(math.MaxInt64) {
+										item[6] = 95
+									}
+									item[6] = int64(math.Min(100, math.Max(0, float64(item[6]))))
+									if item[6] == 0 {
+										values[index] = list[0][0]
+									} else if item[6] == 100 {
+										values[index] = list[len(list)-1][0]
+									} else {
+										percentile := 0.0
+										for _, value := range list {
+											ok1 := float64(item[6]) >= percentile
+											percentile += float64(value[1]) * 100 / float64(total)
+											ok2 := float64(item[6]) < percentile
+											if ok1 && ok2 {
+												values[index] = value[0]
+												break
+											}
+										}
+									}
+								}
+							}
+
+						} else if item[4] != AggregateHistogram {
 							if item[1] == ModeText {
 								values[index] = string(values[index].([]byte))
 							} else if item[1] == ModeBinary {
