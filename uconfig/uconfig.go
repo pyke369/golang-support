@@ -40,38 +40,30 @@ type replacer struct {
 }
 
 var (
-	escaped   string
-	unescaper *regexp.Regexp
-	expander  *regexp.Regexp
-	sizer     *regexp.Regexp
-	duration1 *regexp.Regexp
-	duration2 *regexp.Regexp
-	replacers [15]replacer
+	escaped   = "{}[],#/*;:= "
+	unescaper = regexp.MustCompile(`@\d+@`)                                        // match escaped characters (to reverse previous escaping)
+	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)           // match external content macros
+	sizer     = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)           // match size value
+	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                  // match duration value form1 (free)
+	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`) // match duration value form2 (timecode)
+	replacers = []replacer{
+		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                                    // remove # and // commented portions
+		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                                 // remove /* */ commented portions
+		replacer{regexp.MustCompile(`(?m)^\s+`), ``, false},                                                    // trim leading spaces
+		replacer{regexp.MustCompile(`(?m)\s+$`), ``, false},                                                    // trim trailing spaces
+		replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false},                     // add missing key-value separators
+		replacer{regexp.MustCompile(`(?m);$`), `,`, false},                                                     // replace ; line terminators by ,
+		replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false},                                            // replace = key-value separators by :
+		replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false},                              // add missing objects/arrays , separators
+		replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false},                                    // add missing values trailing , seperators
+		replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true},                         // add missing key-(object/array-)value separator
+		replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false},                                     // add missing quotes around keys
+		replacer{regexp.MustCompile("([:,\\[\\s]+)([^\",\\[\\]{}\\s\n\r]+?)(\\s*[,\\]}])"), `$1"$2"$3`, false}, // add missing quotes around values
+		replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false},                                               // add still issing objects/arrays , separators
+		replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false},                                           // trim leading and trailing spaces in quoted strings
+		replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false},                                              // remove objets/arrays last element extra ,
+	}
 )
-
-func init() {
-	escaped = "{}[],#/*;:= "                                                                                               // match characters within quotes to escape
-	unescaper = regexp.MustCompile(`@\d+@`)                                                                                // match escaped characters (to reverse previous escaping)
-	expander = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)                                                    // match external content macros
-	sizer = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)                                                       // match size value
-	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                                                          // match duration value form1 (free)
-	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)                                         // match duration value form2 (timecode)
-	replacers[0] = replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false}                                     // remove # and // commented portions
-	replacers[1] = replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true}                                                  // remove /* */ commented portions
-	replacers[2] = replacer{regexp.MustCompile(`(?m)^\s+`), ``, false}                                                     // trim leading spaces
-	replacers[3] = replacer{regexp.MustCompile(`(?m)\s+$`), ``, false}                                                     // trim trailing spaces
-	replacers[4] = replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false}                      // add missing key-value separators
-	replacers[5] = replacer{regexp.MustCompile(`(?m);$`), `,`, false}                                                      // replace ; line terminators by ,
-	replacers[6] = replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false}                                             // replace = key-value separators by :
-	replacers[7] = replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false}                               // add missing objects/arrays , separators
-	replacers[8] = replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false}                                     // add missing values trailing , seperators
-	replacers[9] = replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true}                          // add missing key-(object/array-)value separator
-	replacers[10] = replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false}                                     // add missing quotes around keys
-	replacers[11] = replacer{regexp.MustCompile("([:,\\[\\s]+)([^\",\\[\\]{}\\s\n\r]+?)(\\s*[,\\]}])"), `$1"$2"$3`, false} // add missing quotes around values
-	replacers[12] = replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false}                                               // add still issing objects/arrays , separators
-	replacers[13] = replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false}                                           // trim leading and trailing spaces in quoted strings
-	replacers[14] = replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false}                                              // remove objets/arrays last element extra ,
-}
 
 func escape(input string) string {
 	var output []byte
@@ -613,13 +605,13 @@ func (c *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 {
 	return nvalue
 }
 
-func (c *UConfig) GetDuration(path string, fallback float64) float64 {
-	return c.GetDurationBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
+func (c *UConfig) GetDuration(path string, fallback float64) time.Duration {
+	return c.GetDurationBounds(path, fallback, 0, math.MaxFloat64)
 }
-func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) float64 {
+func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) time.Duration {
 	value, err := c.value(path)
 	if err != nil {
-		return fallback
+		return time.Duration(fallback * float64(time.Second))
 	}
 	nvalue := float64(0.0)
 	if matches := duration1.FindAllStringSubmatch(strings.TrimSpace(strings.ToUpper(value)), -1); matches != nil {
@@ -655,11 +647,10 @@ func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) flo
 		milliseconds, _ := strconv.ParseFloat(matches[4], 64)
 		nvalue = (hours * 3600) + (math.Min(minutes, 59) * 60) + math.Min(seconds, 59) + (milliseconds / 1000)
 	}
-	return math.Max(math.Min(nvalue, max), min)
+	return time.Duration(math.Max(math.Min(nvalue, max), min) * float64(time.Second))
 }
-
-func Duration(input float64) time.Duration {
-	return time.Duration(input * float64(time.Second))
+func Seconds(input time.Duration) float64 {
+	return float64(input) / float64(time.Second)
 }
 
 func Args() (args []string) {
