@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"net/netip"
 	"os"
@@ -39,6 +42,7 @@ var (
 	jsonMatcher = regexp.MustCompile(`^(\S+)(?:\s(\{.+?\}))?$`)
 	ouiMatcher  = regexp.MustCompile(`(?i)^([0-9a-f]{1,2})(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?$`)
 	pfdb        = prefixdb.New()
+	client      = &http.Client{Timeout: 5 * time.Second}
 )
 
 func size(input int) string {
@@ -70,11 +74,11 @@ func mkjson() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\r- adding prefixes  [%s] %d", os.Args[index], count)
+					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 	start := time.Now()
@@ -83,14 +87,13 @@ func mkjson() {
 		description = os.Args[2][index+1:]
 		os.Args[2] = os.Args[2][:index]
 	}
-	fmt.Fprintf(os.Stderr, "\r- saving database  [%s]... ", os.Args[2])
-	if _, err := pfdb.Save(os.Args[2], description); err != nil {
-		fmt.Fprintf(os.Stderr, "\r- saving database   [%s] failed (%v)\n", os.Args[2], err)
-	} else {
-		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
+	if _, err := pfdb.Save(os.Args[2], description); err == nil {
+		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
 			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
+	} else {
+		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%v)\n", os.Args[2], err)
 	}
 }
 
@@ -130,11 +133,11 @@ func mkoui() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\r- adding prefixes  [%s] %d", os.Args[index], count)
+					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
 		}
 	}
 	start := time.Now()
@@ -143,14 +146,13 @@ func mkoui() {
 		description = os.Args[2][index+1:]
 		os.Args[2] = os.Args[2][:index]
 	}
-	fmt.Fprintf(os.Stderr, "\r- saving database  [%s]... ", os.Args[2])
-	if _, err := pfdb.Save(os.Args[2], description); err != nil {
-		fmt.Fprintf(os.Stderr, "\r- saving database   [%s] failed (%v)\n", os.Args[2], err)
-	} else {
-		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
+	if _, err := pfdb.Save(os.Args[2], description); err == nil {
+		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
 			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
+	} else {
+		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%v)\n", os.Args[2], err)
 	}
 }
 
@@ -187,12 +189,12 @@ func mkcity() {
 			}
 			if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 				last = now
-				fmt.Fprintf(os.Stderr, "\r- loading locations [%s] %d", os.Args[3], len(locations))
+				fmt.Fprintf(os.Stderr, "loading locations [%s] %d", os.Args[3], len(locations))
 			}
 		}
 		handle.Close()
 		time.Sleep(time.Millisecond)
-		fmt.Fprintf(os.Stderr, "\r- loaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
+		fmt.Fprintf(os.Stderr, "loaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
 	}
 
 	clusters := [][]string{
@@ -241,12 +243,12 @@ func mkcity() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\r- adding prefixes  [%s] %d", os.Args[index], count)
+					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
 				}
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
+			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
 		}
 	}
 
@@ -256,14 +258,13 @@ func mkcity() {
 		description = os.Args[2][index+1:]
 		os.Args[2] = os.Args[2][:index]
 	}
-	fmt.Fprintf(os.Stderr, "\r- saving database  [%s]... ", os.Args[2])
-	if _, err := pfdb.Save(os.Args[2], description); err != nil {
-		fmt.Fprintf(os.Stderr, "\r- saving database  [%s] failed (%v)\n", os.Args[2], err)
-	} else {
-		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
+	if _, err := pfdb.Save(os.Args[2], description); err == nil {
+		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
 			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
+	} else {
+		fmt.Fprintf(os.Stderr, "saving database  [%s] failed (%v)\n", os.Args[2], err)
 	}
 }
 
@@ -295,12 +296,12 @@ func mkasn() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\r- adding prefixes   [%s] %d", os.Args[index], count)
+					fmt.Fprintf(os.Stderr, "\radding prefixes   [%s] %d", os.Args[index], count)
 				}
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			fmt.Fprintf(os.Stderr, "\r- added prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
+			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
 		}
 	}
 
@@ -310,35 +311,63 @@ func mkasn() {
 		description = os.Args[2][index+1:]
 		os.Args[2] = os.Args[2][:index]
 	}
-	fmt.Fprintf(os.Stderr, "\r- saving database  [%s]... ", os.Args[2])
-	if _, err := pfdb.Save(os.Args[2], description); err != nil {
-		fmt.Fprintf(os.Stderr, "\r- saving database  [%s] failed (%v)\n", os.Args[2], err)
-	} else {
-		fmt.Fprintf(os.Stderr, "\r- saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
+	if _, err := pfdb.Save(os.Args[2], description); err == nil {
+		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
 			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
+	} else {
+		fmt.Fprintf(os.Stderr, "saving database  [%s] failed (%v)\n", os.Args[2], err)
+	}
+}
+
+func rlookup(remote, value string, output map[string]any) {
+	if remote != "" && value != "" && output != nil {
+		if request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s?remote=%s", remote, value), nil); err == nil {
+			request.Header.Add("X-Forwarded-For", value)
+			if response, err := client.Do(request); err == nil {
+				body, _ := io.ReadAll(response.Body)
+				response.Body.Close()
+				data := map[string]any{}
+				json.Unmarshal(body, &data)
+				for key, value := range data {
+					if _, ok := output[key]; !ok {
+						output[key] = value
+					}
+				}
+			}
+		}
 	}
 }
 
 func lookup() {
-	databases := []*prefixdb.PrefixDB{}
+	databases, remote := []*prefixdb.PrefixDB{}, ""
 	for index := 2; index < len(os.Args); index++ {
 		if strings.HasSuffix(os.Args[index], `.pfdb`) {
-			fmt.Fprintf(os.Stderr, "\r- loading database [%s]...", os.Args[index])
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
-				fmt.Fprintf(os.Stderr, "\r- loaded database  [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
+				fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
 					os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
 				databases = append(databases, database)
 			} else {
-				fmt.Fprintf(os.Stderr, "\r- loading database [%s] failed (%v)\n", os.Args[index], err)
+				fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
+			}
+		} else if strings.HasPrefix(os.Args[index], `http`) {
+			lookup := map[string]any{}
+			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
+				remote = os.Args[index]
+				fmt.Fprintf(os.Stderr, "remote   [%s]\n", os.Args[index])
+			} else {
+				fmt.Fprintf(os.Stderr, "remote   [%s] failed (not a valid prefixdb server)\n", os.Args[index])
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "- lookup           [%s] ", os.Args[index])
+			fmt.Fprintf(os.Stderr, "lookup   [%s] ", os.Args[index])
 			lookup := map[string]any{}
 			for _, database := range databases {
 				database.Lookup(os.Args[index], lookup)
+			}
+			if remote != "" {
+				rlookup(remote, os.Args[index], lookup)
 			}
 			data, _ := json.Marshal(lookup)
 			fmt.Printf("%s\n", data)
@@ -346,17 +375,86 @@ func lookup() {
 	}
 }
 
+func batch() {
+	databases, remote := []*prefixdb.PrefixDB{}, ""
+	for index := 2; index < len(os.Args); index++ {
+		if strings.HasSuffix(os.Args[index], `.pfdb`) {
+			database := prefixdb.New()
+			if err := database.Load(os.Args[index]); err == nil {
+				fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
+					os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
+				databases = append(databases, database)
+			} else {
+				fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
+			}
+		} else if strings.HasPrefix(os.Args[index], `http`) {
+			lookup := map[string]any{}
+			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
+				remote = os.Args[index]
+				fmt.Fprintf(os.Stderr, "remote   [%s]\n", os.Args[index])
+			} else {
+				fmt.Fprintf(os.Stderr, "remote   [%s] failed (not a valid prefixdb server)\n", os.Args[index])
+			}
+		} else {
+			input, column, parts := os.Stdin, 1, strings.Split(os.Args[index], "@")
+			if parts[0] == "" {
+				usage(1)
+			}
+			if len(parts) > 1 {
+				column, _ = strconv.Atoi(parts[1])
+			}
+			if parts[0] != "-" {
+				input, _ = os.Open(parts[0])
+			}
+			reader, writer, cache := csv.NewReader(input), csv.NewWriter(os.Stdout), map[string]map[string]any{}
+			if records, err := reader.ReadAll(); err == nil {
+				column = int(math.Max(1, math.Min(float64(reader.FieldsPerRecord), float64(column)))) - 1
+				for done, record := range records {
+					if len(record) > column {
+						lookup := map[string]any{}
+						if _, ok := cache[record[column]]; ok {
+							lookup = cache[record[column]]
+						} else {
+							for _, database := range databases {
+								database.Lookup(record[column], lookup)
+							}
+							if remote != "" {
+								rlookup(remote, record[column], lookup)
+							}
+							cache[record[column]] = lookup
+						}
+						for field := index + 1; field < len(os.Args); field++ {
+							if lookup[os.Args[field]] != nil {
+								record = append(record, fmt.Sprintf("%v", lookup[os.Args[field]]))
+							} else {
+								record = append(record, "")
+							}
+
+						}
+					}
+					fmt.Fprintf(os.Stderr, "\rlookup   [%s] (%d/%d)                                        \r", record[column], done+1, len(records))
+					writer.Write(record)
+					writer.Flush()
+				}
+				fmt.Fprintf(os.Stderr, "\rlookup   [%d records]                                        \n", len(records))
+			} else {
+				fmt.Fprintf(os.Stderr, "csv      [%s] failed (%v)\n", os.Args[index], err)
+			}
+			break
+		}
+	}
+}
+
 func server() {
 	databases := []*prefixdb.PrefixDB{}
 	for index := 3; index < len(os.Args); index++ {
-		fmt.Fprintf(os.Stderr, "\r- loading database [%s]...", os.Args[index])
 		database := prefixdb.New()
 		if err := database.Load(os.Args[index]); err == nil {
-			fmt.Fprintf(os.Stderr, "\r- loaded database  [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
+			fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
 				os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
 			databases = append(databases, database)
 		} else {
-			fmt.Fprintf(os.Stderr, "\r- loading database [%s] failed (%v)\n", os.Args[index], err)
+			fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
 		}
 	}
 	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
@@ -378,14 +476,27 @@ func server() {
 		}
 		data, _ := json.Marshal(lookup)
 		response.Write(data)
+		fmt.Fprintf(os.Stderr, "lookup   [%s] %s\n", remote, data)
 	})
 	parts := strings.Split(os.Args[2], ",")
-	server := &http.Server{Addr: strings.TrimLeft(parts[0], "*"), ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
-	fmt.Fprintf(os.Stderr, "\r- listening to     [%s]\n", os.Args[2])
-	if len(parts) > 1 {
-		server.ListenAndServeTLS(parts[1], parts[2])
-	} else {
-		server.ListenAndServe()
+	server := &http.Server{
+		Addr:           strings.TrimLeft(parts[0], "*"),
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		MaxHeaderBytes: 4 << 10,
+	}
+	fmt.Fprintf(os.Stderr, "listen   [%s]\n", os.Args[2])
+	for {
+		if len(parts) > 1 {
+			if err := server.ListenAndServeTLS(parts[1], parts[2]); err != nil {
+				fmt.Fprintf(os.Stderr, "listen   [%s] failed (%v)\n", os.Args[2], err)
+			}
+		} else {
+			if err := server.ListenAndServe(); err != nil {
+				fmt.Fprintf(os.Stderr, "listen   [%s] failed (%v)\n", os.Args[2], err)
+			}
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -396,8 +507,9 @@ func usage(status int) {
 		"oui    <database[@<description>]> <JSON OUI>...                       build database from macadress.io JSON OUI lists\n"+
 		"city   <database[@<description>]> <CSV locations> <CSV prefixes>...   build database from MaxMind GeoIP2 cities lists\n"+
 		"asn    <database[@<description>]> <CSV prefixes>...                   build database from MaxMind GeoLite2 asnums lists\n"+
-		"lookup <database>... <address>...                                     lookup entries in databases\n"+
-		"server <bind address> <database>...                                   spawn an HTTP(S) server for entries lookup\n")
+		"lookup <database|url>... <address>...                                 lookup entries in database (or from remote server url)\n"+
+		"batch  <database|url>... <CSV input|->[@<column>] <field>...          batch-lookup entries in input CSV file (or stdin)\n"+
+		"server <listen> <database>...                                         spawn an HTTP(S) server for remote lookup\n")
 	os.Exit(status)
 }
 
@@ -408,30 +520,43 @@ func main() {
 	switch os.Args[1] {
 	case "help":
 		usage(0)
+
 	case "json":
 		if len(os.Args) < 3 {
 			usage(1)
 		}
 		mkjson()
+
 	case "oui":
 		if len(os.Args) < 3 {
 			usage(1)
 		}
 		mkoui()
+
 	case "city":
 		if len(os.Args) < 5 {
 			usage(1)
 		}
 		mkcity()
+
 	case "asn":
 		if len(os.Args) < 3 {
 			usage(1)
 		}
 		mkasn()
+
 	case "lookup":
 		lookup()
+
+	case "batch":
+		batch()
+
 	case "server":
+		if len(os.Args) < 3 {
+			usage(1)
+		}
 		server()
+
 	default:
 		usage(2)
 	}
