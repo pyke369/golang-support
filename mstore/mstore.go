@@ -35,6 +35,7 @@ const (
 	AggregateLast       = 5
 	AggregateHistogram  = 6
 	AggregatePercentile = 7
+	AggregateRaw        = 8
 
 	magic       = 0x53544f52
 	minInterval = 10
@@ -66,6 +67,7 @@ type metric struct {
 	interval    int64
 	size        int64
 	columns     []*Column
+	frozen      bool
 	sync.Mutex
 }
 type chunk struct {
@@ -99,6 +101,7 @@ var (
 		AggregateLast:       "last",
 		AggregateHistogram:  "histogram",
 		AggregatePercentile: "percentile",
+		AggregateRaw:        "raw",
 	}
 	AggregateIndexes = map[string]int64{
 		"min":        AggregateMinimum,
@@ -113,6 +116,7 @@ var (
 		"histogram":  AggregateHistogram,
 		"percent":    AggregatePercentile,
 		"percentile": AggregatePercentile,
+		"raw":        AggregateRaw,
 	}
 )
 
@@ -256,9 +260,7 @@ func (m *metric) meta(create bool) error {
 		if len(data) != metaSize || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:metaSize-4]) != binary.BigEndian.Uint32(data[metaSize-4:]) {
 			return errors.New("mstore: invalid metadata")
 		}
-		m.interval = int64(binary.BigEndian.Uint16(data[4:]))
-		m.columns = []*Column{}
-		m.size = 1
+		m.interval, m.columns, m.size = int64(binary.BigEndian.Uint16(data[4:])), []*Column{}, 1
 		if m.interval > 120 {
 			m.size = 2
 		}
@@ -272,7 +274,7 @@ func (m *metric) meta(create bool) error {
 			m.size += m.columns[column].Size
 			offset += 38
 		}
-		m.description = string(bytes.Trim(data[metaSize-128-4:metaSize-4], "\x00"))
+		m.description, m.frozen = string(bytes.Trim(data[metaSize-128-4:metaSize-4], "\x00")), true
 		return nil
 	}
 	if create {
@@ -308,17 +310,18 @@ func (m *metric) meta(create bool) error {
 		if os.WriteFile(path, data, 0644) != nil {
 			return errors.New("mstore: invalid metadata")
 		}
+		m.frozen = true
 		return nil
 	}
 	return errors.New("mstore: invalid metric")
 }
 
-func (m *metric) chunk(mtime time.Time, create bool) (data []byte, offset, delta int64, err error) {
-	mtime = mtime.UTC()
-	start := time.Date(mtime.Year(), mtime.Month(), 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(mtime.Year(), mtime.Month()+1, 1, 0, 0, 0, 0, time.UTC)
-	slots := (mtime.Unix() - start.Unix()) / m.interval
-	offset, delta = 4+slots*m.size, mtime.Unix()-start.Unix()-(slots*m.interval)
+func (m *metric) chunk(atime time.Time, create bool) (data []byte, offset, delta int64, err error) {
+	atime = atime.UTC()
+	start := time.Date(atime.Year(), atime.Month(), 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(atime.Year(), atime.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	slots := (atime.Unix() - start.Unix()) / m.interval
+	offset, delta = 4+slots*m.size, atime.Unix()-start.Unix()-(slots*m.interval)
 	data, err = m.store.chunk(filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
 	return
 }
@@ -415,30 +418,36 @@ func (m *metric) get(size int64, data []byte) (value int64) {
 
 // metric public api
 func (m *metric) WithDescription(description string) *metric {
-	m.description = description
+	if !m.frozen {
+		m.description = description
+	}
 	return m
 }
 func (m *metric) WithInterval(interval int64) *metric {
-	m.interval = interval
+	if !m.frozen {
+		m.interval = interval
+	}
 	return m
 }
 func (m *metric) WithColumn(mode int64, size int64, description string) *metric {
-	if mode == ModeGauge || mode == ModeCounter || mode == ModeText || mode == ModeBinary {
-		if size == 0 {
-			size = 2
-			if mode == ModeText || mode == ModeBinary {
-				size = 1
-			}
-		}
-		if size == 1 || size == 2 || size == 4 || size == 8 {
-			if m.columns == nil {
-				m.columns = []*Column{}
-			}
-			if (mode == ModeText || mode == ModeBinary) && size > 2 {
+	if !m.frozen {
+		if mode == ModeGauge || mode == ModeCounter || mode == ModeText || mode == ModeBinary {
+			if size == 0 {
 				size = 2
+				if mode == ModeText || mode == ModeBinary {
+					size = 1
+				}
 			}
-			if len(m.columns) < maxColumns {
-				m.columns = append(m.columns, &Column{Mode: mode, Size: size, Description: description})
+			if size == 1 || size == 2 || size == 4 || size == 8 {
+				if m.columns == nil {
+					m.columns = []*Column{}
+				}
+				if (mode == ModeText || mode == ModeBinary) && size > 2 {
+					size = 2
+				}
+				if len(m.columns) < maxColumns {
+					m.columns = append(m.columns, &Column{Mode: mode, Size: size, Description: description})
+				}
 			}
 		}
 	}
@@ -536,10 +545,14 @@ func (m *metric) Export() (export map[string]any, err error) {
 	length, columns, values := len(j.Slice(metadata["columns"])), [][]int64{}, [][]any{}
 	if length != 0 {
 		for index := 0; index < length; index++ {
-			columns = append(columns, []int64{int64(index), AggregateLast})
+			columns = append(columns, []int64{int64(index), AggregateRaw})
 		}
 		for !start.After(end) {
-			if result, err := m.Get(start, start.Add(time.Duration(m.interval*maxSamples)*time.Second), m.interval, columns, true); err == nil {
+			lend := start.Add(time.Duration(m.interval*maxSamples) * time.Second)
+			if lend.After(end) {
+				lend = end.Add(time.Duration(m.interval) * time.Second)
+			}
+			if result, err := m.Get(start, lend, m.interval, columns, true); err == nil {
 				if rrange := j.Slice(result["range"]); len(rrange) >= 2 {
 					at, step := int64(j.Number(j.SliceItem(rrange, 0))), int64(j.Number(j.SliceItem(rrange, 1)))
 					for index, value := range j.Slice(result["values"]) {
@@ -593,14 +606,16 @@ func (m *metric) Import(input map[string]any) error {
 func (m *metric) Put(values ...any) error {
 	return m.PutAt(time.Now(), values...)
 }
-func (m *metric) PutAt(mtime time.Time, values ...any) error {
-	if time.Since(mtime) < 0 {
+func (m *metric) PutAt(atime time.Time, values ...any) error {
+	m.Lock()
+	defer m.Unlock()
+	if time.Since(atime) < 0 {
 		return errors.New("mstore: metric time in future")
 	}
 	if err := m.meta(true); err != nil {
 		return err
 	}
-	data, offset, delta, err := m.chunk(mtime, true)
+	data, offset, delta, err := m.chunk(atime, true)
 	if err == nil {
 		header, coffset := false, offset+1
 		if m.interval > 120 {
@@ -673,7 +688,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if len(column) > 1 {
 				aggregate = column[1]
 			}
-			if aggregate <= 0 || aggregate > AggregatePercentile {
+			if aggregate <= 0 || aggregate > AggregateRaw {
 				aggregate = AggregateAverage
 			}
 			if len(column) > 2 {
@@ -778,29 +793,36 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 									if values[index].(int64) == math.MinInt64 {
 										values[index] = value
 									}
-								case AggregateLast:
+								case AggregateLast, AggregateRaw:
 									values[index] = value
 								}
 							}
 
 						case ModeCounter:
-							value, delta, pvalue, pdelta := m.get(item[2], data[offset+item[3]:]), int64(0), int64(-1), int64(0)
-							if m.interval > 120 {
-								delta = int64(binary.BigEndian.Uint16(data[offset:]) & 0x7fff)
+							value := m.get(item[2], data[offset+item[3]:])
+							if item[4] == AggregateRaw {
+								values[index] = value
 							} else {
-								delta = int64(data[offset] & 0x7f)
-							}
-							if offset-m.size >= 4 && data[offset-m.size]&0x80 != 0 {
-								pvalue = m.get(item[2], data[offset-m.size+item[3]:])
+								delta, pvalue, pdelta := int64(0), int64(-1), int64(0)
 								if m.interval > 120 {
-									pdelta = int64(binary.BigEndian.Uint16(data[offset-m.size:]) & 0x7fff)
+									delta = int64(binary.BigEndian.Uint16(data[offset:]) & 0x7fff)
 								} else {
-									pdelta = int64(data[offset-m.size] & 0x7f)
+									delta = int64(data[offset] & 0x7f)
 								}
-							}
-							if pvalue >= 0 {
-								msteps[index]++
-								value = (value - pvalue) / int64(m.interval+delta-pdelta)
+								if offset-m.size >= 4 && data[offset-m.size]&0x80 != 0 {
+									pvalue = m.get(item[2], data[offset-m.size+item[3]:])
+									if m.interval > 120 {
+										pdelta = int64(binary.BigEndian.Uint16(data[offset-m.size:]) & 0x7fff)
+									} else {
+										pdelta = int64(data[offset-m.size] & 0x7f)
+									}
+								}
+								if pvalue >= 0 {
+									msteps[index]++
+									value = (value - pvalue) / int64(m.interval+delta-pdelta)
+								} else {
+									value = 0
+								}
 								if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 									if item[5] > 0 {
 										value /= item[5]
@@ -857,7 +879,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 												if length == 0 {
 													values[index] = entry.value
 												}
-											case AggregateLast, AggregateAverage:
+											case AggregateAverage, AggregateLast, AggregateRaw:
 												values[index] = entry.value
 											}
 										}

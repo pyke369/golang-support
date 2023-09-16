@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pyke369/golang-support/jsonrpc"
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/mstore"
 	"github.com/pyke369/golang-support/rcache"
 )
@@ -102,19 +102,19 @@ func main() {
 		bail(err, 4)
 		metadata, err := json.MarshalIndent(export["metadata"], "  ", "  ")
 		bail(err, 5)
-		columns, data, lines := jsonrpc.Slice(jsonrpc.Map(export["metadata"])["columns"]), jsonrpc.Slice(export["values"]), []string{
+		columns, data, lines := j.Slice(j.Map(export["metadata"])["columns"]), j.Slice(export["values"]), []string{
 			`{`,
 			`  "metadata": ` + string(metadata) + `,`,
 			`  "values": [`,
 		}
 		for dindex, value := range data {
-			if values := jsonrpc.Slice(value); len(values) == len(columns)+1 {
-				at := time.Unix(int64(jsonrpc.Number(values[0])), 0).UTC()
+			if values := j.Slice(value); len(values) == len(columns)+1 {
+				at := time.Unix(int64(j.Number(values[0])), 0).UTC()
 				line := fmt.Sprintf(`    ["%s",`, at.Format(time.DateTime))
 				for vindex, value := range values[1:] {
-					switch jsonrpc.String(jsonrpc.Map(columns[vindex])["mode"]) {
+					switch j.String(j.Map(columns[vindex])["mode"]) {
 					case "gauge", "counter":
-						line += fmt.Sprintf(`%v`, value)
+						line += fmt.Sprintf(`%d`, value)
 					case "text", "binary":
 						line += fmt.Sprintf(`"%v"`, value)
 					}
