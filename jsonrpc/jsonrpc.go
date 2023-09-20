@@ -407,6 +407,15 @@ func Bool(input any) bool {
 	if cast, ok := input.(bool); ok {
 		return cast
 	}
+	if value, ok := input.(int); ok {
+		return value > 0
+	}
+	if value, ok := input.(string); ok {
+		if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "y" || value == "yes" || value == "true" {
+			return true
+		}
+		return false
+	}
 	return false
 }
 func String(input any) string {
