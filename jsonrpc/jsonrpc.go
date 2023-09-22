@@ -434,6 +434,9 @@ func Number(input any) float64 {
 		case reflect.Float32, reflect.Float64:
 			return reflect.ValueOf(input).Float()
 		}
+		if value, ok := input.(bool); ok && value {
+			return 1.0
+		}
 	}
 	return 0.0
 }
