@@ -30,12 +30,13 @@ const (
 
 	AggregateMinimum    = 1
 	AggregateMaximum    = 2
-	AggregateAverage    = 3
-	AggregateFirst      = 4
-	AggregateLast       = 5
-	AggregateHistogram  = 6
-	AggregatePercentile = 7
-	AggregateRaw        = 8
+	AggregateSum        = 3
+	AggregateAverage    = 4
+	AggregateFirst      = 5
+	AggregateLast       = 6
+	AggregateHistogram  = 7
+	AggregatePercentile = 8
+	AggregateRaw        = 9
 
 	magic       = 0x53544f52
 	minInterval = 10
@@ -96,6 +97,7 @@ var (
 	AggregateNames = map[int64]string{
 		AggregateMinimum:    "minimum",
 		AggregateMaximum:    "maximum",
+		AggregateSum:        "sum",
 		AggregateAverage:    "average",
 		AggregateFirst:      "first",
 		AggregateLast:       "last",
@@ -108,6 +110,7 @@ var (
 		"minimum":    AggregateMinimum,
 		"max":        AggregateMaximum,
 		"maximum":    AggregateMaximum,
+		"sum":        AggregateSum,
 		"avg":        AggregateAverage,
 		"average":    AggregateAverage,
 		"first":      AggregateFirst,
@@ -688,7 +691,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if len(column) > 1 {
 				aggregate = column[1]
 			}
-			if aggregate <= 0 || aggregate > AggregateRaw {
+			if aggregate < AggregateMinimum || aggregate > AggregateRaw {
 				aggregate = AggregateAverage
 			}
 			if len(column) > 2 {
@@ -783,7 +786,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 									if value > values[index].(int64) {
 										values[index] = value
 									}
-								case AggregateAverage:
+								case AggregateAverage, AggregateSum:
 									if values[index].(int64) == math.MinInt64 {
 										values[index] = value
 									} else {
@@ -838,7 +841,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 										if value > values[index].(int64) {
 											values[index] = value
 										}
-									case AggregateAverage:
+									case AggregateAverage, AggregateSum:
 										if values[index].(int64) == math.MinInt64 {
 											values[index] = value
 										} else {
@@ -875,6 +878,8 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 												if len(entry.value) > length {
 													values[index] = entry.value
 												}
+											case AggregateSum:
+												values[index] = append(values[index].([]byte), entry.value...)
 											case AggregateFirst:
 												if length == 0 {
 													values[index] = entry.value
