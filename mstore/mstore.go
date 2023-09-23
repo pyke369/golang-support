@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	ModeGauge   = 0x47415547
-	ModeCounter = 0x434f554e
-	ModeText    = 0x54455854
-	ModeBinary  = 0x44415441
+	ModeGauge     = 0x47415547
+	ModeCounter   = 0x434f554e
+	ModeIncrement = 0x494e4352
+	ModeText      = 0x54455854
+	ModeBinary    = 0x44415441
 
 	AggregateMinimum    = 1
 	AggregateMaximum    = 2
@@ -38,12 +39,13 @@ const (
 	AggregatePercentile = 8
 	AggregateRaw        = 9
 
+	MaxColumns = 128
+
 	magic       = 0x53544f52
 	minInterval = 10
 	maxInterval = 3600
-	maxColumns  = 64
 	maxSamples  = 1440
-	metaSize    = 8 + maxColumns*38 + 128 + 4
+	metaSize    = 8 + MaxColumns*38 + 128 + 4
 )
 
 type Store struct {
@@ -83,16 +85,18 @@ type entry struct {
 
 var (
 	ModeNames = map[int64]string{
-		ModeGauge:   "gauge",
-		ModeCounter: "counter",
-		ModeText:    "text",
-		ModeBinary:  "binary",
+		ModeGauge:     "gauge",
+		ModeCounter:   "counter",
+		ModeIncrement: "increment",
+		ModeText:      "text",
+		ModeBinary:    "binary",
 	}
 	ModeIndexes = map[string]int64{
-		"gauge":   ModeGauge,
-		"counter": ModeCounter,
-		"text":    ModeText,
-		"binary":  ModeBinary,
+		"gauge":     ModeGauge,
+		"counter":   ModeCounter,
+		"increment": ModeIncrement,
+		"text":      ModeText,
+		"binary":    ModeBinary,
 	}
 	AggregateNames = map[int64]string{
 		AggregateMinimum:    "minimum",
@@ -299,7 +303,7 @@ func (m *metric) meta(create bool) error {
 			m.size = 2
 		}
 		offset := 8
-		for column := 0; column < maxColumns; column++ {
+		for column := 0; column < MaxColumns; column++ {
 			if column < len(m.columns) {
 				binary.BigEndian.PutUint32(data[offset:], uint32(m.columns[column].Mode))
 				binary.BigEndian.PutUint16(data[offset+4:], uint16(m.columns[column].Size))
@@ -434,7 +438,7 @@ func (m *metric) WithInterval(interval int64) *metric {
 }
 func (m *metric) WithColumn(mode int64, size int64, description string) *metric {
 	if !m.frozen {
-		if mode == ModeGauge || mode == ModeCounter || mode == ModeText || mode == ModeBinary {
+		if mode == ModeGauge || mode == ModeCounter || mode == ModeIncrement || mode == ModeText || mode == ModeBinary {
 			if size == 0 {
 				size = 2
 				if mode == ModeText || mode == ModeBinary {
@@ -448,7 +452,7 @@ func (m *metric) WithColumn(mode int64, size int64, description string) *metric 
 				if (mode == ModeText || mode == ModeBinary) && size > 2 {
 					size = 2
 				}
-				if len(m.columns) < maxColumns {
+				if len(m.columns) < MaxColumns {
 					m.columns = append(m.columns, &Column{Mode: mode, Size: size, Description: description})
 				}
 			}
@@ -639,6 +643,9 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 					case ModeGauge, ModeCounter:
 						m.put(int64(j.Number(value)), m.columns[column].Size, data[coffset:])
 
+					case ModeIncrement:
+						m.put(m.get(m.columns[column].Size, data[coffset:])+int64(j.Number(value)), m.columns[column].Size, data[coffset:])
+
 					case ModeText, ModeBinary:
 						var content []byte
 
@@ -758,7 +765,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 								values = append(values, map[string]int{})
 							} else {
 								switch item[1] {
-								case ModeGauge, ModeCounter:
+								case ModeGauge, ModeCounter, ModeIncrement:
 									values = append(values, int64(math.MinInt64))
 								case ModeText, ModeBinary:
 									values = append(values, []byte{})
@@ -768,7 +775,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 					}
 					for index, item := range mapping {
 						switch item[1] {
-						case ModeGauge:
+						case ModeGauge, ModeIncrement:
 							msteps[index]++
 							value := m.get(item[2], data[offset+item[3]:])
 							if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
@@ -905,7 +912,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if step >= steps || !current.Before(end) {
 				if len(values) == len(mapping) {
 					for index, item := range mapping {
-						if item[4] == AggregateAverage && (item[1] == ModeGauge || item[1] == ModeCounter) && msteps[index] > 0 {
+						if item[4] == AggregateAverage && (item[1] == ModeGauge || item[1] == ModeCounter || item[1] == ModeIncrement) && msteps[index] > 0 {
 							if values[index].(int64) == math.MinInt64 {
 								values[index] = int64(0)
 							} else {
@@ -913,7 +920,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 							}
 						}
 						if item[4] == AggregatePercentile {
-							if item[1] == ModeGauge || item[1] == ModeCounter {
+							if item[1] == ModeGauge || item[1] == ModeCounter || item[1] == ModeIncrement {
 								list, total := make([][2]int64, 0, len(values[index].(map[string]int))), 0
 								for key, count := range values[index].(map[string]int) {
 									if value, err := strconv.ParseInt(key, 10, 64); err == nil {

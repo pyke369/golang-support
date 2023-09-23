@@ -113,7 +113,7 @@ func main() {
 				line := fmt.Sprintf(`    ["%s",`, at.Format(time.DateTime))
 				for vindex, value := range values[1:] {
 					switch j.String(j.Map(columns[vindex])["mode"]) {
-					case "gauge", "counter":
+					case "gauge", "counter", "increment":
 						line += fmt.Sprintf(`%d`, value)
 					case "text", "binary":
 						line += fmt.Sprintf(`"%v"`, value)
