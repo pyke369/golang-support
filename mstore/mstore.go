@@ -45,7 +45,8 @@ const (
 	minInterval = 10
 	maxInterval = 3600
 	maxSamples  = 1440
-	metaSize    = 8 + MaxColumns*38 + 128 + 4
+	metaMinSize = 8 + 1*38 + 128 + 4
+	metaMaxSize = 8 + MaxColumns*38 + 128 + 4
 )
 
 type Store struct {
@@ -264,7 +265,8 @@ func (m *metric) meta(create bool) error {
 	}
 	path := filepath.Join(m.path, ".meta")
 	if data, err := os.ReadFile(path); err == nil {
-		if len(data) != metaSize || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:metaSize-4]) != binary.BigEndian.Uint32(data[metaSize-4:]) {
+		size := len(data)
+		if size < metaMinSize || size > metaMaxSize || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:size-4]) != binary.BigEndian.Uint32(data[size-4:]) {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.interval, m.columns, m.size = int64(binary.BigEndian.Uint16(data[4:])), []*Column{}, 1
@@ -281,7 +283,7 @@ func (m *metric) meta(create bool) error {
 			m.size += m.columns[column].Size
 			offset += 38
 		}
-		m.description, m.frozen = string(bytes.Trim(data[metaSize-128-4:metaSize-4], "\x00")), true
+		m.description, m.frozen = string(bytes.Trim(data[size-128-4:size-4], "\x00")), true
 		return nil
 	}
 	if create {
@@ -294,7 +296,7 @@ func (m *metric) meta(create bool) error {
 		}
 		m.interval = int64(math.Round(float64(m.interval)/minInterval)) * minInterval
 		m.interval = int64(math.Max(minInterval, math.Min(float64(m.interval), maxInterval)))
-		data := make([]byte, metaSize)
+		data := make([]byte, metaMaxSize)
 		binary.BigEndian.PutUint32(data[0:], magic)
 		binary.BigEndian.PutUint16(data[4:], uint16(m.interval))
 		binary.BigEndian.PutUint16(data[6:], uint16(len(m.columns)))
@@ -303,18 +305,18 @@ func (m *metric) meta(create bool) error {
 			m.size = 2
 		}
 		offset := 8
-		for column := 0; column < MaxColumns; column++ {
-			if column < len(m.columns) {
-				binary.BigEndian.PutUint32(data[offset:], uint32(m.columns[column].Mode))
-				binary.BigEndian.PutUint16(data[offset+4:], uint16(m.columns[column].Size))
-				copy(data[offset+6:offset+38], m.columns[column].Description)
-				m.size += m.columns[column].Size
-			}
+		for _, column := range m.columns {
+			binary.BigEndian.PutUint32(data[offset:], uint32(column.Mode))
+			binary.BigEndian.PutUint16(data[offset+4:], uint16(column.Size))
+			copy(data[offset+6:offset+38], column.Description)
+			m.size += column.Size
 			offset += 38
 		}
-		copy(data[metaSize-128-4:metaSize-4], m.description)
-		binary.BigEndian.PutUint32(data[metaSize-4:], crc32.ChecksumIEEE(data[:metaSize-4]))
-		if os.WriteFile(path, data, 0644) != nil {
+		copy(data[offset:offset+128], m.description)
+		offset += 128
+		binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(data[:offset]))
+		offset += 4
+		if os.WriteFile(path, data[:offset], 0644) != nil {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.frozen = true
@@ -512,7 +514,11 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
-					start := time.Date(year, time.Month(month)+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(m.interval*maxSamples) * time.Second)
+					start, min := time.Date(year, time.Month(month)+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(m.interval*maxSamples)*time.Second),
+						time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+					if start.Before(min) {
+						start = min
+					}
 					for start.Year() == year && int(start.Month()) == month && last < 0 {
 						if result, err := m.Get(start, start.Add(time.Duration(m.interval*maxSamples)*time.Second), m.interval, [][]int64{[]int64{0, AggregateLast}}); err == nil {
 							if rrange := j.Slice(result["range"]); len(rrange) >= 2 {
