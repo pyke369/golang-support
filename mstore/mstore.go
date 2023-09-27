@@ -120,9 +120,9 @@ var (
 		"average":    AggregateAverage,
 		"first":      AggregateFirst,
 		"last":       AggregateLast,
-		"histo":      AggregateHistogram,
+		"hist":       AggregateHistogram,
 		"histogram":  AggregateHistogram,
-		"percent":    AggregatePercentile,
+		"pct":        AggregatePercentile,
 		"percentile": AggregatePercentile,
 		"raw":        AggregateRaw,
 	}
@@ -784,7 +784,19 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 						case ModeGauge, ModeIncrement:
 							msteps[index]++
 							value := m.get(item[2], data[offset+item[3]:])
-							if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
+							if item[4] == AggregateHistogram {
+								if item[5] > 0 {
+									if item[6] == int64(math.MaxInt64) {
+										value /= item[5]
+									} else if value > 0 {
+										value /= item[5]
+									}
+								}
+								if item[6] != int64(math.MaxInt64) && item[6] > 0 && value < 0 {
+									value /= item[6]
+								}
+								values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+							} else if item[4] == AggregatePercentile {
 								if item[5] > 0 {
 									value /= item[5]
 								}
@@ -839,7 +851,19 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 								} else {
 									value = 0
 								}
-								if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
+								if item[4] == AggregateHistogram {
+									if item[5] > 0 {
+										if item[6] == int64(math.MaxInt64) {
+											value /= item[5]
+										} else if value > 0 {
+											value /= item[5]
+										}
+									}
+									if item[6] != int64(math.MaxInt64) && item[6] > 0 && value < 0 {
+										value /= item[6]
+									}
+									values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+								} else if item[4] == AggregatePercentile {
 									if item[5] > 0 {
 										value /= item[5]
 									}

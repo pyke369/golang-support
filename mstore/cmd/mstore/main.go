@@ -24,7 +24,7 @@ func usage(status int) {
 		"import <store> <metric> <data>\n"+
 		"  import metric metadata and values\n\n"+
 		"query <store> <metric> <start|-> <end|-> <interval|-> <aggregate>[,<aggregate>...]\n"+
-		"  query metric aggregates (each <aggregate> in the <index>@<mode>[@<min|divider>[@<max|percentile>]] format)\n"+
+		"  query metric aggregates (each <aggregate> in the <index>@<mode>[@<min|divider>[@<max|neg-divider|percentile>]] format)\n"+
 		"\n")
 	os.Exit(status)
 }
