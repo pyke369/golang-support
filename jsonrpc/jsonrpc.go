@@ -523,9 +523,17 @@ func NumberSliceItem(input []float64, index int) float64 {
 	return input[index]
 }
 
-func Map(input any) map[string]any {
+func Map(input any) (output map[string]any) {
 	if cast, ok := input.(map[string]any); ok {
 		return cast
+	}
+	if value := reflect.ValueOf(input); value.Kind() == reflect.Map {
+		output = make(map[string]any, value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			output[iterator.Key().String()] = iterator.Value().Interface()
+		}
+		return
 	}
 	return map[string]any{}
 }
