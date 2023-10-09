@@ -23,6 +23,8 @@ func usage(status int) {
 		"  export metric metadata and values\n\n"+
 		"import <store> <metric> <data>\n"+
 		"  import metric metadata and values\n\n"+
+		"extend <store> <metric> <mode>[@<size>[@<description>]][,...]\n"+
+		"  add new column(s) to existing metric (preserving values)\n\n"+
 		"query <store> <metric> <start|-> <end|-> <interval|-> <aggregate>[,<aggregate>...]\n"+
 		"  query metric aggregates (each <aggregate> in the <index>@<mode>[@<min|divider>[@<max|neg-divider|percentile>]] format)\n"+
 		"\n")
@@ -145,6 +147,41 @@ func main() {
 		metrics, err := mstore.NewStore(os.Args[2])
 		bail(err, 5)
 		bail(metrics.Metric(os.Args[3]).Import(data), 6)
+
+	case "extend":
+		if len(os.Args) < 5 {
+			usage(1)
+		}
+		metrics, err := mstore.NewStore(os.Args[2])
+		bail(err, 3)
+		export, err := metrics.Metric(os.Args[3]).Export()
+		bail(err, 4)
+		columns := j.Slice(j.Map(export["metadata"])["columns"])
+		for _, value := range strings.Split(os.Args[4], ",") {
+			value = strings.TrimSpace(value)
+			parts := strings.Split(value, "@")
+			parts[0] = strings.ToLower(strings.TrimSpace(parts[0]))
+			if mstore.ModeIndexes[parts[0]] == 0 {
+				bail(fmt.Errorf("invalid column type \"%s\"", parts[0]), 5)
+			}
+			size, description := 0, ""
+			if len(parts) > 1 {
+				size, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+				if size != 1 && size != 2 && size != 4 && size != 8 {
+					bail(fmt.Errorf("invalid column size %d", size), 5)
+				}
+				if len(parts) > 2 {
+					description = strings.TrimSpace(parts[2])
+				}
+			}
+			columns = append(columns, map[string]any{"mode": parts[0], "size": size, "description": description})
+		}
+		j.Map(export["metadata"])["columns"] = columns
+		now := time.Now().UnixNano() / int64(time.Millisecond)
+		target := fmt.Sprintf("%s_%d", os.Args[3], now)
+		bail(metrics.Metric(target+"_ext").Import(export), 6)
+		bail(metrics.Rename(os.Args[3], target), 7)
+		bail(metrics.Rename(target+"_ext", os.Args[3]), 8)
 
 	case "query":
 		if len(os.Args) < 8 {

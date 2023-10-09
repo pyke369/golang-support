@@ -232,6 +232,24 @@ func (s *Store) List(prefix string) (names []string) {
 	})
 	return
 }
+func (s *Store) Rename(from, to string) error {
+	from = filepath.Join(s.prefix, strings.ReplaceAll(from, ".", string(filepath.Separator)))
+	if info, err := os.Stat(from); err != nil || !info.IsDir() {
+		return errors.New("mstore: invalid source metric")
+	}
+	to = filepath.Join(s.prefix, strings.ReplaceAll(to, ".", string(filepath.Separator)))
+	if _, err := os.Stat(to); err == nil {
+		return errors.New("mstore: existing destination metric")
+	}
+	os.MkdirAll(filepath.Dir(to), 0755)
+	return os.Rename(from, to)
+}
+func (s *Store) Trim(name string, start, end time.Time) error {
+	return nil
+}
+func (s *Store) Delete(name string) error {
+	return nil
+}
 func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]int64) (result map[string]any) {
 	result = map[string]any{}
 	if count := len(names); count > 0 {
@@ -605,11 +623,17 @@ func (m *metric) Import(input map[string]any) error {
 		}
 	}
 	for _, value := range j.Slice(input["values"]) {
-		if entry := j.Slice(value); len(entry) == len(columns)+1 {
-			if at, err := time.Parse(time.DateTime, j.String(entry[0])); err == nil {
-				if err := m.PutAt(at, entry[1:]...); err != nil {
+		if entry := j.Slice(value); len(entry) >= 2 {
+			at, err := time.Parse(time.DateTime, j.String(entry[0]))
+			if err != nil {
+				value := int64(j.Number(entry[0]))
+				if value == 0 {
 					return err
 				}
+				at = time.Unix(value, 0).UTC()
+			}
+			if err := m.PutAt(at, entry[1:]...); err != nil {
+				return err
 			}
 		}
 	}
