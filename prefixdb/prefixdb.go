@@ -800,4 +800,13 @@ func (d *PrefixDB) Lookup(value string, output map[string]any) {
 		}
 	}
 	d.RUnlock()
+	if country, ok := output["country_code"].(string); ok && country != "" {
+		if value, ok := output["latitude"].(float64); ok && value == 0.0 {
+			if value, ok := output["longitude"].(float64); ok && value == 0.0 {
+				if position, ok := capitals[country]; ok {
+					output["latitude"], output["longitude"] = position[0], position[1]
+				}
+			}
+		}
+	}
 }
