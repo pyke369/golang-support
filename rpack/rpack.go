@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math/rand"
 	"mime"
 	"net/http"
 	"os"
@@ -132,7 +132,7 @@ func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
 		}
 		return nil
 	})
-	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start))
+	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start).Truncate(time.Millisecond))
 	if handle, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
 		random := make([]byte, 64)
 		rand.Read(random)

@@ -25,21 +25,21 @@ type _GPIO_CHIPINFO struct {
 	lines uint32
 }
 
-type _GPIO_LINEATTRIBUTE struct {
-	id      uint32
-	padding uint32
-	values  uint64
-}
-
-type _GPIO_LINEINFO struct {
-	name      [32]byte
-	consumer  [32]byte
-	offset    uint32
-	num_attrs uint32
-	flags     uint64
-	attrs     [10]_GPIO_LINEATTRIBUTE
-	padding   [4]uint32
-}
+// type _GPIO_LINEATTRIBUTE struct {
+// 	id      uint32
+// 	padding uint32
+// 	values  uint64
+// }
+//
+// type _GPIO_LINEINFO struct {
+// 	name      [32]byte
+// 	consumer  [32]byte
+// 	offset    uint32
+// 	num_attrs uint32
+// 	flags     uint64
+// 	attrs     [10]_GPIO_LINEATTRIBUTE
+// 	padding   [4]uint32
+// }
 
 type GPIO struct {
 	handle uintptr
