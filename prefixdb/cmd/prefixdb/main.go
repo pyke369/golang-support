@@ -459,6 +459,7 @@ func server() {
 	}
 	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("Access-Control-Allow-Origin", "*")
 		remote := request.RemoteAddr
 		if value, err := netip.ParseAddrPort(remote); err == nil {
 			remote = value.Addr().String()
