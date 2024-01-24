@@ -189,12 +189,12 @@ func mkcity() {
 			}
 			if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 				last = now
-				fmt.Fprintf(os.Stderr, "loading locations [%s] %d", os.Args[3], len(locations))
+				fmt.Fprintf(os.Stderr, "\rloading locations [%s] %d", os.Args[3], len(locations))
 			}
 		}
 		handle.Close()
 		time.Sleep(time.Millisecond)
-		fmt.Fprintf(os.Stderr, "loaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
+		fmt.Fprintf(os.Stderr, "\rloaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
 	}
 
 	clusters := [][]string{
@@ -211,7 +211,7 @@ func mkcity() {
 				if line, err := reader.ReadString('\n'); err != nil {
 					break
 				} else {
-					if fields := strings.Split(strings.TrimSpace(line), ","); len(fields) == 10 {
+					if fields := strings.Split(strings.TrimSpace(line), ","); len(fields) >= 10 {
 						id := 0
 						if id, _ = strconv.Atoi(fields[1]); id == 0 {
 							id, _ = strconv.Atoi(fields[2])
