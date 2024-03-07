@@ -11,7 +11,7 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
-type CERTIFICATE struct {
+type certificate struct {
 	predicate   string
 	public      string
 	private     string
@@ -21,23 +21,20 @@ type CERTIFICATE struct {
 
 type DYNACERT struct {
 	sync.RWMutex
-	certificates []*CERTIFICATE
+	certificates []*certificate
 	last         time.Time
 }
 
 func (d *DYNACERT) Add(predicate, public, private string) {
 	d.Lock()
-	if d.certificates == nil {
-		d.certificates = []*CERTIFICATE{}
-	}
-	d.certificates = append(d.certificates, &CERTIFICATE{predicate: strings.TrimSpace(predicate), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
+	d.certificates = append(d.certificates, &certificate{predicate: strings.TrimSpace(predicate), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	d.last = time.Now().Add(-time.Minute)
 	d.Unlock()
 }
 
 func (d *DYNACERT) Clear() {
 	d.Lock()
-	d.certificates = []*CERTIFICATE{}
+	d.certificates = nil
 	d.Unlock()
 }
 
@@ -58,8 +55,7 @@ func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certif
 				if info, err = os.Stat(certificate.public); err == nil {
 					if info.ModTime().Sub(certificate.modified) != 0 {
 						if value, err := tls.LoadX509KeyPair(certificate.public, certificate.private); err == nil {
-							certificate.certificate = &value
-							certificate.modified = info.ModTime()
+							certificate.certificate, certificate.modified = &value, info.ModTime()
 						}
 					}
 				}
@@ -70,7 +66,7 @@ func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certif
 	d.RLock()
 	defer d.RUnlock()
 	if len(d.certificates) == 0 {
-		return nil, errors.New(`dynacert: no loaded certificate`)
+		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
 	if client != nil && client.ServerName != "" {
 		for _, certificate := range d.certificates {
@@ -89,25 +85,12 @@ func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certif
 	return nil, errors.New(`dynacert: no matching certificate`)
 }
 
-func IntermediateTLSConfig(selector func(*tls.ClientHelloInfo) (*tls.Certificate, error), input ...*tls.Config) (output *tls.Config) {
+func (d *DYNACERT) TLSConfig(input ...*tls.Config) (output *tls.Config) {
 	if len(input) > 0 && input[0] != nil {
 		output = input[0].Clone()
 	} else {
 		output = &tls.Config{}
 	}
-	output.MinVersion = tls.VersionTLS12
-	output.CipherSuites = []uint16{
-		// TLS 1.3
-		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-		// TLS 1.2
-		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-	}
-	if selector != nil {
-		output.GetCertificate = selector
-	}
+	output.MinVersion, output.GetCertificate = tls.VersionTLS13, d.GetCertificate
 	return
 }
