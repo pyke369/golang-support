@@ -3,6 +3,7 @@ package dynacert
 import (
 	"crypto/tls"
 	"errors"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ func (d *DYNACERT) Count() int {
 	return len(d.certificates)
 }
 
-func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
+func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
 	if time.Since(d.last) >= 15*time.Second {
 		d.Lock()
 		if time.Since(d.last) >= 15*time.Second {
@@ -68,10 +69,14 @@ func (d *DYNACERT) GetCertificate(client *tls.ClientHelloInfo) (cert *tls.Certif
 	if len(d.certificates) == 0 {
 		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
-	if client != nil && client.ServerName != "" {
+	if hello != nil && hello.ServerName != "" {
+		name := hello.ServerName
+		if value, _, err := net.SplitHostPort(name); err == nil {
+			name = value
+		}
 		for _, certificate := range d.certificates {
 			if certificate.predicate != "" && certificate.predicate != "*" && certificate.certificate != nil {
-				if matcher := rcache.Get(certificate.predicate); matcher != nil && matcher.MatchString(client.ServerName) {
+				if matcher := rcache.Get(certificate.predicate); matcher != nil && matcher.MatchString(name) {
 					return certificate.certificate, nil
 				}
 			}
