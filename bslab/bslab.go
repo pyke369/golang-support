@@ -14,7 +14,7 @@ var (
 func init() {
 	slabs[0] = &slab{}
 	for size := uint(8); size <= 26; size++ {
-		slabs[1<<size] = &slab{queue: make(chan []byte, 1024)}
+		slabs[1<<size] = &slab{queue: make(chan []byte, 64<<10)}
 	}
 }
 
