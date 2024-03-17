@@ -30,18 +30,19 @@ import (
 )
 
 const (
-	WEBSOCKET_UUID            = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	WEBSOCKET_VERSION         = "13"
-	WEBSOCKET_FIN             = 0x80
-	WEBSOCKET_MASK            = 0x80
-	WEBSOCKET_OPCODE_TEXT     = 1
-	WEBSOCKET_OPCODE_BLOB     = 2
-	WEBSOCKET_OPCODE_CLOSE    = 8
-	WEBSOCKET_OPCODE_PING     = 9
-	WEBSOCKET_OPCODE_PONG     = 10
-	WEBSOCKET_ERROR_PROTOCOL  = 1002
-	WEBSOCKET_ERROR_INVALID   = 1007
-	WEBSOCKET_ERROR_OVERSIZED = 1009
+	UWS_UUID            = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	UWS_VERSION         = "13"
+	UWS_FIN             = 0x80
+	UWS_MASK            = 0x80
+	UWS_OPCODE_TEXT     = 1
+	UWS_OPCODE_BLOB     = 2
+	UWS_OPCODE_CLOSE    = 8
+	UWS_OPCODE_PING     = 9
+	UWS_OPCODE_PONG     = 10
+	UWS_ERROR_PROTOCOL  = 1002
+	UWS_ERROR_ABNORMAL  = 1006
+	UWS_ERROR_INVALID   = 1007
+	UWS_ERROR_OVERSIZED = 1009
 )
 
 type Config struct {
@@ -54,14 +55,14 @@ type Config struct {
 	FragmentSize    int
 	MessageSize     int
 	ConnectTimeout  time.Duration
-	ProbeTimeout    int64
-	InactiveTimeout int64
-	WriteTimeout    int64
+	ProbeTimeout    time.Duration
+	InactiveTimeout time.Duration
+	WriteTimeout    time.Duration
 	WriteBufferSize int
 	ReadBufferSize  int
 	OpenHandler     func(*Socket)
-	MessageHandler  func(*Socket, int, []byte) bool
 	CloseHandler    func(*Socket, int)
+	MessageHandler  func(*Socket, int, []byte) bool
 	Context         any
 }
 
@@ -70,22 +71,22 @@ type Socket struct {
 	Context                               any
 	config                                *Config
 	conn                                  net.Conn
-	connected, client, closing            bool
-	wlock, dlock, clock                   sync.Mutex
+	connected, client, closing, errored   bool
+	wlock, slock, clock                   sync.Mutex
 	slast, rlast                          int64
 }
 
 var (
 	proxy func(*url.URL) (*url.URL, error)
-	now   int64
+	gnow  int64
 )
 
 func init() {
 	proxy = httpproxy.FromEnvironment().ProxyFunc()
-	atomic.StoreInt64(&now, time.Now().UnixNano())
+	atomic.StoreInt64(&gnow, time.Now().UnixNano())
 	go func() {
 		for {
-			atomic.StoreInt64(&now, time.Now().UnixNano())
+			atomic.StoreInt64(&gnow, time.Now().UnixNano())
 			time.Sleep(250 * time.Millisecond)
 		}
 	}()
@@ -102,9 +103,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 1<<20)
 	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
 	config.ConnectTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
-	config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
+	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	if config.ReadBufferSize != 0 {
 		config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 32<<20)
 	}
@@ -119,7 +120,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
 			request.Header.Add("Upgrade", "websocket")
-			request.Header.Add("Sec-WebSocket-Version", WEBSOCKET_VERSION)
+			request.Header.Add("Sec-WebSocket-Version", UWS_VERSION)
 			request.Header.Add("Sec-WebSocket-Key", nonce)
 			if len(config.Protocols) > 0 {
 				request.Header.Add("Sec-WebSocket-Protocol", strings.Join(config.Protocols, ", "))
@@ -157,7 +158,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					conn = tls.Client(conn, config.TLSConfig)
 					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 						conn.Close()
-						return nil, fmt.Errorf(`websocket: %v`, err)
+						return nil, fmt.Errorf(`uws: %s`, err.Error())
 					}
 				}
 				if proxy != nil {
@@ -182,18 +183,18 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 					if _, err := conn.Write([]byte(payload)); err != nil {
 						conn.Close()
-						return nil, fmt.Errorf(`websocket: %v`, err)
+						return nil, fmt.Errorf(`uws: %s`, err.Error())
 					}
 					conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 					if response, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
 						response.Body.Close()
 						if response.StatusCode != 200 {
 							conn.Close()
-							return nil, fmt.Errorf(`websocket: proxy connection error`)
+							return nil, fmt.Errorf(`uws: proxy connection error (http status %d)`, response.StatusCode)
 						}
 					} else {
 						conn.Close()
-						return nil, fmt.Errorf(`websocket: %v`, err)
+						return nil, fmt.Errorf(`uws: %s`, err.Error())
 					}
 
 					if url.Scheme == "https" {
@@ -204,7 +205,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						conn = tls.Client(conn, config.TLSConfig)
 						if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 							conn.Close()
-							return nil, fmt.Errorf(`websocket: %v`, err)
+							return nil, fmt.Errorf(`uws: %s`, err.Error())
 						}
 					}
 				}
@@ -212,12 +213,12 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 				if err := request.Write(conn); err != nil {
 					conn.Close()
-					return nil, fmt.Errorf(`websocket: %v`, err)
+					return nil, fmt.Errorf(`uws: %s`, err.Error())
 				}
 				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
 					skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
-					ckey, path := sha1.Sum([]byte(nonce+WEBSOCKET_UUID)), url.Path
+					ckey, path := sha1.Sum([]byte(nonce+UWS_UUID)), url.Path
 					if path == "" {
 						path = "/"
 					}
@@ -225,32 +226,41 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) {
 						response.Body.Close()
 						conn.Close()
-						return nil, fmt.Errorf(`websocket: invalid protocol upgrade (status %d)`, response.StatusCode)
+						return nil, fmt.Errorf(`uws: invalid protocol upgrade (http status %d)`, response.StatusCode)
 					}
 					protocol := response.Header.Get("Sec-WebSocket-Protocol")
 					if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
 						response.Body.Close()
 						conn.Close()
-						return nil, errors.New(`websocket: could not negotiate sub-protocol with server`)
+						return nil, errors.New(`uws: could not negotiate sub-protocol with server`)
 					}
-					ws = &Socket{Path: path, Remote: conn.RemoteAddr().String(), Origin: origin, Protocol: protocol, Context: config.Context,
-						config: config, client: true, conn: conn, connected: true}
+					ws = &Socket{
+						Path:      path,
+						Origin:    origin,
+						Remote:    conn.RemoteAddr().String(),
+						Protocol:  protocol,
+						Context:   config.Context,
+						config:    config,
+						conn:      conn,
+						client:    true,
+						connected: true,
+					}
 					go ws.receive(nil)
 					if config.OpenHandler != nil {
-						config.OpenHandler(ws)
+						go config.OpenHandler(ws)
 					}
 				} else {
 					conn.Close()
 					return nil, err
 				}
 			} else {
-				return nil, fmt.Errorf(`websocket: %v`, err)
+				return nil, fmt.Errorf(`uws: %s`, err.Error())
 			}
 		} else {
-			return nil, fmt.Errorf(`websocket: %v`, err)
+			return nil, fmt.Errorf(`uws: %s`, err.Error())
 		}
 	} else {
-		return nil, fmt.Errorf(`websocket: %v`, err)
+		return nil, fmt.Errorf(`uws: %s`, err.Error())
 	}
 	return
 }
@@ -263,8 +273,8 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			return
 		}
 		ckey := request.Header.Get("Sec-WebSocket-Key")
-		if request.Header.Get("Sec-WebSocket-Version") != WEBSOCKET_VERSION || ckey == "" {
-			response.Header().Set("Sec-WebSocket-Version", WEBSOCKET_VERSION)
+		if request.Header.Get("Sec-WebSocket-Version") != UWS_VERSION || ckey == "" {
+			response.Header().Set("Sec-WebSocket-Version", UWS_VERSION)
 			response.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -294,7 +304,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				return
 			}
 		}
-		skey := sha1.Sum([]byte(ckey + WEBSOCKET_UUID))
+		skey := sha1.Sum([]byte(ckey + UWS_UUID))
 		response.Header().Set("Connection", "Upgrade")
 		response.Header().Set("Upgrade", "websocket")
 		response.Header().Set("Sec-WebSocket-Accept", base64.StdEncoding.EncodeToString(skey[:]))
@@ -307,9 +317,9 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			config.ReadSize = cval(config.ReadSize, 4<<10, 4<<10, 256<<10)
 			config.FragmentSize = cval(config.FragmentSize, 16<<10, 4<<10, 1<<20)
 			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
-			config.ProbeTimeout = int64(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-			config.InactiveTimeout = int64(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+int64(time.Second)), int(5*config.ProbeTimeout)))
-			config.WriteTimeout = int64(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
+			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			if config.ReadBufferSize != 0 {
 				config.ReadBufferSize = cval(config.ReadBufferSize, 4<<10, 4<<10, 32<<20)
 			}
@@ -328,11 +338,20 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			if strings.ToLower(origin) == "null" {
 				origin = ""
 			}
-			ws = &Socket{Path: request.URL.Path, Origin: origin, Agent: request.Header.Get("User-Agent"),
-				Remote: conn.RemoteAddr().String(), Protocol: protocol, Context: config.Context, config: config, conn: conn, connected: true}
+			ws = &Socket{
+				Path:      request.URL.Path,
+				Origin:    origin,
+				Agent:     request.Header.Get("User-Agent"),
+				Remote:    conn.RemoteAddr().String(),
+				Protocol:  protocol,
+				Context:   config.Context,
+				config:    config,
+				conn:      conn,
+				connected: true,
+			}
 			go ws.receive(reader)
 			if config.OpenHandler != nil {
-				config.OpenHandler(ws)
+				go config.OpenHandler(ws)
 			}
 		}
 		return
@@ -340,21 +359,13 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 	return
 }
 
-func (s *Socket) IsClient() bool {
-	return s.client
-}
-
-func (s *Socket) IsConnected() bool {
-	return s.connected
-}
-
 func (s *Socket) Write(mode byte, data []byte) (err error) {
 	var mask []byte
 
 	length := len(data)
-	if (mode == WEBSOCKET_OPCODE_TEXT || mode == WEBSOCKET_OPCODE_BLOB) && length > 0 {
-		s.dlock.Lock()
-		defer s.dlock.Unlock()
+	if (mode == UWS_OPCODE_TEXT || mode == UWS_OPCODE_BLOB) && length > 0 {
+		s.wlock.Lock()
+		defer s.wlock.Unlock()
 		frames := length / s.config.FragmentSize
 		if length%s.config.FragmentSize != 0 {
 			frames++
@@ -362,7 +373,7 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 		for frame := 1; frame <= frames; frame++ {
 			fin, offset, size := byte(0), (frame-1)*s.config.FragmentSize, s.config.FragmentSize
 			if frame == frames {
-				fin, size = WEBSOCKET_FIN, length-offset
+				fin, size = UWS_FIN, length-offset
 			}
 			if frame > 1 {
 				mode = 0
@@ -380,7 +391,7 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 				binary.BigEndian.PutUint64(payload[1], uint64(size))
 			}
 			if s.client {
-				payload[0][1] |= WEBSOCKET_MASK
+				payload[0][1] |= UWS_MASK
 				mask = rmask()
 				payload = append(payload, mask)
 				xor(mask, data[offset:offset+size])
@@ -400,58 +411,61 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 
 func (s *Socket) Close(code int) {
 	s.clock.Lock()
-	if !s.closing && s.connected {
+	if !s.closing {
 		s.closing = true
 		s.clock.Unlock()
 		if s.config != nil && s.config.CloseHandler != nil {
-			s.config.CloseHandler(s, code)
+			go s.config.CloseHandler(s, code)
 		}
-		payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_CLOSE, 0}}
-		if s.client {
-			payload[0][1] |= WEBSOCKET_MASK
-			payload = append(payload, rmask())
-		}
-		if code != 0 {
-			payload[0][1] |= 2
-			payload = append(payload, []byte{0, 0})
-			binary.BigEndian.PutUint16(payload[len(payload)-1], uint16(code))
+		if !s.errored {
+			payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_CLOSE, 0}}
 			if s.client {
-				xor(payload[1], payload[2])
+				payload[0][1] |= UWS_MASK
+				payload = append(payload, rmask())
 			}
+			if code != 0 {
+				payload[0][1] |= 2
+				payload = append(payload, []byte{0, 0})
+				binary.BigEndian.PutUint16(payload[len(payload)-1], uint16(code))
+				if s.client {
+					xor(payload[1], payload[2])
+				}
+			}
+			s.send(payload)
 		}
-		s.send(payload)
 		s.connected = false
 		s.conn.Close()
-	} else {
-		s.clock.Unlock()
+		return
 	}
+	s.clock.Unlock()
 }
 
 func (s *Socket) send(payload net.Buffers) (err error) {
-	if !s.connected {
-		return errors.New(`websocket: not connected`)
+	s.slock.Lock()
+	defer s.slock.Unlock()
+	if !s.connected || s.errored {
+		return errors.New(`uws: not connected`)
 	}
-	s.wlock.Lock()
-	lnow := atomic.LoadInt64(&now)
-	if time.Duration(lnow-s.slast) >= time.Second {
-		s.slast = lnow
-		s.conn.SetWriteDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
+	now := atomic.LoadInt64(&gnow)
+	if time.Duration(now-s.slast) >= time.Second {
+		s.slast = now
+		s.conn.SetWriteDeadline(time.UnixMicro(now / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
 	}
 	if _, err = payload.WriteTo(s.conn); err != nil {
-		s.wlock.Unlock()
-		s.Close(0)
-	} else {
-		s.wlock.Unlock()
+		s.errored = true
+		s.Close(UWS_ERROR_ABNORMAL)
 	}
 	return
 }
 
 func (s *Socket) receive(buffered io.Reader) {
-	var data, control []byte
-	var err error
+	var (
+		data, control []byte
+		err           error
+	)
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
-	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&now), 0, byte(0), 0, 0, false
+	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
 	buffer, roffset, woffset, read := bslab.Get(s.config.ReadSize, nil), 0, 0, 0
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
@@ -465,10 +479,10 @@ close:
 			roffset = 0
 		}
 
-		lnow := atomic.LoadInt64(&now)
-		if time.Duration(lnow-s.rlast) >= time.Second {
-			s.rlast = lnow
-			s.conn.SetReadDeadline(time.UnixMicro(lnow / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout)))
+		now := atomic.LoadInt64(&gnow)
+		if time.Duration(now-s.rlast) >= time.Second {
+			s.rlast = now
+			s.conn.SetReadDeadline(time.UnixMicro(now / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout)))
 		}
 		if buffered != nil {
 			read, err = buffered.Read(buffer[woffset:])
@@ -478,23 +492,23 @@ close:
 		}
 
 		if read > 0 {
-			seen = atomic.LoadInt64(&now)
+			seen = atomic.LoadInt64(&gnow)
 			woffset += read
 			for {
 				if size < 0 {
 					if woffset-roffset >= 2 {
 						fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
-						if (s.client && (buffer[roffset+1]&WEBSOCKET_MASK) != 0) || (!s.client && (buffer[roffset+1]&WEBSOCKET_MASK) == 0) ||
-							(fin == 0 && opcode >= WEBSOCKET_OPCODE_CLOSE && opcode <= WEBSOCKET_OPCODE_PONG) ||
-							(opcode != 0 && opcode != WEBSOCKET_OPCODE_TEXT && opcode != WEBSOCKET_OPCODE_BLOB && (opcode < WEBSOCKET_OPCODE_CLOSE || opcode > WEBSOCKET_OPCODE_PONG)) {
-							code = WEBSOCKET_ERROR_PROTOCOL
+						if (s.client && (buffer[roffset+1]&UWS_MASK) != 0) || (!s.client && (buffer[roffset+1]&UWS_MASK) == 0) ||
+							(fin == 0 && opcode >= UWS_OPCODE_CLOSE && opcode <= UWS_OPCODE_PONG) ||
+							(opcode != 0 && opcode != UWS_OPCODE_TEXT && opcode != UWS_OPCODE_BLOB && (opcode < UWS_OPCODE_CLOSE || opcode > UWS_OPCODE_PONG)) {
+							code = UWS_ERROR_PROTOCOL
 							break close
 						}
 						if !s.client && woffset-roffset < 2+smask {
 							size = -1
 							break
 						}
-						if opcode == WEBSOCKET_OPCODE_TEXT || opcode == WEBSOCKET_OPCODE_BLOB {
+						if opcode == UWS_OPCODE_TEXT || opcode == UWS_OPCODE_BLOB {
 							dmode = opcode
 						}
 						if dmode != 0 && fin == 1 {
@@ -526,8 +540,8 @@ close:
 							}
 							roffset += 2 + smask
 						}
-						if (opcode <= WEBSOCKET_OPCODE_BLOB && size == 0) || (opcode > WEBSOCKET_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
-							code = WEBSOCKET_ERROR_OVERSIZED
+						if (opcode <= UWS_OPCODE_BLOB && size == 0) || (opcode > UWS_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
+							code = UWS_ERROR_OVERSIZED
 							break close
 						}
 						if dmode != 0 {
@@ -545,7 +559,7 @@ close:
 						}
 						max := int(math.Min(float64(woffset-roffset), float64(size)))
 						if len(data)+max > s.config.MessageSize {
-							code = WEBSOCKET_ERROR_OVERSIZED
+							code = UWS_ERROR_OVERSIZED
 							break close
 						}
 						data = append(data, buffer[roffset:roffset+max]...)
@@ -557,8 +571,8 @@ close:
 							}
 							doffset = dsize
 							if dlast {
-								if dmode == WEBSOCKET_OPCODE_TEXT && !utf8.Valid(data) {
-									code = WEBSOCKET_ERROR_INVALID
+								if dmode == UWS_OPCODE_TEXT && !utf8.Valid(data) {
+									code = UWS_ERROR_INVALID
 									break close
 								}
 								keep := false
@@ -585,15 +599,15 @@ close:
 								xor(mask, control)
 							}
 							switch opcode {
-							case WEBSOCKET_OPCODE_CLOSE:
+							case UWS_OPCODE_CLOSE:
 								if len(control) >= 2 {
 									code = int(binary.BigEndian.Uint16(control))
 								}
 								break close
-							case WEBSOCKET_OPCODE_PING:
-								payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_PONG, byte(len(control))}}
+							case UWS_OPCODE_PING:
+								payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_PONG, byte(len(control))}}
 								if s.client {
-									payload[0][1] |= WEBSOCKET_MASK
+									payload[0][1] |= UWS_MASK
 									payload = append(payload, rmask())
 									xor(payload[1], control)
 								}
@@ -617,9 +631,9 @@ close:
 
 		if err != nil {
 			if err, ok := err.(net.Error); ok && err.Timeout() {
-				payload := net.Buffers{[]byte{WEBSOCKET_FIN | WEBSOCKET_OPCODE_PING, 0}}
+				payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_PING, 0}}
 				if s.client {
-					payload[0][1] |= WEBSOCKET_MASK
+					payload[0][1] |= UWS_MASK
 					payload = append(payload, rmask())
 				}
 				if err := s.send(payload); err != nil {
@@ -632,7 +646,7 @@ close:
 			break close
 		}
 
-		if atomic.LoadInt64(&now)-seen >= s.config.InactiveTimeout {
+		if atomic.LoadInt64(&gnow)-seen >= int64(s.config.InactiveTimeout) {
 			break close
 		}
 	}
