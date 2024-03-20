@@ -30,12 +30,11 @@ type SSHCredentials struct {
 	Key      string
 }
 type SSHOptions struct {
-	Mode           string
-	PseudoTerminal bool
-	SubSystem      string
-	Marker         string
-	Filter         string
-	Trace          bool
+	Mode      string
+	SubSystem string
+	Marker    string
+	Filter    string
+	Trace     bool
 }
 type sshConnection struct {
 	sync.Mutex
@@ -105,36 +104,37 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		return nil, fmt.Errorf("ssh: invalid credentials")
 	}
 	if options == nil {
-		options = &SSHOptions{Mode: TEXT, PseudoTerminal: true, Marker: `^[^\$]*\$`}
+		options = &SSHOptions{Mode: TEXT}
 	}
-	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
-		return nil, fmt.Errorf("ssh: invalid mode")
+	if options.SubSystem != "" && options.SubSystem != "netconf" {
+		return nil, fmt.Errorf("ssh: invalid subsystem")
 	}
 	if _, err := netip.ParseAddrPort(remote); err != nil {
-		if options.Mode == XML {
+		if options.SubSystem == "netconf" {
 			remote += ":830"
 		} else {
 			remote += ":22"
 		}
 	}
-	switch options.Mode {
-	case JSON:
+	switch options.SubSystem {
+	case "":
 		if options.Marker == "" {
-			options.Marker = `^\{(master|backup|linecard|primary|secondary)(:(node)?\d+)?\}`
+			options.Marker = `^[^\$]*[\$]`
 		}
-		if options.Filter == "" {
-			options.Filter = `^(([^@]+@)?[^>]+>|$)`
+		if options.Mode == XML && options.Filter == "" {
+			options.Filter = `^([^<]|$)`
 		}
-	case XML:
+	case "netconf":
+		options.Mode = XML
 		if options.Marker == "" {
 			options.Marker = `^\]\]>\]\]>`
-		}
-		if options.Filter == "" {
-			options.Filter = `^$`
 		}
 	}
 	if options.Marker == "" {
 		return nil, fmt.Errorf("ssh: invalid marker")
+	}
+	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
+		return nil, fmt.Errorf("ssh: invalid mode")
 	}
 
 	key := fmt.Sprintf("%s%v%v", remote, credentials, options)
@@ -189,7 +189,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	)
 
 	if len(cache) > 0 && cache[0] {
-		ckey = fmt.Sprintf("/tmp/_%x.json", md5.Sum([]byte(fmt.Sprintf("%s%v%s", t.remote, t.options, command))))
+		ckey = fmt.Sprintf("/tmp/_%x.json", md5.Sum([]byte(t.remote+t.options.Mode+t.options.SubSystem+t.options.Marker+t.options.Filter+command)))
 		if content, err := os.ReadFile(ckey); err == nil {
 			if json.Unmarshal(content, &result) == nil {
 				return result, nil
@@ -237,12 +237,6 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			conn.Reset()
 			return nil, fmt.Errorf("ssh: %w", err)
 		}
-		if t.options.PseudoTerminal {
-			if err = conn.session.RequestPty("xterm", 0, 0, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
-				conn.Reset()
-				return nil, fmt.Errorf("ssh: %w", err)
-			}
-		}
 		if conn.input, err = conn.session.StdinPipe(); err != nil {
 			conn.Reset()
 			return nil, fmt.Errorf("ssh: %w", err)
@@ -260,20 +254,36 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			conn.Reset()
 			return nil, fmt.Errorf("ssh: %w", err)
 		}
+
 		go func() {
-			buffer, lines, mmatcher, fmatcher := make([]byte, 64<<10), make([]string, 0, 4<<10), rcache.Get(t.options.Marker), rcache.Get(t.options.Filter)
+			begin, data, lines, mmatcher, fmatcher := 0, make([]byte, 64<<10), make([]string, 0, 4<<10), rcache.Get(t.options.Marker), rcache.Get(t.options.Filter)
+			if t.options.Filter == "" {
+				fmatcher = nil
+			}
 			for {
 				if conn.output == nil {
 					break
 				}
-				read, err := conn.output.Read(buffer)
-				if read >= 0 {
-					for _, line := range bytes.Split(buffer[:read], []byte("\n")) {
-						if t.options.Trace {
-							fmt.Fprintf(os.Stderr, "< %s\n", bytes.TrimRight(line, "\r\n"))
+				read, err := conn.output.Read(data[begin:])
+				if read > 0 {
+					read += begin
+					begin = 0
+					index := 0
+					for index < read {
+						line, complete := "", false
+						if end := bytes.Index(data[index:read], []byte("\n")); end >= 0 {
+							line, complete = strings.TrimRight(string(data[index:index+end]), "\r"), true
+							index += end + 1
+						} else {
+							line, index = string(data[index:read]), read
+							begin = len(line)
+							copy(data, line)
 						}
-						sline := bytes.TrimSpace(line)
-						if mmatcher.Match(sline) {
+						if t.options.Trace {
+							fmt.Fprintf(os.Stderr, "< %s\n", line)
+						}
+						sline := strings.TrimSpace(line)
+						if mmatcher != nil && mmatcher.MatchString(sline) {
 							conn.Lock()
 							if conn.result == nil {
 								conn.result = make(chan []string)
@@ -282,13 +292,15 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 								conn.result <- lines
 							}
 							conn.Unlock()
-							lines = lines[:0]
+							lines, begin = lines[:0], 0
 							continue
 						}
-						if t.options.Filter != "" && fmatcher.Match(sline) {
-							continue
+						if complete {
+							if fmatcher != nil && fmatcher.MatchString(sline) {
+								continue
+							}
+							lines = append(lines, line)
 						}
-						lines = append(lines, string(line))
 					}
 				}
 				if err != nil {
@@ -314,12 +326,19 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	}
 
 	command = strings.TrimSpace(command)
-	switch t.options.Mode {
-	case JSON:
-		if !strings.Contains(command, "display json") {
-			command += "|display json|no-more"
+	switch t.options.SubSystem {
+	case "":
+		switch t.options.Mode {
+		case JSON:
+			if !strings.Contains(command, "display json") {
+				command += "|display json|no-more"
+			}
+		case XML:
+			if !strings.Contains(command, "display xml") {
+				command += "|display xml|no-more"
+			}
 		}
-	case XML:
+	case "netconf":
 		if !strings.HasPrefix(command, "<rpc>") || !strings.HasSuffix(command, "</rpc>") {
 			command = "<rpc>" + command + "</rpc>"
 		}
@@ -363,8 +382,11 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	conn.active, conn.running = false, false
 	conn.Unlock()
 	if ckey != "" {
-		if content, err := json.Marshal(result); err == nil {
-			os.WriteFile(ckey, content, 0644)
+		if handle, err := os.OpenFile(ckey, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); err == nil {
+			encoder := json.NewEncoder(handle)
+			encoder.SetEscapeHTML(false)
+			encoder.Encode(result)
+			handle.Close()
 		}
 	}
 	return
