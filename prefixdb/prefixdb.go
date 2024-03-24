@@ -730,8 +730,8 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 		}
 	}
 }
-func (d *PrefixDB) Lookup(value string, output map[string]any) {
-	if output == nil || d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
+func (d *PrefixDB) Lookup(value string, out map[string]any) {
+	if out == nil || d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
 		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || value == "" {
 		return
 	}
@@ -760,35 +760,35 @@ func (d *PrefixDB) Lookup(value string, output map[string]any) {
 					switch section {
 					case 1:
 						if key != "" {
-							output[key] = d.rstring(index)
+							out[key] = d.rstring(index)
 							key = ""
 						} else {
 							key = d.rstring(index)
 						}
 					case 2:
 						if key != "" {
-							output[key] = d.rnumber(index)
+							out[key] = d.rnumber(index)
 							key = ""
 						}
 					case 3:
 						if key != "" {
-							output[key] = true
+							out[key] = true
 							key = ""
 						}
 					case 4:
 						if key != "" {
-							output[key] = false
+							out[key] = false
 							key = ""
 						}
 					case 5:
 						if key != "" {
-							output[key] = nil
+							out[key] = nil
 							key = ""
 						}
 					case 6:
-						d.rpair(index, output)
+						d.rpair(index, out)
 					case 7:
-						d.rcluster(index, output)
+						d.rcluster(index, out)
 					}
 					if last {
 						break
@@ -800,11 +800,11 @@ func (d *PrefixDB) Lookup(value string, output map[string]any) {
 		}
 	}
 	d.RUnlock()
-	if country, ok := output["country_code"].(string); ok && country != "" {
-		if value, ok := output["latitude"].(float64); ok && value == 0.0 {
-			if value, ok := output["longitude"].(float64); ok && value == 0.0 {
+	if country, ok := out["country_code"].(string); ok && country != "" {
+		if value, ok := out["latitude"].(float64); ok && value == 0.0 {
+			if value, ok := out["longitude"].(float64); ok && value == 0.0 {
 				if position, ok := capitals[country]; ok {
-					output["latitude"], output["longitude"] = position[0], position[1]
+					out["latitude"], out["longitude"] = position[0], position[1]
 				}
 			}
 		}

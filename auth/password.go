@@ -1,63 +1,36 @@
-package acl
+package auth
 
 import (
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
-	"math"
-	"net/netip"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
 )
-
-func CIDR(input string, values []string, fallback bool) (match bool, index int) {
-	if len(values) > 0 {
-		if value, err := netip.ParseAddrPort(input); err == nil {
-			input = value.Addr().String()
-		}
-		if remote, err := netip.ParseAddr(input); err == nil {
-			for _, value := range values {
-				if network, err := netip.ParsePrefix(value); err == nil {
-					if network.Contains(remote) {
-						return true, index
-					}
-				}
-				index++
-			}
-		}
-		return false, -1
-	}
-	return fallback, -1
-}
-func CIDRConfig(input string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
-	return CIDR(input, config.GetStrings(path), fallback)
-}
 
 // see https://akkadia.org/drepper/SHA-crypt.txt
 var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 
-func Crypt512(key, salt string, rounds int) (output string) {
-	output = "$6$"
+func crypt512(key, salt string, rounds int) (out string) {
+	out = "$6$"
 	if rounds == 0 {
 		rounds = 5000
 	}
-	rounds = int(math.Max(1000, math.Min(999999999, float64(rounds))))
+	rounds = max(1000, min(999999999, rounds))
 	if rounds != 5000 {
-		output += fmt.Sprintf("rounds=%d$", rounds)
+		out += fmt.Sprintf("rounds=%d$", rounds)
 	}
-	salt = salt[:int(math.Min(16, float64(len(salt))))]
+	salt = salt[:min(16, len(salt))]
 	if salt == "" {
 		value := make([]byte, 6)
 		rand.Read(value)
 		salt = cryptb64.EncodeToString(value)
 	}
-	output += salt + "$"
+	out += salt + "$"
 
 	// digest B (steps 4-8)
 	bkey, bsalt, length := []byte(key), []byte(salt), len(key)
@@ -152,19 +125,19 @@ func Crypt512(key, salt string, rounds int) (output string) {
 		C[index], C[index+3] = C[index+3], C[index]
 		C[index+1], C[index+2] = C[index+2], C[index+1]
 	}
-	return output + string(C[:86])
+	return out + string(C[:86])
 }
 
-func Password(input string, values []string, fallback bool) (match bool, index int) {
+func Password(in string, values []string, fallback bool) (match bool, index int) {
 	if len(values) > 0 {
-		login, password := "", strings.TrimSpace(input)
-		if parts := strings.Split(input, ":"); len(parts) >= 2 {
+		login, password := "", strings.TrimSpace(in)
+		if parts := strings.Split(in, ":"); len(parts) >= 2 {
 			login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		}
 		for _, value := range values {
 			check := strings.TrimSpace(value)
 			if len(check) > 1 && check[0] == '@' {
-				if match, _ := PasswordFile(input, strings.TrimSpace(check[1:]), fallback); match {
+				if match, _ := PasswordFile(in, strings.TrimSpace(check[1:]), fallback); match {
 					return true, index
 				}
 			} else {
@@ -181,7 +154,7 @@ func Password(input string, values []string, fallback bool) (match bool, index i
 						rounds, _ = strconv.Atoi(parts[2][7:])
 						salt = parts[3]
 					}
-					if Crypt512(password, salt, rounds) == check {
+					if crypt512(password, salt, rounds) == check {
 						return true, index
 					}
 				} else if password == check {
@@ -194,10 +167,10 @@ func Password(input string, values []string, fallback bool) (match bool, index i
 	}
 	return fallback, -1
 }
-func PasswordConfig(input string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
-	return Password(input, config.GetStrings(path), fallback)
+func PasswordConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
+	return Password(in, config.GetStrings(path), fallback)
 }
-func PasswordFile(input, path string, fallback bool) (match bool, index int) {
+func PasswordFile(in, path string, fallback bool) (match bool, index int) {
 	lines := []string{}
 	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
@@ -207,65 +180,5 @@ func PasswordFile(input, path string, fallback bool) (match bool, index int) {
 			}
 		}
 	}
-	return Password(input, lines, fallback)
-}
-
-type RANGE struct {
-	dates [2]time.Time
-	days  [2]int
-	times [2]int
-}
-
-func Ranges(input time.Time, values []string, fallback bool) (match bool, index int) {
-	if len(values) > 0 {
-		ranges, matcher1, matcher2, matcher3, days := []RANGE{},
-			rcache.Get(`^(\d{4}-\d{2}-\d{2})?-(\d{4}-\d{2}-\d{2})?$`),
-			rcache.Get(`^(mon|tue|wed|thu|fri|sat|sun)?-(mon|tue|wed|thu|fri|sat|sun)?$`),
-			rcache.Get(`^(?:(\d{2}):(\d{2})(?::(\d{2}))?)?-(?:(\d{2}):(\d{2})(?::(\d{2}))?)?$`),
-			map[string]int{"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
-		for _, path := range values {
-			entry := RANGE{}
-			for _, value := range strings.Split(path, " ") {
-				if captures := matcher1.FindStringSubmatch(value); len(captures) == 3 {
-					if value, err := time.Parse("2006-01-02", captures[1]); err == nil {
-						entry.dates[0] = value
-					}
-					if value, err := time.Parse("2006-01-02", captures[2]); err == nil {
-						entry.dates[1] = value.Add(86399 * time.Second)
-					}
-				} else if captures := matcher2.FindStringSubmatch(strings.ToLower(value)); len(captures) == 3 {
-					entry.days[0], entry.days[1] = days[captures[1]], days[captures[2]]
-				} else if captures := matcher3.FindStringSubmatch(value); len(captures) == 7 {
-					hour, _ := strconv.ParseInt(captures[1], 10, 64)
-					minute, _ := strconv.ParseInt(captures[2], 10, 64)
-					second, _ := strconv.ParseInt(captures[3], 10, 64)
-					entry.times[0] = int(hour)*3600 + int(minute)*60 + int(second)
-					hour, _ = strconv.ParseInt(captures[4], 10, 64)
-					minute, _ = strconv.ParseInt(captures[5], 10, 64)
-					second, _ = strconv.ParseInt(captures[6], 10, 64)
-					entry.times[1] = int(hour)*3600 + int(minute)*60 + int(second)
-				}
-			}
-			ranges = append(ranges, entry)
-		}
-		now := input.UTC()
-		day, stamp := int(now.Weekday()), now.Hour()*3600+now.Minute()*60+now.Second()
-		if day == 0 {
-			day = 7
-		}
-		for _, entry := range ranges {
-			if (!entry.dates[0].IsZero() && now.Sub(entry.dates[0]) < 0) || (!entry.dates[1].IsZero() && now.Sub(entry.dates[1]) > 0) ||
-				(entry.days[0] != 0 && day < entry.days[0]) || (entry.days[1] != 0 && day > entry.days[1]) ||
-				(entry.times[0] != 0 && stamp < entry.times[0]) || (entry.times[1] != 0 && stamp > entry.times[1]) {
-				index++
-				continue
-			}
-			return true, index
-		}
-		return false, -1
-	}
-	return fallback, -1
-}
-func RangesConfig(input time.Time, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
-	return Ranges(input, config.GetStrings(path), fallback)
+	return Password(in, lines, fallback)
 }

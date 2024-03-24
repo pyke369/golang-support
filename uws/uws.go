@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -116,7 +115,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	if url, err := url.Parse(endpoint); err == nil {
 		proxy, _ := config.Proxy(url)
 		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
-			nonce := base64.StdEncoding.EncodeToString(uuid.BUUID())
+			nonce := uuid.New().String()
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
 			request.Header.Add("Upgrade", "websocket")
@@ -557,14 +556,14 @@ close:
 						if data == nil {
 							data = bslab.Get(dsize, nil)
 						}
-						max := int(math.Min(float64(woffset-roffset), float64(size)))
-						if len(data)+max > s.config.MessageSize {
+						highest := min(woffset-roffset, size)
+						if len(data)+highest > s.config.MessageSize {
 							code = UWS_ERROR_OVERSIZED
 							break close
 						}
-						data = append(data, buffer[roffset:roffset+max]...)
-						size -= max
-						roffset += max
+						data = append(data, buffer[roffset:roffset+highest]...)
+						size -= highest
+						roffset += highest
 						if size <= 0 && len(data) >= dsize {
 							if !s.client {
 								xor(mask, data[doffset:dsize])
@@ -590,10 +589,10 @@ close:
 						if control == nil {
 							control = bslab.Get(132, nil)
 						}
-						max := int(math.Min(float64(woffset-roffset), float64(size)))
-						control = append(control, buffer[roffset:roffset+max]...)
-						size -= max
-						roffset += max
+						highest := min(woffset-roffset, size)
+						control = append(control, buffer[roffset:roffset+highest]...)
+						size -= highest
+						roffset += highest
 						if size <= 0 {
 							if !s.client {
 								xor(mask, control)
@@ -662,17 +661,11 @@ func rmask() []byte {
 	return value
 }
 
-func cval(value, fallback, min, max int) int {
+func cval(value, fallback, lowest, highest int) int {
 	if value == 0 {
 		value = fallback
 	}
-	if value < min {
-		value = min
-	}
-	if value > max {
-		value = max
-	}
-	return value
+	return min(max(value, lowest), highest)
 }
 
 const xorsize = int(unsafe.Sizeof(uintptr(0)))

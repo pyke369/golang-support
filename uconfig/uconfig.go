@@ -29,6 +29,8 @@ type UConfig struct {
 	hash      string
 	cache     map[string]any
 	separator string
+	prefix    string
+	top       string
 	cacheLock sync.RWMutex
 	sync.RWMutex
 }
@@ -41,7 +43,7 @@ type replacer struct {
 
 var (
 	escaped   = "{}[],#/*;:= "
-	unescaper = regexp.MustCompile(`@\d+@`)                                        // match escaped characters (to reverse previous escaping)
+	unescaper = regexp.MustCompile(`@@@\d+@@@`)                                    // match escaped characters (to reverse previous escaping)
 	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)           // match external content macros
 	sizer     = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)           // match size value
 	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                  // match duration value form1 (free)
@@ -65,31 +67,29 @@ var (
 	}
 )
 
-func escape(input string) string {
-	var output []byte
-
-	instring := false
-	for index := 0; index < len(input); index++ {
-		if input[index:index+1] == `"` && (index == 0 || input[index-1:index] != `\`) {
+func escape(in string) string {
+	instring, out := false, []byte{}
+	for index := 0; index < len(in); index++ {
+		if in[index:index+1] == `"` && (index == 0 || in[index-1:index] != `\`) {
 			instring = !instring
 		}
 		if instring {
-			offset := strings.IndexAny(escaped, input[index:index+1])
+			offset := strings.IndexAny(escaped, in[index:index+1])
 			if offset >= 0 {
-				output = append(output, []byte(fmt.Sprintf("@%02d@", offset))...)
+				out = append(out, []byte(fmt.Sprintf("@@@%02d@@@", offset))...)
 			} else {
-				output = append(output, input[index:index+1]...)
+				out = append(out, in[index:index+1]...)
 			}
 		} else {
-			output = append(output, input[index:index+1]...)
+			out = append(out, in[index:index+1]...)
 		}
 	}
-	return string(output)
+	return string(out)
 }
 
-func unescape(input string) string {
-	return unescaper.ReplaceAllStringFunc(input, func(a string) string {
-		offset, _ := strconv.Atoi(a[1:3])
+func unescape(in string) string {
+	return unescaper.ReplaceAllStringFunc(in, func(a string) string {
+		offset, _ := strconv.Atoi(a[3:5])
 		if offset < len(escaped) {
 			return escaped[offset : offset+1]
 		}
@@ -97,43 +97,43 @@ func unescape(input string) string {
 	})
 }
 
-func reduce(input any) {
-	if input != nil {
-		switch reflect.TypeOf(input).Kind() {
+func reduce(in any) {
+	if in != nil {
+		switch reflect.TypeOf(in).Kind() {
 		case reflect.Map:
-			for key := range input.(map[string]any) {
-				var parts []string
+			for key := range in.(map[string]any) {
+				parts := []string{}
 				for _, value := range strings.Split(key, " ") {
 					if value != "" {
 						parts = append(parts, value)
 					}
 				}
 				if len(parts) > 1 {
-					if input.(map[string]any)[parts[0]] == nil || reflect.TypeOf(input.(map[string]any)[parts[0]]).Kind() != reflect.Map {
-						input.(map[string]any)[parts[0]] = make(map[string]any)
+					if in.(map[string]any)[parts[0]] == nil || reflect.TypeOf(in.(map[string]any)[parts[0]]).Kind() != reflect.Map {
+						in.(map[string]any)[parts[0]] = make(map[string]any)
 					}
-					input.(map[string]any)[parts[0]].(map[string]any)[parts[1]] = input.(map[string]any)[key]
-					delete(input.(map[string]any), key)
+					in.(map[string]any)[parts[0]].(map[string]any)[parts[1]] = in.(map[string]any)[key]
+					delete(in.(map[string]any), key)
 				}
 			}
-			for _, value := range input.(map[string]any) {
+			for _, value := range in.(map[string]any) {
 				reduce(value)
 			}
 		case reflect.Slice:
-			for index := 0; index < len(input.([]any)); index++ {
-				reduce(input.([]any)[index])
+			for index := 0; index < len(in.([]any)); index++ {
+				reduce(in.([]any)[index])
 			}
 		}
 	}
 }
 
-func New(input string, inline ...bool) (*UConfig, error) {
+func New(in string, inline ...bool) (*UConfig, error) {
 	config := &UConfig{
-		input:     input,
+		input:     in,
 		config:    nil,
 		separator: ".",
 	}
-	return config, config.Load(input, inline...)
+	return config, config.Load(in, inline...)
 }
 
 func (c *UConfig) Reload(inline ...bool) error {
@@ -143,15 +143,23 @@ func (c *UConfig) Reload(inline ...bool) error {
 func (c *UConfig) SetSeparator(separator string) {
 	c.separator = separator
 }
+func (c *UConfig) SetPrefix(prefix string) {
+	c.prefix = prefix
+}
 
-func (c *UConfig) Load(input string, inline ...bool) error {
-	c.Lock()
+func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
 	content := fmt.Sprintf("/*base:%s*/\n", base)
+	c.top = ""
 	if len(inline) > 0 && inline[0] {
-		content += input
+		content += in
 	} else {
-		content += fmt.Sprintf("{{<%s}}", input)
+		if filepath.IsAbs(in) {
+			c.top = filepath.Dir(in)
+		} else {
+			c.top = filepath.Dir(filepath.Join(base, in))
+		}
+		content += fmt.Sprintf("{{<%s}}", in)
 	}
 
 	for {
@@ -281,26 +289,26 @@ func (c *UConfig) Load(input string, inline ...bool) error {
 			}
 			expanded = strings.TrimSpace(expanded)
 		case "_":
-			expanded = filepath.Base(input)
+			expanded = filepath.Base(in)
 		}
 		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:])
 	}
 
 	var config any
+
 	if err := json.Unmarshal([]byte(content), &config); err != nil {
 		if err := json.Unmarshal([]byte("{"+content+"}"), &config); err != nil {
 			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
 				if start := strings.LastIndex(content[:syntax.Offset], "\n") + 1; start >= 0 {
 					line := strings.Count(content[:start], "\n") + 1
-					c.Unlock()
 					return fmt.Errorf("uconfig: %s at line %d near %s", syntax, line, content[start:syntax.Offset])
 				}
 			}
-			c.Unlock()
 			return err
 		}
 	}
 
+	c.Lock()
 	c.config = config
 	c.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
 	c.cache = map[string]any{}
@@ -313,6 +321,10 @@ func (c *UConfig) Loaded() bool {
 	c.RLock()
 	defer c.RUnlock()
 	return !(c.config == nil)
+}
+
+func (c *UConfig) Top() string {
+	return c.top
 }
 
 func (c *UConfig) Hash() string {
@@ -334,9 +346,9 @@ func (c *UConfig) String() string {
 	return "{}"
 }
 
-func (c *UConfig) Path(input ...string) string {
+func (c *UConfig) Path(in ...string) string {
 	total, count, separator := 0, 0, len(c.separator)
-	for _, value := range input {
+	for _, value := range in {
 		if length := len(value); length > 0 {
 			total += length
 			count++
@@ -347,7 +359,7 @@ func (c *UConfig) Path(input ...string) string {
 	}
 	total += (count - 1) * separator
 	result, offset := make([]byte, total), 0
-	for _, value := range input {
+	for _, value := range in {
 		if length := len(value); length > 0 {
 			if offset > 0 {
 				copy(result[offset:], c.separator)
@@ -365,24 +377,26 @@ func (c *UConfig) Base(path string) string {
 	return parts[len(parts)-1]
 }
 
-func (c *UConfig) GetPaths(path string) []string {
-	var (
-		current any      = c.config
-		paths   []string = []string{}
-	)
-
+func (c *UConfig) GetPaths(path string) (paths []string) {
+	paths = []string{}
 	c.RLock()
-	prefix := ""
+	defer c.RUnlock()
+	current, prefix := c.config, ""
+	if c.prefix != "" {
+		if path == "" {
+			path = c.prefix
+		} else {
+			path = c.prefix + c.separator + path
+		}
+	}
 	if current == nil || path == "" {
-		c.RUnlock()
-		return paths
+		return
 	}
 	c.cacheLock.RLock()
 	if c.cache[path] != nil {
-		if paths, ok := c.cache[path].([]string); ok {
+		if value, ok := c.cache[path].([]string); ok {
 			c.cacheLock.RUnlock()
-			c.RUnlock()
-			return paths
+			return value
 		}
 	}
 	c.cacheLock.RUnlock()
@@ -395,8 +409,7 @@ func (c *UConfig) GetPaths(path string) []string {
 				c.cacheLock.Lock()
 				c.cache[path] = paths
 				c.cacheLock.Unlock()
-				c.RUnlock()
-				return paths
+				return
 			}
 			if kind == reflect.Slice {
 				current = current.([]any)[index]
@@ -405,8 +418,7 @@ func (c *UConfig) GetPaths(path string) []string {
 					c.cacheLock.Lock()
 					c.cache[path] = paths
 					c.cacheLock.Unlock()
-					c.RUnlock()
-					return paths
+					return
 				}
 			}
 		}
@@ -414,23 +426,32 @@ func (c *UConfig) GetPaths(path string) []string {
 	switch reflect.TypeOf(current).Kind() {
 	case reflect.Slice:
 		for index := 0; index < len(current.([]any)); index++ {
-			paths = append(paths, fmt.Sprintf("%s%s%d", path, prefix, index))
+			item := fmt.Sprintf("%s%s%d", path, prefix, index)
+			if c.prefix != "" {
+				item = strings.TrimPrefix(item, c.prefix+c.separator)
+			}
+			paths = append(paths, item)
 		}
 	case reflect.Map:
 		for key := range current.(map[string]any) {
-			paths = append(paths, fmt.Sprintf("%s%s%s", path, prefix, key))
+			item := fmt.Sprintf("%s%s%s", path, prefix, key)
+			if c.prefix != "" {
+				item = strings.TrimPrefix(item, c.prefix+c.separator)
+			}
+			paths = append(paths, item)
 		}
 	}
 	c.cacheLock.Lock()
 	c.cache[path] = paths
 	c.cacheLock.Unlock()
-	c.RUnlock()
-	return paths
+	return
 }
 
 func (c *UConfig) value(path string) (string, error) {
-	var current any = c.config
-
+	current := c.config
+	if c.prefix != "" {
+		path = c.prefix + c.separator + path
+	}
 	c.RLock()
 	if current == nil || path == "" {
 		c.RUnlock()
@@ -499,10 +520,22 @@ func (c *UConfig) GetBoolean(path string, fallback ...bool) bool {
 	return false
 }
 
-func (c *UConfig) GetStrings(path string) []string {
-	list := []string{}
+func (c *UConfig) GetStrings(path string, extra ...bool) []string {
+	multi, list := len(extra) > 0 && extra[0], []string{}
+	if multi {
+		if value := strings.TrimSpace(c.GetString(path)); value != "" {
+			list = append(list, value)
+		}
+	}
 	for _, path := range c.GetPaths(path) {
-		list = append(list, c.GetString(path, ""))
+		value := c.GetString(path)
+		if multi {
+			if value = strings.TrimSpace(value); value != "" {
+				list = append(list, value)
+			}
+		} else {
+			list = append(list, value)
+		}
 	}
 	return list
 }
@@ -541,7 +574,7 @@ func (c *UConfig) GetStringMatchCaptures(path string, fallback, match string) []
 func (c *UConfig) GetInteger(path string, fallback int64) int64 {
 	return c.GetIntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
-func (c *UConfig) GetIntegerBounds(path string, fallback, min, max int64) int64 {
+func (c *UConfig) GetIntegerBounds(path string, fallback, lowest, highest int64) int64 {
 	value, err := c.value(path)
 	if err != nil {
 		return fallback
@@ -550,19 +583,13 @@ func (c *UConfig) GetIntegerBounds(path string, fallback, min, max int64) int64 
 	if err != nil {
 		return fallback
 	}
-	if nvalue < min {
-		nvalue = min
-	}
-	if nvalue > max {
-		nvalue = max
-	}
-	return nvalue
+	return max(min(nvalue, highest), lowest)
 }
 
 func (c *UConfig) GetFloat(path string, fallback float64) float64 {
 	return c.GetFloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
-func (c *UConfig) GetFloatBounds(path string, fallback, min, max float64) float64 {
+func (c *UConfig) GetFloatBounds(path string, fallback, lowest, highest float64) float64 {
 	value, err := c.value(path)
 	if err != nil {
 		return fallback
@@ -571,13 +598,13 @@ func (c *UConfig) GetFloatBounds(path string, fallback, min, max float64) float6
 	if err != nil {
 		return fallback
 	}
-	return math.Max(math.Min(nvalue, max), min)
+	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) GetSize(path string, fallback int64) int64 {
-	return c.GetSizeBounds(path, fallback, math.MinInt64, math.MaxInt64)
+func (c *UConfig) GetSize(path string, fallback int64, extra ...bool) int64 {
+	return c.GetSizeBounds(path, fallback, 0, math.MaxInt64, extra...)
 }
-func (c *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 {
+func (c *UConfig) GetSizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
 	value, err := c.value(path)
 	if err != nil {
 		return fallback
@@ -589,26 +616,20 @@ func (c *UConfig) GetSizeBounds(path string, fallback, min, max int64) int64 {
 			return fallback
 		}
 		scale := float64(1000)
-		if matches[3] == "B" {
+		if matches[3] == "B" || (len(extra) != 0 && extra[0]) {
 			scale = float64(1024)
 		}
 		nvalue = int64(fvalue * math.Pow(scale, float64(strings.Index("_KMGTP", matches[2]))))
 	} else {
 		return fallback
 	}
-	if nvalue < min {
-		nvalue = min
-	}
-	if nvalue > max {
-		nvalue = max
-	}
-	return nvalue
+	return max(min(nvalue, highest), max(0, lowest))
 }
 
 func (c *UConfig) GetDuration(path string, fallback float64) time.Duration {
 	return c.GetDurationBounds(path, fallback, 0, math.MaxFloat64)
 }
-func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) time.Duration {
+func (c *UConfig) GetDurationBounds(path string, fallback, lowest, highest float64) time.Duration {
 	value, err := c.value(path)
 	if err != nil {
 		return time.Duration(fallback * float64(time.Second))
@@ -645,12 +666,12 @@ func (c *UConfig) GetDurationBounds(path string, fallback, min, max float64) tim
 		minutes, _ := strconv.ParseFloat(matches[2], 64)
 		seconds, _ := strconv.ParseFloat(matches[3], 64)
 		milliseconds, _ := strconv.ParseFloat(matches[4], 64)
-		nvalue = (hours * 3600) + (math.Min(minutes, 59) * 60) + math.Min(seconds, 59) + (milliseconds / 1000)
+		nvalue = (hours * 3600) + (min(minutes, 59) * 60) + min(seconds, 59) + (milliseconds / 1000)
 	}
-	return time.Duration(math.Max(math.Min(nvalue, max), min) * float64(time.Second))
+	return time.Duration(max(min(nvalue, highest), max(0, lowest))) * time.Second
 }
-func Seconds(input time.Duration) float64 {
-	return float64(input) / float64(time.Second)
+func Seconds(in time.Duration) float64 {
+	return float64(in) / float64(time.Second)
 }
 
 func Args() (args []string) {

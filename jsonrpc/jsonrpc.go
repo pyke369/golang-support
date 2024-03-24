@@ -86,7 +86,7 @@ func init() {
 	httpDefaultTransport.DisableCompression = true
 }
 
-func DefaultTransport(input []byte, tcontext any) (output []byte, err error) {
+func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 	options := tcontext.(TRANSPORT_OPTIONS)
 	if options.URL == "" {
 		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
@@ -100,7 +100,7 @@ func DefaultTransport(input []byte, tcontext any) (output []byte, err error) {
 	if options.Transport == nil {
 		options.Transport = httpDefaultTransport
 	}
-	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(input)); err == nil {
+	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(in)); err == nil {
 		if options.Context != nil {
 			request = request.WithContext(context.WithValue(request.Context(), CONTEXT_KEY("jsonrpc"), options.Context))
 		}
@@ -110,9 +110,9 @@ func DefaultTransport(input []byte, tcontext any) (output []byte, err error) {
 		request.Header.Set("Content-Type", "application/json")
 		client := &http.Client{Transport: options.Transport, Timeout: options.Timeout}
 		if response, err := client.Do(request); err == nil {
-			output, _ = io.ReadAll(response.Body)
+			out, _ = io.ReadAll(response.Body)
 			response.Body.Close()
-			if response.StatusCode/100 != 2 || len(output) == 0 {
+			if response.StatusCode/100 != 2 || len(out) == 0 {
 				return nil, fmt.Errorf("jsonrpc: HTTP error %d", response.StatusCode)
 			}
 		} else {
@@ -137,7 +137,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 		if call.Notification {
 			call.id = ""
 		} else if call.Id == "" {
-			call.id = uuid.UUID()
+			call.id = uuid.New().String()
 		}
 		payload = append(payload, `{"jsonrpc":"2.0","method":"`...)
 		payload = append(payload, call.Method...)
@@ -221,31 +221,31 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 		}
 		transport = DefaultTransport
 	}
-	input, err := Request(calls)
+	in, err := Request(calls)
 	if err != nil {
 		return nil, err
 	}
-	output, err := transport(input, tcontext)
+	out, err := transport(in, tcontext)
 	if err != nil {
 		return nil, err
 	}
-	return Response(output, calls)
+	return Response(out, calls)
 }
 
-func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ...any) (output []byte) {
-	input = bytes.TrimSpace(input)
-	output = []byte{}
+func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...any) (out []byte) {
+	in = bytes.TrimSpace(in)
+	out = []byte{}
 	batch := true
 	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
-	if len(input) == 0 {
+	if len(in) == 0 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 	} else {
-		if input[0] != '[' {
+		if in[0] != '[' {
 			batch = false
-			input = append([]byte{'['}, input...)
-			input = append(input, ']')
+			in = append([]byte{'['}, in...)
+			in = append(in, ']')
 		}
-		if json.Unmarshal(input, &requests) != nil {
+		if json.Unmarshal(in, &requests) != nil {
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 		} else {
 			if len(requests) == 0 || len(requests) > 1024 || requests[0].JSONRPC == "" {
@@ -342,75 +342,75 @@ func Handle(input []byte, routes map[string]*ROUTE, filters []string, options ..
 		}
 	}
 	if response := responses[true]; response != nil && response.Error != nil {
-		output = append(output, `{"jsonrpc":"2.0","error":{"code":`...)
-		output = strconv.AppendInt(output, int64(response.Error.Code), 10)
-		output = append(output, `,"message":"`...)
-		output = append(output, response.Error.Message...)
-		output = append(output, '"')
+		out = append(out, `{"jsonrpc":"2.0","error":{"code":`...)
+		out = strconv.AppendInt(out, int64(response.Error.Code), 10)
+		out = append(out, `,"message":"`...)
+		out = append(out, response.Error.Message...)
+		out = append(out, '"')
 		if response.Error.Data != nil {
 			if data, err := json.Marshal(response.Error.Data); err == nil {
-				output = append(output, `,"data":`...)
-				output = append(output, data...)
+				out = append(out, `,"data":`...)
+				out = append(out, data...)
 			}
 		}
-		output = append(output, `}}`...)
-		return output
+		out = append(out, `}}`...)
+		return out
 	}
 	if batch {
-		output = append(output, '[')
+		out = append(out, '[')
 	}
 	index := 0
 	for id, response := range responses {
-		output = append(output, `{"jsonrpc":"2.0","id":`...)
+		out = append(out, `{"jsonrpc":"2.0","id":`...)
 		if _, ok := id.(float64); ok {
-			output = strconv.AppendInt(output, int64(id.(float64)), 10)
+			out = strconv.AppendInt(out, int64(id.(float64)), 10)
 		} else if _, ok := id.(string); ok {
-			output = append(output, '"')
-			output = append(output, id.(string)...)
-			output = append(output, '"')
+			out = append(out, '"')
+			out = append(out, id.(string)...)
+			out = append(out, '"')
 		}
-		output = append(output, ',')
+		out = append(out, ',')
 		if response.Error != nil {
-			output = append(output, `"error":{"code":`...)
-			output = strconv.AppendInt(output, int64(response.Error.Code), 10)
-			output = append(output, `,"message":"`...)
-			output = append(output, response.Error.Message...)
-			output = append(output, '"')
+			out = append(out, `"error":{"code":`...)
+			out = strconv.AppendInt(out, int64(response.Error.Code), 10)
+			out = append(out, `,"message":"`...)
+			out = append(out, response.Error.Message...)
+			out = append(out, '"')
 			if response.Error.Data != nil {
 				if data, err := json.Marshal(response.Error.Data); err == nil {
-					output = append(output, `,"data":`...)
-					output = append(output, data...)
+					out = append(out, `,"data":`...)
+					out = append(out, data...)
 				}
 			}
-			output = append(output, '}')
+			out = append(out, '}')
 		} else {
-			output = append(output, `"result":`...)
+			out = append(out, `"result":`...)
 			if result, err := json.Marshal(response.Result); err == nil {
-				output = append(output, result...)
+				out = append(out, result...)
 			} else {
-				output = append(output, `null`...)
+				out = append(out, `null`...)
 			}
 		}
-		output = append(output, '}')
+		out = append(out, '}')
 		if index < len(responses)-1 {
-			output = append(output, ',')
+			out = append(out, ',')
 		}
 		index++
 	}
 	if batch {
-		output = append(output, ']')
+		out = append(out, ']')
 	}
-	return output
+	return out
 }
 
-func Bool(input any) bool {
-	if cast, ok := input.(bool); ok {
+func Bool(in any) bool {
+	if cast, ok := in.(bool); ok {
 		return cast
 	}
-	if value, ok := input.(int); ok {
+	if value, ok := in.(int); ok {
 		return value > 0
 	}
-	if value, ok := input.(string); ok {
+	if value, ok := in.(string); ok {
 		if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "y" || value == "yes" || value == "true" {
 			return true
 		}
@@ -418,170 +418,174 @@ func Bool(input any) bool {
 	}
 	return false
 }
-func String(input any) string {
-	if cast, ok := input.(string); ok {
+func String(in any) string {
+	if cast, ok := in.(string); ok {
 		return cast
 	}
 	return ""
 }
-func Number(input any) float64 {
-	if input != nil {
-		switch reflect.TypeOf(input).Kind() {
+func Number(in any) float64 {
+	if in != nil {
+		switch reflect.TypeOf(in).Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			return float64(reflect.ValueOf(input).Int())
+			return float64(reflect.ValueOf(in).Int())
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			return float64(reflect.ValueOf(input).Uint())
+			return float64(reflect.ValueOf(in).Uint())
 		case reflect.Float32, reflect.Float64:
-			return reflect.ValueOf(input).Float()
+			return reflect.ValueOf(in).Float()
+		case reflect.String:
+			if value, err := strconv.ParseFloat(reflect.ValueOf(in).String(), 64); err == nil {
+				return value
+			}
 		}
-		if value, ok := input.(bool); ok && value {
+		if value, ok := in.(bool); ok && value {
 			return 1.0
 		}
 	}
 	return 0.0
 }
 
-func Slice(input any) (output []any) {
-	if cast, ok := input.([]any); ok {
+func Slice(in any) (out []any) {
+	if cast, ok := in.([]any); ok {
 		return cast
 	}
-	if value := reflect.ValueOf(input); value.Kind() == reflect.Slice {
-		output = make([]any, value.Len())
+	if value := reflect.ValueOf(in); value.Kind() == reflect.Slice {
+		out = make([]any, value.Len())
 		for index := 0; index < value.Len(); index++ {
-			output[index] = value.Index(index).Interface()
+			out[index] = value.Index(index).Interface()
 		}
 		return
 	}
 	return []any{}
 }
-func SliceItem(input []any, index int) any {
-	if index >= len(input) {
+func SliceItem(in []any, index int) any {
+	if index >= len(in) {
 		return nil
 	}
-	return input[index]
+	return in[index]
 }
-func StringSlice(input any, extra ...bool) (output []string) {
+func StringSlice(in any, extra ...bool) (out []string) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := input.([]string); ok {
+	if cast, ok := in.([]string); ok {
 		if !noempty {
 			return cast
 		}
-		output = []string{}
+		out = []string{}
 		for _, item := range cast {
 			if strings.TrimSpace(item) != "" {
-				output = append(output, item)
+				out = append(out, item)
 			}
 		}
 		return
 	}
-	output = []string{}
-	if cast, ok := input.([]any); ok {
+	out = []string{}
+	if cast, ok := in.([]any); ok {
 		for _, item := range cast {
 			value := String(item)
 			if !noempty || strings.TrimSpace(value) != "" {
-				output = append(output, value)
+				out = append(out, value)
 			}
 		}
 	}
 	return
 }
-func StringSliceItem(input []string, index int) string {
-	if index >= len(input) {
+func StringSliceItem(in []string, index int) string {
+	if index >= len(in) {
 		return ""
 	}
-	return input[index]
+	return in[index]
 }
-func NumberSlice(input any, extra ...bool) (output []float64) {
+func NumberSlice(in any, extra ...bool) (out []float64) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := input.([]float64); ok {
+	if cast, ok := in.([]float64); ok {
 		if !noempty {
 			return cast
 		}
-		output = []float64{}
+		out = []float64{}
 		for _, value := range cast {
 			if value != 0 {
-				output = append(output, value)
+				out = append(out, value)
 			}
 		}
 		return
 	}
-	output = []float64{}
-	if cast, ok := input.([]any); ok {
+	out = []float64{}
+	if cast, ok := in.([]any); ok {
 		for _, item := range cast {
 			value := Number(item)
 			if !noempty || value != 0 {
-				output = append(output, value)
+				out = append(out, value)
 			}
 		}
 	}
 	return
 }
-func NumberSliceItem(input []float64, index int) float64 {
-	if index >= len(input) {
+func NumberSliceItem(in []float64, index int) float64 {
+	if index >= len(in) {
 		return 0.0
 	}
-	return input[index]
+	return in[index]
 }
 
-func Map(input any) (output map[string]any) {
-	if cast, ok := input.(map[string]any); ok {
+func Map(in any) (out map[string]any) {
+	if cast, ok := in.(map[string]any); ok {
 		return cast
 	}
-	if value := reflect.ValueOf(input); value.Kind() == reflect.Map {
-		output = make(map[string]any, value.Len())
+	if value := reflect.ValueOf(in); value.Kind() == reflect.Map {
+		out = make(map[string]any, value.Len())
 		iterator := value.MapRange()
 		for iterator.Next() {
-			output[iterator.Key().String()] = iterator.Value().Interface()
+			out[iterator.Key().String()] = iterator.Value().Interface()
 		}
 		return
 	}
 	return map[string]any{}
 }
-func StringMap(input any, extra ...bool) (output map[string]string) {
+func StringMap(in any, extra ...bool) (out map[string]string) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := input.(map[string]string); ok {
+	if cast, ok := in.(map[string]string); ok {
 		if !noempty {
 			return cast
 		}
-		output = map[string]string{}
+		out = map[string]string{}
 		for key, value := range cast {
 			if strings.TrimSpace(value) != "" {
-				output[key] = value
+				out[key] = value
 			}
 		}
 		return
 	}
-	output = map[string]string{}
-	if cast, ok := input.(map[string]any); ok {
+	out = map[string]string{}
+	if cast, ok := in.(map[string]any); ok {
 		for key, item := range cast {
 			value := String(item)
 			if !noempty || strings.TrimSpace(value) != "" {
-				output[key] = value
+				out[key] = value
 			}
 		}
 	}
 	return
 }
-func NumberMap(input any, extra ...bool) (output map[string]float64) {
+func NumberMap(in any, extra ...bool) (out map[string]float64) {
 	noempty := len(extra) > 0 && extra[0]
-	if cast, ok := input.(map[string]float64); ok {
+	if cast, ok := in.(map[string]float64); ok {
 		if !noempty {
 			return cast
 		}
-		output = map[string]float64{}
+		out = map[string]float64{}
 		for key, value := range cast {
 			if value != 0 {
-				output[key] = value
+				out[key] = value
 			}
 		}
 		return
 	}
-	output = map[string]float64{}
-	if cast, ok := input.(map[string]any); ok {
+	out = map[string]float64{}
+	if cast, ok := in.(map[string]any); ok {
 		for key, item := range cast {
 			value := Number(item)
 			if !noempty || value != 0 {
-				output[key] = value
+				out[key] = value
 			}
 		}
 	}

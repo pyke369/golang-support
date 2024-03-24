@@ -38,16 +38,16 @@ func bail(err error, status int) {
 	}
 }
 
-func decode(input string, start, end time.Time) (output time.Time, err error) {
+func decode(in string, start, end time.Time) (out time.Time, err error) {
 	if captures := rcache.Get(`^\s*(now|end|start)\s*(?:(\+|\-)\s*(\d+)\s*(mo(?:nths?)?|s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?))?\s*$`).
-		FindStringSubmatch(strings.ToLower(input)); captures != nil {
+		FindStringSubmatch(strings.ToLower(in)); captures != nil {
 		switch captures[1] {
 		case "now":
-			output = time.Now()
+			out = time.Now()
 		case "start":
-			output = start
+			out = start
 		case "end":
-			output = end
+			out = end
 		}
 		if amount, _ := strconv.Atoi(captures[3]); amount != 0 {
 			direction := +1
@@ -56,17 +56,17 @@ func decode(input string, start, end time.Time) (output time.Time, err error) {
 			}
 			switch true {
 			case len(captures[4]) >= 2 && captures[4][:2] == "mo":
-				output = output.AddDate(0, direction*amount, 0)
+				out = out.AddDate(0, direction*amount, 0)
 			case captures[4][0] == 's':
-				output = output.Add(time.Duration(direction*amount) * time.Second)
+				out = out.Add(time.Duration(direction*amount) * time.Second)
 			case captures[4][0] == 'm':
-				output = output.Add(time.Duration(direction*amount) * time.Minute)
+				out = out.Add(time.Duration(direction*amount) * time.Minute)
 			case captures[4][0] == 'h':
-				output = output.Add(time.Duration(direction*amount) * time.Hour)
+				out = out.Add(time.Duration(direction*amount) * time.Hour)
 			case captures[4][0] == 'd':
-				output = output.AddDate(0, 0, direction*amount)
+				out = out.AddDate(0, 0, direction*amount)
 			case captures[4][0] == 'w':
-				output = output.AddDate(0, 0, direction*amount*7)
+				out = out.AddDate(0, 0, direction*amount*7)
 			}
 		}
 		return
@@ -90,9 +90,9 @@ func main() {
 		bail(err, 3)
 		metadata, err := metrics.Metric(os.Args[3]).Metadata()
 		bail(err, 4)
-		output, err := json.MarshalIndent(metadata, "", "  ")
+		out, err := json.MarshalIndent(metadata, "", "  ")
 		bail(err, 5)
-		fmt.Printf("%s\n", output)
+		fmt.Printf("%s\n", out)
 
 	case "export":
 		if len(os.Args) < 4 {

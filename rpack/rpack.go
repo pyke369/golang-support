@@ -81,10 +81,10 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // end of shame
 
-func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
+func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 	var matcher *regexp.Regexp
 
-	if root = strings.TrimSuffix(root, "/"); root == "" || output == "" {
+	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
 		return
 	}
 	if pkgname == "" || main {
@@ -133,7 +133,7 @@ func Pack(root, output, pkgname, funcname, defdoc, exclude string, main bool) {
 		return nil
 	})
 	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start).Truncate(time.Millisecond))
-	if handle, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
+	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
 		random := make([]byte, 64)
 		rand.Read(random)
 		uid := fmt.Sprintf("rpack_%8.8x", md5.Sum(random))

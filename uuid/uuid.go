@@ -3,18 +3,24 @@ package uuid
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
+
+	"github.com/pyke369/golang-support/rcache"
 )
 
-func BUUID() []byte {
-	var entropy = make([]byte, 16)
+type UUID [16]byte
 
-	rand.Read(entropy)
-	entropy[6] = (entropy[6] & 0x0f) | 0x40
-	entropy[8] = (entropy[8] & 0x3f) | 0x80
-	return entropy
+func New() (uuid UUID) {
+	rand.Read(uuid[:])
+	uuid[6] = (uuid[6] & 0x0f) | 0x40
+	uuid[8] = (uuid[8] & 0x3f) | 0x80
+	return
 }
 
-func UUID() string {
-	entropy := BUUID()
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", entropy[0:4], entropy[4:6], entropy[6:8], entropy[8:10], entropy[10:16])
+func Check(in string) bool {
+	return rcache.Get(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(strings.ToLower(in))
+}
+
+func (u UUID) String() string {
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }

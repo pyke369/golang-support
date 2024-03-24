@@ -11,8 +11,8 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
-func flatten(input []any) (output any) {
-	for _, element := range input {
+func flatten(in []any) (out any) {
+	for _, element := range in {
 		if fields, ok := element.(map[string]any); ok {
 			data, dok := fields["data"].(string)
 			attributes, aok := fields["attributes"].(map[string]any)
@@ -55,13 +55,13 @@ func flatten(input []any) (output any) {
 					}
 				}
 				if value != nil {
-					if len(input) > 1 {
-						if output == nil {
-							output = []any{}
+					if len(in) > 1 {
+						if out == nil {
+							out = []any{}
 						}
-						output = append(output.([]any), value)
+						out = append(out.([]any), value)
 					} else {
-						output = value
+						out = value
 					}
 				}
 			}
@@ -69,13 +69,13 @@ func flatten(input []any) (output any) {
 	}
 	return
 }
-func parseJSON(input string) (output map[string]any) {
+func parseJSON(in string) (out map[string]any) {
 	var raw map[string]any
 
-	if json.Unmarshal([]byte(input), &raw) == nil {
+	if json.Unmarshal([]byte(in), &raw) == nil {
 		for key, value := range raw {
 			if _, ok := value.([]any); ok {
-				output = map[string]any{key: flatten(value.([]any))}
+				out = map[string]any{key: flatten(value.([]any))}
 				break
 			}
 		}
@@ -83,28 +83,28 @@ func parseJSON(input string) (output map[string]any) {
 	return
 }
 
-func next(matcher *regexp.Regexp, input any, path []string) (output, parent any) {
-	output, parent = input, input
+func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
+	out, parent = in, in
 	for _, part := range path {
 		if captures := matcher.FindStringSubmatch(part); captures != nil {
 			index, _ := strconv.Atoi(captures[1])
-			if value, ok := output.([]any); !ok || index >= len(value) {
+			if value, ok := out.([]any); !ok || index >= len(value) {
 				return nil, nil
 			} else {
-				output = value[index]
+				out = value[index]
 			}
 		} else {
-			if value, ok := output.(map[string]any); !ok {
+			if value, ok := out.(map[string]any); !ok {
 				return nil, nil
 			} else {
-				parent = output
-				output = value[part]
+				parent = out
+				out = value[part]
 			}
 		}
 	}
 	return
 }
-func parseXML(input string) (output map[string]any) {
+func parseXML(in string) (out map[string]any) {
 	type NODE struct {
 		Content []byte `xml:",innerxml"`
 	}
@@ -114,11 +114,11 @@ func parseXML(input string) (output map[string]any) {
 		matcher = rcache.Get(`^\[(\d+)\]$`)
 	)
 
-	output = map[string]any{}
-	if xml.Unmarshal([]byte(input), &node) == nil {
-		input = string(node.Content)
+	out = map[string]any{}
+	if xml.Unmarshal([]byte(in), &node) == nil {
+		in = string(node.Content)
 	}
-	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(input))
+	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(in))
 	for {
 		token, err := decoder.Token()
 		if err != nil || token == nil {
@@ -127,7 +127,7 @@ func parseXML(input string) (output map[string]any) {
 		switch node := token.(type) {
 		case xml.StartElement:
 			name := node.Name.Local
-			if current, _ := next(matcher, output, path); current != nil {
+			if current, _ := next(matcher, out, path); current != nil {
 				element := map[string]any{}
 				for _, attribute := range node.Attr {
 					if !strings.HasPrefix(attribute.Name.Local, "xmlns") {
@@ -159,7 +159,7 @@ func parseXML(input string) (output map[string]any) {
 					index, _ = strconv.Atoi(captures[1])
 				}
 			}
-			if current, parent := next(matcher, output, path); current != nil && steps != 0 {
+			if current, parent := next(matcher, out, path); current != nil && steps != 0 {
 				if len(data) != 0 {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
@@ -190,15 +190,15 @@ func parseXML(input string) (output map[string]any) {
 	return
 }
 
-func Mapper(matcher *regexp.Regexp, input any, mapping map[string]string) (output map[string]any) {
+func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[string]any) {
 	separator := "/"
-	output = map[string]any{}
+	out = map[string]any{}
 	if matcher == nil {
 		matcher = rcache.Get(`^\[(-?\d+(?:,-?\d+)*|(\d+)-(\d+)|\*)\]$`)
 	}
 	for key, path := range mapping {
-		output[key] = nil
-		parts, current := strings.Split(strings.Trim(path, separator), separator), input
+		out[key] = nil
+		parts, current := strings.Split(strings.Trim(path, separator), separator), in
 		last := len(parts) - 1
 		for depth, part := range parts {
 			part = strings.TrimSpace(part)
@@ -207,7 +207,7 @@ func Mapper(matcher *regexp.Regexp, input any, mapping map[string]string) (outpu
 			}
 			if captures := matcher.FindStringSubmatch(part); captures != nil {
 				if next, ok := current.([]any); ok {
-					output[key] = []any{}
+					out[key] = []any{}
 					length, indexes := len(next), []int{}
 					if captures[1] == "*" {
 						for index := 0; index < length; index++ {
@@ -240,17 +240,17 @@ func Mapper(matcher *regexp.Regexp, input any, mapping map[string]string) (outpu
 					}
 					for _, index := range indexes {
 						if depth == last {
-							output[key] = append(output[key].([]any), next[index])
+							out[key] = append(out[key].([]any), next[index])
 						} else {
-							output[key] = append(output[key].([]any), Mapper(
+							out[key] = append(out[key].([]any), Mapper(
 								matcher, next[index],
 								map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 						}
 					}
 					break
 				} else if next, ok := current.(map[string]any); ok {
-					output[key] = []any{}
-					output[key] = append(output[key].([]any), Mapper(
+					out[key] = []any{}
+					out[key] = append(out[key].([]any), Mapper(
 						matcher, next,
 						map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 					break
@@ -268,22 +268,22 @@ func Mapper(matcher *regexp.Regexp, input any, mapping map[string]string) (outpu
 								}
 							}
 							if len(indexes) > 1 {
-								output[key] = []any{}
+								out[key] = []any{}
 							}
 							for _, index := range indexes {
 								if depth == last {
 									if len(indexes) > 1 {
-										output[key] = append(output[key].([]any), next[index])
+										out[key] = append(out[key].([]any), next[index])
 									} else {
-										output[key] = next[index]
+										out[key] = next[index]
 									}
 								} else {
 									if len(indexes) > 1 {
-										output[key] = append(output[key].([]any), Mapper(
+										out[key] = append(out[key].([]any), Mapper(
 											matcher, next[index],
 											map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 									} else {
-										output[key] = Mapper(
+										out[key] = Mapper(
 											matcher, next[index],
 											map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"]
 									}
@@ -294,7 +294,7 @@ func Mapper(matcher *regexp.Regexp, input any, mapping map[string]string) (outpu
 					} else {
 						if _, ok := next[part]; ok {
 							if depth == last {
-								output[key] = next[part]
+								out[key] = next[part]
 								break
 							} else {
 								current = next[part]

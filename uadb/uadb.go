@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,14 +30,14 @@ type UADB struct {
 	lock     sync.RWMutex
 	cache    map[uint32]*cache
 	last     time.Time
-	max      int
+	highest  int
 	hit      int64
 	miss     int64
 }
 
 var fields = []string{"ua_family", "ua_name", "ua_company", "ua_type", "ua_version", "os_family", "os_name", "os_company", "device_type"}
 
-func tocode(input string) string {
+func tocode(in string) string {
 	const removed = "@[]^_`!\"#$%&'()*+,-/:;<=>?{|}~"
 
 	return strings.ReplaceAll(
@@ -53,7 +52,7 @@ func tocode(input string) string {
 							return r
 						},
 							strings.Trim(
-								input,
+								in,
 								".",
 							),
 						),
@@ -68,11 +67,11 @@ func tocode(input string) string {
 }
 
 func New(size ...int) *UADB {
-	max := 1000000
+	highest := 1000000
 	if len(size) > 0 && size[0] >= 1000 && size[0] <= 1000000 {
-		max = size[0]
+		highest = size[0]
 	}
-	return &UADB{Crawlers: map[string][5]string{}, cache: map[uint32]*cache{}, max: max}
+	return &UADB{Crawlers: map[string][5]string{}, cache: map[uint32]*cache{}, highest: highest}
 }
 
 func (db *UADB) Load(path string) error {
@@ -95,39 +94,33 @@ func (db *UADB) Load(path string) error {
 	return nil
 }
 
-func (db *UADB) Lookup(ua string, output map[string]string, withcode ...bool) {
-	var slice []byte
-
-	if output == nil {
+func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
+	if out == nil {
 		return
 	}
-	hslice := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
-	hstring := (*reflect.StringHeader)(unsafe.Pointer(&ua))
-	hslice.Data = hstring.Data
-	hslice.Cap = hstring.Len
-	hslice.Len = hstring.Len
-	ckey, wantcode := crc32.ChecksumIEEE(slice), len(withcode) > 0 && withcode[0]
+
+	ckey, wantcode := crc32.ChecksumIEEE(unsafe.Slice(unsafe.StringData(ua), len(ua))), len(withcode) > 0 && withcode[0]
 	db.lock.RLock()
 	if cache := db.cache[ckey]; cache != nil {
 		for key, value := range cache.values {
 			if wantcode || (!wantcode && !strings.HasSuffix(key, "_code")) {
-				output[key] = value
+				out[key] = value
 			}
 		}
 		cache.last = int(time.Now().Unix())
 		atomic.AddInt64(&(db.hit), 1)
 	}
 	db.lock.RUnlock()
-	if len(output) > 0 {
+	if len(out) > 0 {
 		return
 	}
 
 	atomic.AddInt64(&(db.miss), 1)
 	for _, field := range fields {
-		output[field] = "unknown"
+		out[field] = "unknown"
 		if wantcode {
 			if field != "ua_name" && field != "ua_version" && field != "os_version" {
-				output[field+"_code"] = "unknown"
+				out[field+"_code"] = "unknown"
 			}
 		}
 	}
@@ -136,84 +129,84 @@ func (db *UADB) Lookup(ua string, output map[string]string, withcode ...bool) {
 	}
 
 	if crawler := db.Crawlers[ua]; crawler[0] != "" {
-		output["ua_family"], output["ua_type"] = crawler[0], "Crawler"
+		out["ua_family"], out["ua_type"] = crawler[0], "Crawler"
 		if crawler[1] != "" {
-			output["ua_name"] = crawler[1]
+			out["ua_name"] = crawler[1]
 		}
 		if crawler[2] != "" {
-			output["ua_company"] = crawler[2]
+			out["ua_company"] = crawler[2]
 		}
 		if crawler[3] != "" {
-			output["ua_version"] = crawler[3]
+			out["ua_version"] = crawler[3]
 		}
 		if crawler[4] != "" {
-			output["device_type"] = crawler[4]
+			out["device_type"] = crawler[4]
 		}
 	} else {
 		for _, agent := range db.Agents {
 			if matcher := rcache.Get(agent[0]); matcher != nil && matcher.MatchString(ua) {
 				if agent[1] != "" {
-					output["ua_family"], output["ua_name"] = agent[1], agent[1]
+					out["ua_family"], out["ua_name"] = agent[1], agent[1]
 					if matches := matcher.FindStringSubmatch(ua); len(matches) > 1 {
-						output["ua_version"] = matches[1]
-						output["ua_name"] += " " + matches[1]
+						out["ua_version"] = matches[1]
+						out["ua_name"] += " " + matches[1]
 					}
 				}
 				if agent[2] != "" {
-					output["ua_company"] = agent[2]
+					out["ua_company"] = agent[2]
 				}
 				if agent[3] != "" {
-					output["ua_type"] = agent[3]
+					out["ua_type"] = agent[3]
 				}
 				if agent[4] != "" {
-					output["device_type"] = agent[4]
+					out["device_type"] = agent[4]
 				}
 				if agent[5] != "" {
-					output["os_family"] = agent[5]
+					out["os_family"] = agent[5]
 				}
 				if agent[6] != "" {
-					output["os_name"] = agent[6]
+					out["os_name"] = agent[6]
 				}
 				if agent[7] != "" {
-					output["os_company"] = agent[7]
+					out["os_company"] = agent[7]
 				}
 				break
 			}
 		}
 
-		if output["ua_family"] != "unknown" {
-			if output["device_type"] == "unknown" {
+		if out["ua_family"] != "unknown" {
+			if out["device_type"] == "unknown" {
 				for _, device := range db.Devices {
 					if matcher := rcache.Get(device[0]); matcher != nil && matcher.MatchString(ua) {
 						if device[1] != "" {
-							output["device_type"] = device[1]
+							out["device_type"] = device[1]
 						}
 						break
 					}
 				}
-				if output["device_type"] == "unknown" {
-					ua_type := tocode(output["ua_type"])
+				if out["device_type"] == "unknown" {
+					ua_type := tocode(out["ua_type"])
 					if ua_type == "mobile_browser" || ua_type == "wap_browser" {
-						output["device_type"] = "Smartphone"
+						out["device_type"] = "Smartphone"
 					} else if ua_type == "library" || ua_type == "validator" || ua_type == "unrecognized" || ua_type == "useragent_anonymizer" {
-						output["device_type"] = "Other"
+						out["device_type"] = "Other"
 					} else {
-						output["device_type"] = "Personal computer"
+						out["device_type"] = "Personal computer"
 					}
 				}
 			}
 
-			if output["os_family"] == "unknown" {
+			if out["os_family"] == "unknown" {
 				for _, system := range db.Systems {
 					if matcher := rcache.Get(system[0]); matcher != nil && matcher.MatchString(ua) {
 						if system[1] != "" {
-							output["os_family"] = system[1]
+							out["os_family"] = system[1]
 						}
 						if system[2] != "" {
-							output["os_name"] = system[2]
+							out["os_name"] = system[2]
 						}
 						if system[3] != "" {
-							output["os_company"] = system[3]
+							out["os_company"] = system[3]
 						}
 						break
 					}
@@ -223,28 +216,28 @@ func (db *UADB) Lookup(ua string, output map[string]string, withcode ...bool) {
 	}
 
 	values := map[string]string{}
-	for key, value := range output {
+	for key, value := range out {
 		values[key] = value
 	}
 	for _, field := range fields {
 		if field != "ua_name" && field != "ua_version" && field != "os_version" {
 			values[field+"_code"] = tocode(values[field])
 			if wantcode {
-				output[field+"_code"] = values[field+"_code"]
+				out[field+"_code"] = values[field+"_code"]
 			}
 		}
 	}
 	db.lock.Lock()
 	db.cache[ckey] = &cache{values: values, last: int(time.Now().Unix())}
-	max := int(float64(db.max) * 1.2)
-	if len(db.cache) >= max && time.Since(db.last) >= 15*time.Second {
+	highest := int(float64(db.highest) * 1.2)
+	if len(db.cache) >= highest && time.Since(db.last) >= 15*time.Second {
 		db.last = time.Now()
 		sorter := []string{}
 		for key, value := range db.cache {
 			sorter = append(sorter, fmt.Sprintf("%d@@%d", value.last, key))
 		}
 		sort.Strings(sorter)
-		for index := 0; index < len(sorter)-db.max; index++ {
+		for index := 0; index < len(sorter)-db.highest; index++ {
 			key, _ := strconv.ParseUint(strings.Split(sorter[index], "@@")[1], 10, 32)
 			delete(db.cache, uint32(key))
 		}

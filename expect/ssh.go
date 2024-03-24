@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/netip"
 	"os"
 	"strings"
@@ -173,11 +172,11 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		},
 	}
 
-	max := sshMaxConnections
+	highest := sshMaxConnections
 	if len(extra) >= 1 && extra[0] != 0 {
-		max = extra[0]
+		highest = extra[0]
 	}
-	transport.connections = make([]*sshConnection, int(math.Min(sshMaxConnections, math.Max(1, float64(max)))))
+	transport.connections = make([]*sshConnection, min(sshMaxConnections, max(1, highest)))
 	sshTransports[key] = transport
 	return
 }

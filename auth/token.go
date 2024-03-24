@@ -1,4 +1,4 @@
-package ujwt
+package auth
 
 import (
 	"crypto"
@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func Encode(claims map[string]any, expire time.Time, secret string, kid ...string) (token string, err error) {
+func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...string) (token string, err error) {
 	var block *pem.Block
 
 	alg := "HS256"
@@ -94,7 +94,7 @@ func Encode(claims map[string]any, expire time.Time, secret string, kid ...strin
 	return
 }
 
-func Decode(token string, secrets []string) (claims map[string]any, err error) {
+func TokenDecode(token string, secrets []string) (claims map[string]any, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("ujwt: invalid token format")

@@ -90,12 +90,12 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 	return nil, errors.New(`dynacert: no matching certificate`)
 }
 
-func (d *DYNACERT) TLSConfig(input ...*tls.Config) (output *tls.Config) {
-	if len(input) > 0 && input[0] != nil {
-		output = input[0].Clone()
+func (d *DYNACERT) TLSConfig(in ...*tls.Config) (out *tls.Config) {
+	if len(in) > 0 && in[0] != nil {
+		out = in[0].Clone()
 	} else {
-		output = &tls.Config{}
+		out = &tls.Config{}
 	}
-	output.MinVersion, output.GetCertificate = tls.VersionTLS13, d.GetCertificate
+	out.MinVersion, out.GetCertificate = tls.VersionTLS13, d.GetCertificate
 	return
 }

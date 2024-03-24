@@ -263,9 +263,9 @@ func (l *ULog) Close() {
 		l.syslogHandle.Close()
 		l.syslogHandle = nil
 	}
-	for path, output := range l.fileOutputs {
-		if output.handle != nil {
-			output.handle.Close()
+	for path, out := range l.fileOutputs {
+		if out.handle != nil {
+			out.handle.Close()
 		}
 		delete(l.fileOutputs, path)
 	}
@@ -299,7 +299,7 @@ func (l *ULog) ClearFields() {
 }
 
 func strftime(layout string, base time.Time) string {
-	var output []string
+	var out []string
 
 	length := len(layout)
 	for index := 0; index < length; index++ {
@@ -308,106 +308,106 @@ func strftime(layout string, base time.Time) string {
 			if index < length-1 {
 				switch layout[index+1] {
 				case 'a':
-					output = append(output, base.Format("Mon"))
+					out = append(out, base.Format("Mon"))
 				case 'A':
-					output = append(output, base.Format("Monday"))
+					out = append(out, base.Format("Monday"))
 				case 'b':
-					output = append(output, base.Format("Jan"))
+					out = append(out, base.Format("Jan"))
 				case 'B':
-					output = append(output, base.Format("January"))
+					out = append(out, base.Format("January"))
 				case 'c':
-					output = append(output, base.Format("Mon Jan 2 15:04:05 2006"))
+					out = append(out, base.Format("Mon Jan 2 15:04:05 2006"))
 				case 'C':
-					output = append(output, fmt.Sprintf("%02d", base.Year()/100))
+					out = append(out, fmt.Sprintf("%02d", base.Year()/100))
 				case 'd':
-					output = append(output, fmt.Sprintf("%02d", base.Day()))
+					out = append(out, fmt.Sprintf("%02d", base.Day()))
 				case 'D':
-					output = append(output, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
+					out = append(out, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
 				case 'e':
-					output = append(output, fmt.Sprintf("%2d", base.Day()))
+					out = append(out, fmt.Sprintf("%2d", base.Day()))
 				case 'f':
-					output = append(output, fmt.Sprintf("%06d", base.Nanosecond()/1000))
+					out = append(out, fmt.Sprintf("%06d", base.Nanosecond()/1000))
 				case 'F':
-					output = append(output, fmt.Sprintf("%04d-%02d-%02d", base.Year(), base.Month(), base.Day()))
+					out = append(out, fmt.Sprintf("%04d-%02d-%02d", base.Year(), base.Month(), base.Day()))
 				case 'g':
 					year, _ := base.ISOWeek()
-					output = append(output, fmt.Sprintf("%02d", year%100))
+					out = append(out, fmt.Sprintf("%02d", year%100))
 				case 'G':
 					year, _ := base.ISOWeek()
-					output = append(output, fmt.Sprintf("%04d", year))
+					out = append(out, fmt.Sprintf("%04d", year))
 				case 'h':
-					output = append(output, base.Format("Jan"))
+					out = append(out, base.Format("Jan"))
 				case 'H':
-					output = append(output, fmt.Sprintf("%02d", base.Hour()))
+					out = append(out, fmt.Sprintf("%02d", base.Hour()))
 				case 'I':
 					if base.Hour() == 0 || base.Hour() == 12 {
-						output = append(output, "12")
+						out = append(out, "12")
 					} else {
-						output = append(output, fmt.Sprintf("%02d", base.Hour()%12))
+						out = append(out, fmt.Sprintf("%02d", base.Hour()%12))
 					}
 				case 'j':
-					output = append(output, fmt.Sprintf("%03d", base.YearDay()))
+					out = append(out, fmt.Sprintf("%03d", base.YearDay()))
 				case 'k':
-					output = append(output, fmt.Sprintf("%2d", base.Hour()))
+					out = append(out, fmt.Sprintf("%2d", base.Hour()))
 				case 'l':
 					if base.Hour() == 0 || base.Hour() == 12 {
-						output = append(output, "12")
+						out = append(out, "12")
 					} else {
-						output = append(output, fmt.Sprintf("%2d", base.Hour()%12))
+						out = append(out, fmt.Sprintf("%2d", base.Hour()%12))
 					}
 				case 'm':
-					output = append(output, fmt.Sprintf("%02d", base.Month()))
+					out = append(out, fmt.Sprintf("%02d", base.Month()))
 				case 'M':
-					output = append(output, fmt.Sprintf("%02d", base.Minute()))
+					out = append(out, fmt.Sprintf("%02d", base.Minute()))
 				case 'n':
-					output = append(output, "\n")
+					out = append(out, "\n")
 				case 'p':
 					if base.Hour() < 12 {
-						output = append(output, "AM")
+						out = append(out, "AM")
 					} else {
-						output = append(output, "PM")
+						out = append(out, "PM")
 					}
 				case 'P':
 					if base.Hour() < 12 {
-						output = append(output, "am")
+						out = append(out, "am")
 					} else {
-						output = append(output, "pm")
+						out = append(out, "pm")
 					}
 				case 'r':
 					if base.Hour() == 0 || base.Hour() == 12 {
-						output = append(output, "12")
+						out = append(out, "12")
 					} else {
-						output = append(output, fmt.Sprintf("%02d", base.Hour()%12))
+						out = append(out, fmt.Sprintf("%02d", base.Hour()%12))
 					}
-					output = append(output, fmt.Sprintf(":%02d:%02d", base.Minute(), base.Second()))
+					out = append(out, fmt.Sprintf(":%02d:%02d", base.Minute(), base.Second()))
 					if base.Hour() < 12 {
-						output = append(output, " AM")
+						out = append(out, " AM")
 					} else {
-						output = append(output, " PM")
+						out = append(out, " PM")
 					}
 				case 'R':
-					output = append(output, fmt.Sprintf("%02d:%02d", base.Hour(), base.Minute()))
+					out = append(out, fmt.Sprintf("%02d:%02d", base.Hour(), base.Minute()))
 				case 's':
-					output = append(output, fmt.Sprintf("%d", base.Unix()))
+					out = append(out, fmt.Sprintf("%d", base.Unix()))
 				case 'S':
-					output = append(output, fmt.Sprintf("%02d", base.Second()))
+					out = append(out, fmt.Sprintf("%02d", base.Second()))
 				case 't':
-					output = append(output, "\t")
+					out = append(out, "\t")
 				case 'T':
-					output = append(output, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
+					out = append(out, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
 				case 'u':
 					day := base.Weekday()
 					if day == 0 {
 						day = 7
 					}
-					output = append(output, fmt.Sprintf("%d", day))
+					out = append(out, fmt.Sprintf("%d", day))
 				case 'U':
-					output = append(output, fmt.Sprintf("%d", (base.YearDay()+6-int(base.Weekday()))/7))
+					out = append(out, fmt.Sprintf("%d", (base.YearDay()+6-int(base.Weekday()))/7))
 				case 'V':
 					_, week := base.ISOWeek()
-					output = append(output, fmt.Sprintf("%02d", week))
+					out = append(out, fmt.Sprintf("%02d", week))
 				case 'w':
-					output = append(output, fmt.Sprintf("%d", base.Weekday()))
+					out = append(out, fmt.Sprintf("%d", base.Weekday()))
 				case 'W':
 					day := int(base.Weekday())
 					if day == 0 {
@@ -415,38 +415,38 @@ func strftime(layout string, base time.Time) string {
 					} else {
 						day -= 1
 					}
-					output = append(output, fmt.Sprintf("%d", (base.YearDay()+6-day)/7))
+					out = append(out, fmt.Sprintf("%d", (base.YearDay()+6-day)/7))
 				case 'x':
-					output = append(output, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
+					out = append(out, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
 				case 'X':
-					output = append(output, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
+					out = append(out, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
 				case 'y':
-					output = append(output, fmt.Sprintf("%02d", base.Year()%100))
+					out = append(out, fmt.Sprintf("%02d", base.Year()%100))
 				case 'Y':
-					output = append(output, fmt.Sprintf("%04d", base.Year()))
+					out = append(out, fmt.Sprintf("%04d", base.Year()))
 				case 'z':
-					output = append(output, base.Format("-0700"))
+					out = append(out, base.Format("-0700"))
 				case 'Z':
-					output = append(output, base.Format("MST"))
+					out = append(out, base.Format("MST"))
 				case '%':
-					output = append(output, "%")
+					out = append(out, "%")
 				}
 				index++
 			}
 		default:
-			output = append(output, string(layout[index]))
+			out = append(out, string(layout[index]))
 		}
 	}
-	return strings.Join(output, "")
+	return strings.Join(out, "")
 }
 
-func (l *ULog) log(now time.Time, severity int, input any, a ...any) {
+func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 	var err error
 	if l.level < severity || (!l.syslog && !l.file && !l.console) {
 		return
 	}
 	layout := ""
-	if current, ok := input.(map[string]any); ok {
+	if current, ok := in.(map[string]any); ok {
 		var buffer bytes.Buffer
 
 		for key, value := range l.fields {
@@ -465,12 +465,12 @@ func (l *ULog) log(now time.Time, severity int, input any, a ...any) {
 		}
 		encoder := json.NewEncoder(&buffer)
 		encoder.SetEscapeHTML(false)
-		if err := encoder.Encode(input); err == nil {
+		if err := encoder.Encode(in); err == nil {
 			layout = "%s"
 			a = []any{bytes.TrimSpace(buffer.Bytes())}
 		}
-	} else if _, ok := input.(string); ok {
-		layout = input.(string)
+	} else if _, ok := in.(string); ok {
+		layout = in.(string)
 	}
 	layout = strings.TrimSpace(layout)
 	if l.syslog {
@@ -538,9 +538,9 @@ func (l *ULog) log(now time.Time, severity int, input any, a ...any) {
 		}
 		if now.Sub(l.fileLast) >= 5*time.Second {
 			l.fileLast = now
-			for path, output := range l.fileOutputs {
-				if now.Sub(output.last) >= 5*time.Second {
-					output.handle.Close()
+			for path, out := range l.fileOutputs {
+				if now.Sub(out.last) >= 5*time.Second {
+					out.handle.Close()
 					delete(l.fileOutputs, path)
 				}
 			}

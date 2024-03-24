@@ -221,24 +221,12 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 			}
 			lookup = nil
 		} else {
-			if cache.TTL < 2*time.Second {
-				cache.TTL = 2 * time.Second
-			}
+			cache.TTL = max(cache.TTL, 2*time.Second)
 			if ckey != "" {
 				cache.items["k"+ckey] = &LOOKUP{Host: lookup.Host, deadline: now.Add(cache.TTL)}
 			}
 			if cache.items[cpath] == nil {
-				ttl := lookup.Expires.Sub(lookup.Date)
-				if ttl < 2*time.Second {
-					ttl = 2 * time.Second
-				}
-				if ttl > cache.TTL {
-					ttl = cache.TTL
-				}
-				if ttl > 10*time.Minute {
-					ttl = 10 * time.Minute
-				}
-				lookup.deadline = now.Add(ttl)
+				lookup.deadline = now.Add(min(min(max(lookup.Expires.Sub(lookup.Date), 2*time.Second), cache.TTL), 10*time.Minute))
 				cache.items[cpath] = lookup
 			}
 		}

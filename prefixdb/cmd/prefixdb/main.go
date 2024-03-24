@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/netip"
 	"os"
@@ -45,11 +44,11 @@ var (
 	client      = &http.Client{Timeout: 5 * time.Second}
 )
 
-func size(input int) string {
-	if input < 1024*1024 {
-		return fmt.Sprintf("%.1fkB", float64(input)/1024)
+func size(in int) string {
+	if in < 1024*1024 {
+		return fmt.Sprintf("%.1fkB", float64(in)/1024)
 	}
-	return fmt.Sprintf("%.1fMB", float64(input)/(1024*1024))
+	return fmt.Sprintf("%.1fMB", float64(in)/(1024*1024))
 }
 
 func mkjson() {
@@ -108,6 +107,7 @@ func mkoui() {
 				if line, err := reader.ReadString('\n'); err != nil {
 					break
 				} else {
+					// TODO 12:34:56:78:9a:bc -> fe80::1034:56ff:fe78:9abc
 					data, address, mask := OUI{}, "fe80:0000:0000:0000:0000:", 80
 					if json.Unmarshal([]byte(line), &data) == nil {
 						if fields := ouiMatcher.FindStringSubmatch(strings.TrimSpace(data.Mac)); len(fields) > 6 {
@@ -321,8 +321,8 @@ func mkasn() {
 	}
 }
 
-func rlookup(remote, value string, output map[string]any) {
-	if remote != "" && value != "" && output != nil {
+func rlookup(remote, value string, out map[string]any) {
+	if remote != "" && value != "" && out != nil {
 		if request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s?remote=%s", remote, value), nil); err == nil {
 			request.Header.Add("X-Forwarded-For", value)
 			if response, err := client.Do(request); err == nil {
@@ -331,8 +331,8 @@ func rlookup(remote, value string, output map[string]any) {
 				data := map[string]any{}
 				json.Unmarshal(body, &data)
 				for key, value := range data {
-					if _, ok := output[key]; !ok {
-						output[key] = value
+					if _, ok := out[key]; !ok {
+						out[key] = value
 					}
 				}
 			}
@@ -396,7 +396,7 @@ func batch() {
 				fmt.Fprintf(os.Stderr, "remote   [%s] failed (not a valid prefixdb server)\n", os.Args[index])
 			}
 		} else {
-			input, column, parts := os.Stdin, 1, strings.Split(os.Args[index], "@")
+			in, column, parts := os.Stdin, 1, strings.Split(os.Args[index], "@")
 			if parts[0] == "" {
 				usage(1)
 			}
@@ -404,11 +404,11 @@ func batch() {
 				column, _ = strconv.Atoi(parts[1])
 			}
 			if parts[0] != "-" {
-				input, _ = os.Open(parts[0])
+				in, _ = os.Open(parts[0])
 			}
-			reader, writer, cache := csv.NewReader(input), csv.NewWriter(os.Stdout), map[string]map[string]any{}
+			reader, writer, cache := csv.NewReader(in), csv.NewWriter(os.Stdout), map[string]map[string]any{}
 			if records, err := reader.ReadAll(); err == nil {
-				column = int(math.Max(1, math.Min(float64(reader.FieldsPerRecord), float64(column)))) - 1
+				column = max(1, min(reader.FieldsPerRecord, column)) - 1
 				for done, record := range records {
 					if len(record) > column {
 						lookup := map[string]any{}

@@ -313,7 +313,7 @@ func (m *metric) meta(create bool) error {
 			return errors.New("mstore: invalid metric")
 		}
 		m.interval = int64(math.Round(float64(m.interval)/minInterval)) * minInterval
-		m.interval = int64(math.Max(minInterval, math.Min(float64(m.interval), maxInterval)))
+		m.interval = max(minInterval, min(m.interval, maxInterval))
 		data := make([]byte, metaMaxSize)
 		binary.BigEndian.PutUint32(data[0:], magic)
 		binary.BigEndian.PutUint16(data[4:], uint16(m.interval))
@@ -532,10 +532,10 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
-					start, min := time.Date(year, time.Month(month)+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(m.interval*maxSamples)*time.Second),
+					start, lowest := time.Date(year, time.Month(month)+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Duration(m.interval*maxSamples)*time.Second),
 						time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
-					if start.Before(min) {
-						start = min
+					if start.Before(lowest) {
+						start = lowest
 					}
 					for start.Year() == year && int(start.Month()) == month && last < 0 {
 						if result, err := m.Get(start, start.Add(time.Duration(m.interval*maxSamples)*time.Second), m.interval, [][]int64{[]int64{0, AggregateLast}}); err == nil {
@@ -599,11 +599,11 @@ func (m *metric) Export() (export map[string]any, err error) {
 	}
 	return map[string]any{"metadata": metadata, "values": values}, nil
 }
-func (m *metric) Import(input map[string]any) error {
-	if input == nil {
+func (m *metric) Import(in map[string]any) error {
+	if in == nil {
 		return errors.New("mstore: invalid parameter")
 	}
-	metadata := j.Map(input["metadata"])
+	metadata := j.Map(in["metadata"])
 	if value := int64(j.Number(metadata["interval"])); value != 0 {
 		m = m.WithInterval(value)
 	}
@@ -622,7 +622,7 @@ func (m *metric) Import(input map[string]any) error {
 			return fmt.Errorf(`mstore: invalid column mode "%s"`, j.String(column["mode"]))
 		}
 	}
-	for _, value := range j.Slice(input["values"]) {
+	for _, value := range j.Slice(in["values"]) {
 		if entry := j.Slice(value); len(entry) >= 2 {
 			at, err := time.Parse(time.DateTime, j.String(entry[0]))
 			if err != nil {
@@ -724,7 +724,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 	mapping, duplicates := [][]int64{}, map[int64]bool{}
 	for _, column := range columns {
 		if len(column) > 0 && int(column[0]) < len(m.columns) {
-			aggregate, min, max := int64(0), int64(math.MinInt64), int64(math.MaxInt64)
+			aggregate, lowest, highest := int64(0), int64(math.MinInt64), int64(math.MaxInt64)
 			if len(column) > 1 {
 				aggregate = column[1]
 			}
@@ -732,10 +732,10 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 				aggregate = AggregateAverage
 			}
 			if len(column) > 2 {
-				min = column[2]
+				lowest = column[2]
 			}
 			if len(column) > 3 {
-				max = column[3]
+				highest = column[3]
 			}
 			if _, ok := duplicates[(column[0]<<8)+aggregate]; !ok {
 				duplicates[(column[0]<<8)+aggregate] = true
@@ -747,7 +747,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 				for index := 0; index < int(column[0]); index++ {
 					offset += m.columns[index].Size
 				}
-				mapping = append(mapping, []int64{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate, min, max})
+				mapping = append(mapping, []int64{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate, lowest, highest})
 			}
 		}
 	}
@@ -764,7 +764,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 	end = end.UTC().Add(-time.Duration(end.Unix()%int64(m.interval)) * time.Second).Round(time.Duration(m.interval) * time.Second)
 	if end.Sub(start) >= time.Duration(m.interval)*time.Second {
 		interval = int64(math.Round(float64(interval)/float64(m.interval))) * m.interval
-		interval = int64(math.Max(float64(interval), float64(m.interval)))
+		interval = int64(max(interval, m.interval))
 		seconds := end.Unix() - start.Unix()
 		if seconds/interval > maxSamples {
 			interval = int64(math.Ceil((float64(seconds)/float64(maxSamples))/float64(m.interval)) * float64(m.interval))
@@ -988,7 +988,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 									if item[6] == int64(math.MaxInt64) {
 										item[6] = 95
 									}
-									item[6] = int64(math.Min(100, math.Max(0, float64(item[6]))))
+									item[6] = min(100, max(0, item[6]))
 									if item[6] == 0 {
 										values[index] = list[0][0]
 									} else if item[6] == 100 {
