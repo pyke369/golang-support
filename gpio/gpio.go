@@ -147,10 +147,10 @@ func (g *GPIO) Lines() (lines []*GPIO_LINE) {
 	return
 }
 
-// UART API
-
 // PWM API
 
 // I2C API
 
 // SPI API
+
+// UART API

@@ -66,5 +66,5 @@ func Ranges(in time.Time, values []string, fallback bool) (match bool, index int
 	return fallback, -1
 }
 func RangesConfig(in time.Time, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
-	return Ranges(in, config.GetStrings(path), fallback)
+	return Ranges(in, config.GetStrings(path, true), fallback)
 }

@@ -17,6 +17,15 @@ func New() (uuid UUID) {
 	return
 }
 
+func From(source []byte) (uuid UUID) {
+	if len(source) >= 16 {
+		copy(uuid[:], source[:16])
+		uuid[6] = (uuid[6] & 0x0f) | 0x40
+		uuid[8] = (uuid[8] & 0x3f) | 0x80
+	}
+	return
+}
+
 func Check(in string) bool {
 	return rcache.Get(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(strings.ToLower(in))
 }

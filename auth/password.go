@@ -168,7 +168,7 @@ func Password(in string, values []string, fallback bool) (match bool, index int)
 	return fallback, -1
 }
 func PasswordConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
-	return Password(in, config.GetStrings(path), fallback)
+	return Password(in, config.GetStrings(path, true), fallback)
 }
 func PasswordFile(in, path string, fallback bool) (match bool, index int) {
 	lines := []string{}
