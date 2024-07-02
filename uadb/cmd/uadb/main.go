@@ -3,12 +3,12 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uadb"
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 func build() {
@@ -27,8 +28,7 @@ func build() {
 	if source, err := sql.Open("sqlite3", os.Args[3]); err == nil {
 		if row := source.QueryRow("select version from udger_db_info"); row != nil {
 			if row.Scan(&target.Version) == nil && target.Version != "" {
-				fmt.Fprintf(os.Stderr, "- opened source database %s (version %s)\n", os.Args[3], target.Version)
-
+				os.Stderr.WriteString("- opened source database " + os.Args[3] + " (version " + target.Version + ")\n")
 				if rows, err := source.Query("select UCR.regstring, UCL.name, UCL.vendor, UCC.client_classification, UDCL.name, UOL.family, UOL.name, UOL.vendor " +
 					"from udger_client_regex UCR " +
 					"left outer join udger_client_list UCL on (UCL.id = UCR.client_id) " +
@@ -49,7 +49,7 @@ func build() {
 					}
 					rows.Close()
 				}
-				fmt.Fprintf(os.Stderr, "- loaded %d user-agent(s)\n", len(target.Agents))
+				os.Stderr.WriteString("- loaded " + strconv.Itoa(len(target.Agents)) + " user-agent(s)\n")
 
 				if rows, err := source.Query("select UDCR.regstring, UDCL.name " +
 					"from udger_deviceclass_regex UDCR " +
@@ -67,7 +67,7 @@ func build() {
 					}
 					rows.Close()
 				}
-				fmt.Fprintf(os.Stderr, "- loaded %d device(s)\n", len(target.Devices))
+				os.Stderr.WriteString("- loaded " + strconv.Itoa(len(target.Devices)) + " device(s)\n")
 
 				if rows, err := source.Query("select UOR.regstring, UOL.family, UOL.name, UOL.vendor " +
 					"from udger_os_regex UOR " +
@@ -85,7 +85,7 @@ func build() {
 					}
 					rows.Close()
 				}
-				fmt.Fprintf(os.Stderr, "- loaded %d operating system(s)\n", len(target.Systems))
+				os.Stderr.WriteString("- loaded " + strconv.Itoa(len(target.Systems)) + " operating system(s)\n")
 
 				if rows, err := source.Query("select UCL.ua_string, UCL.family, UCL.name, UCL.vendor, UCL.ver, UCC.crawler_classification " +
 					"from udger_crawler_list UCL " +
@@ -99,11 +99,11 @@ func build() {
 					}
 					rows.Close()
 				}
-				fmt.Fprintf(os.Stderr, "- loaded %d crawler(s)\n", len(target.Crawlers))
+				os.Stderr.WriteString("- loaded " + strconv.Itoa(len(target.Crawlers)) + " crawler(s)\n")
 
 				if payload, err := json.Marshal(target); err == nil {
 					if os.WriteFile(os.Args[2], payload, 0644) == nil {
-						fmt.Fprintf(os.Stderr, "- saved target database %s (%d bytes)\n", os.Args[2], len(payload))
+						os.Stderr.WriteString("- saved target database " + os.Args[2] + " (" + strconv.Itoa(len(payload)) + " bytes)\n")
 					}
 				}
 			}
@@ -114,12 +114,12 @@ func build() {
 func lookup() {
 	db := uadb.New()
 	if err := db.Load(os.Args[2]); err != nil {
-		fmt.Printf("%v - exiting\n", err)
+		os.Stdout.WriteString(err.Error() + " - exiting\n")
 		return
 	}
-	fmt.Printf("- loaded database version %s\n", db.Version)
+	os.Stdout.WriteString("- loaded database (version " + db.Version + ")\n")
 	for _, agent := range os.Args[3:] {
-		fmt.Printf("- %s\n", agent)
+		os.Stdout.WriteString("- " + agent + "\n")
 		lookup, keys := make(map[string]string, 24), []string{}
 		db.Lookup(agent, lookup, true)
 		for key := range lookup {
@@ -127,7 +127,7 @@ func lookup() {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			fmt.Printf("  %-20.20s  %s\n", key, lookup[key])
+			os.Stdout.WriteString("  " + ufmt.String(key, -20, 20) + "  " + lookup[key] + "\n")
 		}
 	}
 }
@@ -135,10 +135,10 @@ func lookup() {
 func bench() {
 	db, concurrency := uadb.New(), runtime.NumCPU()*2
 	if err := db.Load(os.Args[2]); err != nil {
-		fmt.Printf("%v - exiting\n", err)
+		os.Stdout.WriteString(err.Error() + " - exiting\n")
 		return
 	}
-	fmt.Printf("- loaded database (version %s)\n", db.Version)
+	os.Stdout.WriteString("- loaded database (version " + db.Version + ")\n")
 
 	for {
 		for round := 1; round <= 5; round++ {
@@ -167,29 +167,30 @@ func bench() {
 						queue <- agent
 						total++
 						if total%99 == 0 {
-							fmt.Printf("\r- lookup %d user-agents (found %d) ", total, atomic.LoadInt32(&found))
+							os.Stdout.WriteString("\r- lookup " + strconv.Itoa(int(total)) +
+								" user-agents (found " + strconv.Itoa(int(atomic.LoadInt32(&found))) + ") ")
 						}
 					}
 				}
 				close(queue)
 				waiter.Wait()
-				fmt.Printf("\r- lookup %d user-agents (found %d / %d unknown / %v)\n",
-					total, atomic.LoadInt32(&found), total-atomic.LoadInt32(&found), time.Since(start))
+				os.Stdout.WriteString("\r- lookup " + strconv.Itoa(int(total)) + " user-agents (found " + strconv.Itoa(int(atomic.LoadInt32(&found))) +
+					" / " + strconv.Itoa(int(total-atomic.LoadInt32(&found))) + " unknown / " + ufmt.Duration(time.Since(start)) + ")\n")
 			}
 			time.Sleep(time.Second)
 		}
 		db.Load(os.Args[2])
-		fmt.Printf("- reloaded database (version %s)\n", db.Version)
+		os.Stdout.WriteString("- reloaded database (version " + db.Version + ")\n")
 	}
 }
 
 func server() {
 	db := uadb.New()
 	if err := db.Load(os.Args[3]); err != nil {
-		fmt.Fprintf(os.Stderr, "%v - aborting\n", err)
+		os.Stderr.WriteString(err.Error() + " - aborting\n")
 		return
 	}
-	fmt.Fprintf(os.Stderr, "- opened database %s (version %s)\n", os.Args[3], db.Version)
+	os.Stderr.WriteString("- opened database " + os.Args[3] + " (version " + db.Version + ")\n")
 
 	go func() {
 		signals := make(chan os.Signal, 1)
@@ -197,9 +198,9 @@ func server() {
 		for {
 			<-signals
 			if err := db.Load(os.Args[3]); err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Stderr.WriteString(err.Error() + "\n")
 			} else {
-				fmt.Fprintf(os.Stderr, "- reloaded database %s (version %s)\n", os.Args[3], db.Version)
+				os.Stderr.WriteString("- reloaded database " + os.Args[3] + " (version " + db.Version + ")\n")
 			}
 		}
 	}()
@@ -219,7 +220,7 @@ func server() {
 	})
 	parts := strings.Split(os.Args[2], ",")
 	server := &http.Server{Addr: strings.TrimLeft(parts[0], "*"), ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
-	fmt.Fprintf(os.Stderr, "- started server listening to %s\n", os.Args[2])
+	os.Stderr.WriteString("- started server (listening to " + os.Args[2] + ")\n")
 	if len(parts) > 1 {
 		server.ListenAndServeTLS(parts[1], parts[2])
 	} else {
@@ -228,12 +229,14 @@ func server() {
 }
 
 func usage(status int) {
-	fmt.Fprintf(os.Stderr, "usage: uadb <action> [parameters...]\n\n"+
-		"help                                  show this help screen\n"+
-		"build  <database> <udger-database>    build database from UdgerV3 database\n"+
-		"lookup <database> <user-agent>...     lookup user-agents in database\n"+
-		"bench  <database> <user-agents-file>  user-agents lookup bench\n"+
-		"server <bind address> <database>      spawn an HTTP(S) server for user-agents lookup\n")
+	os.Stderr.WriteString(`usage: uadb <action> [parameters...]
+
+help                                  show this help screen
+build  <database> <udger-database>    build database from UdgerV3 database
+lookup <database> <user-agent>...     lookup user-agents in database
+bench  <database> <user-agents-file>  user-agents lookup bench
+server <bind address> <database>      spawn an HTTP(S) server for user-agents lookup
+`)
 	os.Exit(status)
 }
 

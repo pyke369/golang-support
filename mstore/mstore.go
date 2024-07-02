@@ -136,7 +136,7 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 	}
 	s.Lock()
 	defer s.Unlock()
-	if chunk, ok := s.chunks[path]; ok {
+	if chunk, exists := s.chunks[path]; exists {
 		if len(chunk.data) != int(size) {
 			return nil, errors.New("mstore: size mismatch")
 		}
@@ -217,7 +217,7 @@ func (s *Store) Metric(name string) *metric {
 	}
 	s.Lock()
 	defer s.Unlock()
-	if metric, ok := s.metrics[name]; ok {
+	if metric, exists := s.metrics[name]; exists {
 		return metric
 	}
 	s.metrics[name] = &metric{store: s, name: name}
@@ -690,7 +690,7 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 						if len(content) > 0 && m.mapping(column, false) == nil {
 							key := int(crc32.ChecksumIEEE(content))
 							m.columns[column].Lock()
-							if value, ok := m.columns[column].mapping[0][key]; ok {
+							if value, exists := m.columns[column].mapping[0][key]; exists {
 								m.columns[column].Unlock()
 								m.put(int64(value.index), m.columns[column].Size, data[coffset:])
 
@@ -738,7 +738,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			if len(column) > 3 {
 				highest = column[3]
 			}
-			if _, ok := duplicates[(column[0]<<8)+aggregate]; !ok {
+			if _, exists := duplicates[(column[0]<<8)+aggregate]; !exists {
 				duplicates[(column[0]<<8)+aggregate] = true
 				result["columns"] = append(result["columns"].([][]any), []any{column[0], ModeNames[m.columns[column[0]].Mode], AggregateNames[aggregate], m.columns[column[0]].Description})
 				offset := int64(1)
@@ -922,7 +922,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 						case ModeText, ModeBinary:
 							if value := m.get(item[2], data[offset+item[3]:]); value != 0 {
 								if m.mapping(int(item[0]), false) == nil {
-									if entry, ok := m.columns[item[0]].mapping[1][int(value)]; ok {
+									if entry, exists := m.columns[item[0]].mapping[1][int(value)]; exists {
 										if item[4] == AggregateHistogram || item[4] == AggregatePercentile {
 											value := string(entry.value)
 											if item[1] == ModeBinary {

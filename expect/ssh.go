@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -36,7 +35,6 @@ type SSHOptions struct {
 	SubSystem string
 	Marker    string
 	Filter    string
-	Trace     bool
 }
 type sshConnection struct {
 	sync.Mutex
@@ -139,7 +137,7 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		return nil, errors.New("ssh: invalid mode")
 	}
 
-	key := fmt.Sprintf("%s%v%v", remote, credentials, options)
+	key := remote + credentials.Username + credentials.Password + credentials.Key + options.Mode + options.SubSystem + options.Marker + options.Filter
 	sshLock.Lock()
 	defer sshLock.Unlock()
 	if transport = sshTransports[key]; transport != nil {
@@ -282,9 +280,6 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 							begin = len(line)
 							copy(data, line)
 						}
-						if t.options.Trace {
-							fmt.Fprintf(os.Stderr, "< %s\n", line)
-						}
 						sline := strings.TrimSpace(line)
 						if mmatcher != nil && mmatcher.MatchString(sline) {
 							conn.Lock()
@@ -346,12 +341,9 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			command = "<rpc>" + command + "</rpc>"
 		}
 	}
-	if _, err = fmt.Fprintf(conn.input, command+"\n"); err != nil {
+	if _, err = conn.input.Write([]byte(command + "\n")); err != nil {
 		conn.Reset()
 		return nil, ufmt.Wrap(err, "ssh")
-	}
-	if t.options.Trace {
-		fmt.Fprintf(os.Stderr, "> %s\n", command)
 	}
 	select {
 	case value := <-conn.result:

@@ -292,7 +292,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 						}
 						break
 					} else {
-						if _, ok := next[part]; ok {
+						if _, exists := next[part]; exists {
 							if depth == last {
 								out[key] = next[part]
 								break

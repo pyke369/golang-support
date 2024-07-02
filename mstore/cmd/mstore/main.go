@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -107,8 +106,8 @@ func main() {
 		metadata, err := json.MarshalIndent(export["metadata"], "  ", "  ")
 		bail(err, 5)
 		columns, data, lines := j.Slice(j.Map(export["metadata"])["columns"]), j.Slice(export["values"]), []string{
-			`{`,
-			`  "metadata": ` + string(metadata) + `,`,
+			"{",
+			`  "metadata": ` + string(metadata) + ",",
 			`  "values": [`,
 		}
 		for dindex, value := range data {
@@ -118,24 +117,24 @@ func main() {
 				for vindex, value := range values[1:] {
 					switch j.String(j.Map(columns[vindex])["mode"]) {
 					case "gauge", "counter", "increment":
-						line += fmt.Sprintf(`%d`, value)
+						line += strconv.FormatInt(int64(j.Number(value)), 10)
 					case "text", "binary":
-						line += fmt.Sprintf(`"%v"`, value)
+						line += `"` + j.String(value) + `"`
 					}
 					if vindex < len(values)-2 {
-						line += `,`
+						line += ","
 					}
 				}
 				if dindex < len(data)-1 {
-					line += `],`
+					line += "],"
 				} else {
-					line += `]`
+					line += "]"
 				}
 				lines = append(lines, line)
 			}
 		}
-		lines = append(lines, `  ]`)
-		lines = append(lines, `}`)
+		lines = append(lines, "  ]")
+		lines = append(lines, "}")
 		os.Stdout.WriteString(strings.Join(lines, "\n"))
 		os.Stdout.WriteString("\n")
 

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"io"
 	"mime"
@@ -16,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +39,7 @@ var (
 		}}
 )
 
-// shamelessly stolen from https://github.com/madler/zlib/blob/master/crc32.c
+// 🔔 SHAME! 🔔 (stolen from https://github.com/madler/zlib/blob/master/crc32.c)
 func init() {
 	p := uint32(1 << 30)
 	x2ntable[0] = p
@@ -81,7 +81,7 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 	return multmodp(x2nmodp(len2, 3), crc1) ^ crc2
 }
 
-// end of shame
+// 🔔 /SHAME! 🔔
 
 func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 	var matcher *regexp.Regexp
@@ -102,12 +102,18 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 	entries := map[string]*RPACK{}
 	compressor, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
 	count, size, start := 0, int64(0), time.Now()
+	if value, err := filepath.EvalSymlinks(root); err == nil {
+		root = value
+		if value, err := filepath.Abs(root); err == nil {
+			root = value
+		}
+	}
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		rpath := strings.TrimPrefix(path, root+"/")
 		if matcher != nil && matcher.MatchString(rpath) {
 			return nil
 		}
-		if info.Mode()&os.ModeType == 0 {
+		if info != nil && info.Mode().IsRegular() {
 			for _, part := range strings.Split(rpath, "/") {
 				if len(part) > 0 && part[0] == '.' {
 					return nil
@@ -128,54 +134,59 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 			compressor.Close()
 			pack.Content = base64.StdEncoding.EncodeToString(compressed.Bytes())
 			entries[rpath] = pack
-			fmt.Fprintf(os.Stderr, "\r%-120.120s ", rpath)
+			os.Stderr.WriteString("\r" + ufmt.String(rpath, -120, 120))
 			count++
 			size += info.Size()
 		}
 		return nil
 	})
-	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start).Truncate(time.Millisecond))
+	os.Stderr.WriteString("\r" + ufmt.String("", -120, 120))
+	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ufmt.Duration(time.Since(start)) + "\n")
 	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
 		random := [8]byte{}
 		rand.Read(random[:])
 		uid := "rpack_" + ufmt.Hex(random[:])
-		fmt.Fprintf(handle,
-			`package %s
+		handle.Write([]byte(`package ` + pkgname + `
 
 import (
-    "net/http"
+	"net/http"
 	"time"
+
 	"github.com/pyke369/golang-support/rpack"
 )
 
-var %s map[string]*rpack.RPACK = map[string]*rpack.RPACK {
-`,
-			pkgname, uid)
-		for path, entry := range entries {
-			fmt.Fprintf(handle,
-				`    "%s": &rpack.RPACK{Default:%t, Modified:%d, Mime:"%s", Content:"%s"},
-`, path, entry.Default, entry.Modified, entry.Mime, entry.Content)
+var ` + uid + ` map[string]*rpack.RPACK = map[string]*rpack.RPACK{
+`))
+		length := 0
+		for path := range entries {
+			if value := len(path); value > length {
+				length = value
+			}
 		}
-		fmt.Fprintf(handle,
-			`}
+		length += 3
+		for path, entry := range entries {
+			handle.Write([]byte(`	` + ufmt.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Default: ` + ufmt.Bool(entry.Default) +
+				`, Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n"))
+		}
+		handle.Write([]byte(`}
 
-func %sGet(path string) (content []byte, err error) {
-	content, _, _, err = rpack.Get(%s, path, true)
+func ` + funcname + `Get(path string) (content []byte, err error) {
+	content, _, _, err = rpack.Get(` + uid + `, path, true)
 	return
 }
 
-func %sHandler(ttl time.Duration) http.Handler {
-	return rpack.Serve(%s, ttl)
+func ` + funcname + `Handler(ttl time.Duration) http.Handler {
+	return rpack.Serve(` + uid + `, ttl)
 }
-`, funcname, uid, funcname, uid)
+`))
 		if main {
-			fmt.Fprintf(handle,
+			handle.Write([]byte(
 				`
 func main() {
-    http.Handle("/resources/", http.StripPrefix("/resources/", %sHandler(24 * time.Hour)))
-    http.ListenAndServe(":8000", nil)
+	http.Handle("/resources/", http.StripPrefix("/resources/", ` + funcname + `Handler(24*time.Hour)))
+	http.ListenAndServe(":8000", nil)
 }
-`, funcname)
+`))
 		}
 		handle.Close()
 	}
@@ -217,7 +228,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 			return
 		}
 		if sttl := ttl / time.Second; sttl > 0 {
-			response.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, public", sttl))
+			response.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
 			response.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
 		prefix, resources, content, mime, modified, check, size, uncompress := path.Dir(request.URL.Path), strings.Split(request.URL.Path, "+"), []byte{}, "", int64(0), uint32(0), uint32(0), true
@@ -256,7 +267,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 			}
 		}
 		response.Header().Set("Content-Type", mime)
-		response.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+		response.Header().Set("Content-Length", strconv.Itoa(len(content)))
 		http.ServeContent(response, request, "", time.Unix(modified, 0), bytes.NewReader(content))
 	})
 }

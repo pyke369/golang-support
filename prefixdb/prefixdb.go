@@ -106,9 +106,9 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 			if len(key) > 255 {
 				continue
 			}
-			if value, ok := data[key]; ok {
+			if value, exists := data[key]; exists {
 				index := 0
-				if _, ok := d.strings[key]; !ok {
+				if _, exists := d.strings[key]; !exists {
 					index = len(d.strings)
 					d.strings[key] = &[3]int{1, index}
 				} else {
@@ -119,7 +119,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				if tvalue, ok := value.(string); ok {
 					if len(tvalue) <= 255 {
 						index = 0
-						if _, ok := d.strings[tvalue]; !ok {
+						if _, exists := d.strings[tvalue]; !exists {
 							index = len(d.strings)
 							d.strings[tvalue] = &[3]int{1, index}
 						} else {
@@ -132,7 +132,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					}
 				} else if tvalue, ok := value.(float64); ok {
 					index = 0
-					if _, ok := d.numbers[tvalue]; !ok {
+					if _, exists := d.numbers[tvalue]; !exists {
 						index = len(d.numbers)
 						d.numbers[tvalue] = &[3]int{1, index}
 					} else {
@@ -149,7 +149,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				} else {
 					pair |= uint64(0x50000000)
 				}
-				if _, ok := d.pairs[pair]; !ok {
+				if _, exists := d.pairs[pair]; !exists {
 					index = len(d.pairs)
 					d.pairs[pair] = &[3]int{1, index}
 				} else {
@@ -169,7 +169,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 			}
 			key := md5.Sum(buffer)
 			index := 0
-			if _, ok := d.clusters[key]; !ok {
+			if _, exists := d.clusters[key]; !exists {
 				index = len(d.clusters)
 				d.clusters[key] = &cluster{pairs: cpairs, values: [3]int{1, index}}
 			} else {
@@ -330,7 +330,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	d.Clusters[0] = 0
 	for _, cluster := range d.clusters {
 		for _, pair := range cluster.pairs {
-			if _, ok := d.pairs[pair]; ok {
+			if _, exists := d.pairs[pair]; exists {
 				cluster.data = append(cluster.data, wpbits(0x60, d.pairs[pair][2])...)
 			} else {
 				cluster.data = append(cluster.data, wpbits(0x10, d.strings[strings[(pair>>32)&0x0fffffff].value.(string)][2])...)
@@ -404,7 +404,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 					if ((pnode.data[index]>>32)&0xf0000000)>>28 == 7 {
 						data = append(data, wpbits(last|0x70, d.clusters[clusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
 					} else {
-						if _, ok := d.pairs[pnode.data[index]]; ok {
+						if _, exists := d.pairs[pnode.data[index]]; exists {
 							data = append(data, wpbits(last|0x60, d.pairs[pnode.data[index]][2])...)
 						} else {
 							data = append(data, wpbits(0x10, d.strings[strings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
@@ -804,7 +804,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 	if country, ok := out["country_code"].(string); ok && country != "" {
 		if value, ok := out["latitude"].(float64); ok && value == 0.0 {
 			if value, ok := out["longitude"].(float64); ok && value == 0.0 {
-				if position, ok := capitals[country]; ok {
+				if position, exists := capitals[country]; exists {
 					out["latitude"], out["longitude"] = position[0], position[1]
 				}
 			}

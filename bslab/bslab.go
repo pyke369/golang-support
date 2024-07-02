@@ -7,9 +7,7 @@ type slab struct {
 	get, put, alloc, lost int64
 }
 
-var (
-	slabs = map[int]*slab{}
-)
+var slabs = map[int]*slab{}
 
 func init() {
 	slabs[0] = &slab{}
@@ -30,6 +28,9 @@ func Get(size int, item []byte) []byte {
 	if size <= 0 {
 		return nil
 	}
+	if size < (1 << 8) {
+		size = (1 << 8)
+	}
 	if item != nil {
 		if cap(item) >= size {
 			return item[:0]
@@ -45,7 +46,7 @@ func Get(size int, item []byte) []byte {
 		bits++
 	}
 	size = 1 << (bits - power)
-	if slab, ok := slabs[size]; ok {
+	if slab, exists := slabs[size]; exists {
 		atomic.AddInt64(&(slab.get), 1)
 		select {
 		case item := <-slab.queue:
@@ -71,7 +72,7 @@ func Put(item []byte) {
 	}
 	size = 1 << (bits - 1)
 	if size > 0 && float64(cap(item))/float64(size) <= 1.2 {
-		if slab, ok := slabs[size]; ok {
+		if slab, exists := slabs[size]; exists {
 			atomic.AddInt64(&(slab.put), 1)
 			select {
 			case slab.queue <- item:

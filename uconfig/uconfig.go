@@ -150,14 +150,14 @@ func (c *UConfig) SetPrefix(prefix string) {
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
 	content := "/*base:" + base + "*/\n"
-	c.top = ""
+	top := ""
 	if len(inline) > 0 && inline[0] {
 		content += in
 	} else {
 		if filepath.IsAbs(in) {
-			c.top = filepath.Dir(in)
+			top = filepath.Dir(in)
 		} else {
-			c.top = filepath.Dir(filepath.Join(base, in))
+			top = filepath.Dir(filepath.Join(base, in))
 		}
 		content += "{{<" + in + "}}"
 	}
@@ -309,7 +309,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	}
 
 	c.Lock()
-	c.config = config
+	c.config, c.top = config, top
 	hash := sha1.Sum([]byte(content))
 	c.hash = ufmt.Hex(hash[:])
 	c.cache = map[string]any{}

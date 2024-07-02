@@ -589,7 +589,7 @@ close:
 						}
 					} else {
 						if control == nil {
-							control = bslab.Get(256, nil)
+							control = bslab.Get(132, nil)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)

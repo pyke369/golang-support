@@ -2,8 +2,10 @@ package ufmt
 
 import (
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -14,12 +16,23 @@ func Wrap(err error, msg string) error {
 	return errors.New(msg + ": " + err.Error())
 }
 
+func Bool(in bool) (out string) {
+	if in {
+		return "true"
+	}
+	return "false"
+}
+
 func Int(in int, extra ...int) (out string) {
 	out = strconv.Itoa(in)
-	if in >= 0 && len(extra) != 0 {
+	if in >= 0 && len(extra) > 0 {
 		size := max(0, extra[0])
 		if len(out) < size {
-			out = strings.Repeat("0", size-len(out)) + out
+			pad := "0"
+			if len(extra) > 1 && extra[1] != 0 {
+				pad = " "
+			}
+			out = strings.Repeat(pad, size-len(out)) + out
 		}
 	}
 	return
@@ -28,7 +41,7 @@ func Int(in int, extra ...int) (out string) {
 func String(in string, extra ...int) (out string) {
 	out = in
 	size, left := 0, false
-	if len(extra) != 0 {
+	if len(extra) > 0 {
 		if extra[0] < 0 {
 			left = true
 			size, left = -extra[0], true
@@ -42,6 +55,9 @@ func String(in string, extra ...int) (out string) {
 		} else {
 			out = strings.Repeat(" ", size-len(out)) + out
 		}
+	}
+	if len(extra) > 1 && extra[1] > 0 && len(out) > extra[1] {
+		out = out[:extra[1]]
 	}
 	return
 }
@@ -64,4 +80,141 @@ func Hex(in []byte, extra ...string) (out string) {
 		out = unsafe.String(unsafe.SliceData(buffer), len(buffer))
 	}
 	return
+}
+
+func Duration(duration time.Duration) string {
+	if duration < time.Millisecond {
+		return duration.Truncate(time.Microsecond).String()
+	}
+	if duration < time.Second {
+		return duration.Truncate(time.Millisecond).String()
+	}
+	return duration.Truncate(10 * time.Millisecond).String()
+}
+
+func Keys(in map[string]any) (out []string) {
+	for key := range in {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return
+}
+
+func Strftime(layout string, base time.Time) string {
+	out, length := make([]byte, 0, 128), len(layout)
+	for index := 0; index < length; index++ {
+		switch layout[index] {
+		case '%':
+			if index < length-1 {
+				switch layout[index+1] {
+				case 'a':
+					out = append(out, base.Format("Mon")...)
+				case 'A':
+					out = append(out, base.Format("Monday")...)
+				case 'b', 'h':
+					out = append(out, base.Format("Jan")...)
+				case 'B':
+					out = append(out, base.Format("January")...)
+				case 'c':
+					out = append(out, base.Format("Mon Jan 2 15:04:05 2006")...)
+				case 'C':
+					out = append(out, Int(base.Year()/100, 2)...)
+				case 'd':
+					out = append(out, base.Format("02")...)
+				case 'D':
+					out = append(out, base.Format("01/02/06")...)
+				case 'e':
+					out = append(out, base.Format("_2")...)
+				case 'f':
+					out = append(out, Int(base.Nanosecond()/1000, 6)...)
+				case 'F':
+					out = append(out, base.Format("2006-01-02")...)
+				case 'g':
+					year, _ := base.ISOWeek()
+					out = append(out, Int(year%100, 2)...)
+				case 'G':
+					year, _ := base.ISOWeek()
+					out = append(out, Int(year, 4)...)
+				case 'H':
+					out = append(out, base.Format("15")...)
+				case 'I':
+					out = append(out, base.Format("03")...)
+				case 'j':
+					out = append(out, base.Format("002")...)
+				case 'k':
+					out = append(out, Int(base.Hour(), 2, 1)...)
+				case 'l':
+					if base.Hour() == 0 || base.Hour() == 12 {
+						out = append(out, "12"...)
+					} else {
+						out = append(out, Int(base.Hour()%12, 2, 1)...)
+					}
+				case 'm':
+					out = append(out, base.Format("01")...)
+				case 'M':
+					out = append(out, base.Format("04")...)
+				case 'n':
+					out = append(out, '\n')
+				case 'p':
+					out = append(out, base.Format("PM")...)
+				case 'P':
+					out = append(out, base.Format("pm")...)
+				case 'r':
+					out = append(out, base.Format("03:04:05 PM")...)
+				case 'R':
+					out = append(out, base.Format("15:04")...)
+				case 's':
+					out = append(out, strconv.FormatInt(base.Unix(), 10)...)
+				case 'S':
+					out = append(out, base.Format("05")...)
+				case 't':
+					out = append(out, '\t')
+				case 'T':
+					out = append(out, base.Format("15:04:05")...)
+				case 'u':
+					day := base.Weekday()
+					if day == 0 {
+						day = 7
+					}
+					out = append(out, strconv.Itoa(int(day))...)
+				case 'U':
+					out = append(out, Int((base.YearDay()+6-int(base.Weekday()))/7, 2)...)
+				case 'V':
+					_, week := base.ISOWeek()
+					out = append(out, Int(week, 2)...)
+				case 'w':
+					out = append(out, strconv.Itoa(int(base.Weekday()))...)
+				case 'W':
+					day := int(base.Weekday())
+					if day == 0 {
+						day = 6
+					} else {
+						day -= 1
+					}
+					out = append(out, Int((base.YearDay()+6-day)/7, 2)...)
+				case 'x':
+					out = append(out, base.Format("01/02/06")...)
+				case 'X':
+					out = append(out, base.Format("15:04:05")...)
+				case 'y':
+					out = append(out, base.Format("06")...)
+				case 'Y':
+					out = append(out, base.Format("2006")...)
+				case 'z':
+					out = append(out, base.Format("-0700")...)
+				case 'Z':
+					out = append(out, base.Format("MST")...)
+				case '+':
+					out = append(out, base.Format(time.UnixDate)...)
+				case '%':
+					out = append(out, '%')
+				}
+				index++
+			}
+
+		default:
+			out = append(out, layout[index])
+		}
+	}
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }

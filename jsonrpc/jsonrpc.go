@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -193,9 +192,12 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 		}
 	}
 	for _, response := range responses {
-		id := fmt.Sprintf("%v", response.Id)
+		id := String(response.Id)
+		if value := Number(response.Id); value != 0 {
+			id = strconv.FormatInt(int64(value), 10)
+		}
 		if len(ids) != 0 {
-			if call, ok := ids[id]; ok {
+			if call, exists := ids[id]; exists {
 				call.Result, call.Error, call.paired = response.Result, response.Error, true
 			}
 		} else {
@@ -431,7 +433,7 @@ func String(in any) string {
 	}
 	return ""
 }
-func Number(in any) float64 {
+func Number(in any, fallback ...float64) float64 {
 	if in != nil {
 		switch reflect.TypeOf(in).Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -445,9 +447,14 @@ func Number(in any) float64 {
 				return value
 			}
 		}
-		if value, ok := in.(bool); ok && value {
-			return 1.0
+		if len(fallback) == 0 {
+			if value, ok := in.(bool); ok && value {
+				return 1.0
+			}
 		}
+	}
+	if len(fallback) != 0 {
+		return fallback[0]
 	}
 	return 0.0
 }

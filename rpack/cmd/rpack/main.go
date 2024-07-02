@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -16,7 +15,7 @@ func main() {
 	)
 
 	options = flag.FlagSet{Usage: func() {
-		fmt.Fprintf(os.Stderr, "usage: %s [options] <rootdir>\n\noptions are:\n\n", filepath.Base(os.Args[0]))
+		os.Stderr.WriteString("usage: " + filepath.Base(os.Args[0]) + " [options] <rootdir>\n\noptions are:\n\n")
 		options.PrintDefaults()
 	},
 	}

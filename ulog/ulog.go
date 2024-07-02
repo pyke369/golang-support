@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/pyke369/golang-support/bslab"
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 const (
@@ -61,6 +65,40 @@ const (
 	LOG_LOCAL7
 )
 
+type FileOutput struct {
+	handle *os.File
+	last   time.Time
+}
+type ULog struct {
+	syslog, file, console bool
+	syslogHandle          *Syslog
+	syslogRemote          string
+	syslogName            string
+	syslogFacility        int
+	fileOutputs           map[string]*FileOutput
+	filePath              string
+	fileTime              int
+	fileLast              time.Time
+	fileSeverity          bool
+	fileFacility          int
+	consoleHandle         *os.File
+	consoleTime           int
+	consoleSeverity       bool
+	consoleColors         bool
+	optionUTC             bool
+	level                 int
+	fields                map[string]any
+	order                 []string
+	external              func(string, []byte)
+	sync.RWMutex
+	// TODO add compression
+	// TODO add purge
+}
+type colorizer struct {
+	expression *regexp.Regexp
+	replace    []byte
+}
+
 var (
 	facilities = map[string]int{
 		"user":   LOG_USER,
@@ -80,6 +118,12 @@ var (
 		"info":    LOG_INFO,
 		"debug":   LOG_DEBUG,
 	}
+	severityNames = map[int]string{
+		LOG_ERR:     "error",
+		LOG_WARNING: "warning",
+		LOG_INFO:    "info",
+		LOG_DEBUG:   "debug",
+	}
 	severityLabels = map[int]string{
 		LOG_ERR:     "ERRO ",
 		LOG_WARNING: "WARN ",
@@ -92,47 +136,32 @@ var (
 		LOG_INFO:    "\x1b[36m",
 		LOG_DEBUG:   "\x1b[32m",
 	}
+	structureColors = []*colorizer{
+		&colorizer{regexp.MustCompile(`"(err(:?or)?)":`), []byte("\"\x1b[31m$1\x1b[m\":")},
+		&colorizer{regexp.MustCompile(`"(warn(:?ing)?)":`), []byte("\"\x1b[33m$1\x1b[m\":")},
+		&colorizer{regexp.MustCompile(`"([^"]+)":`), []byte("\"\x1b[38;5;250m$1\x1b[m\":")},
+		&colorizer{regexp.MustCompile(`"([^"]+)"([,}\]])`), []byte("\"\x1b[34m$1\x1b[m\"$2")},
+		&colorizer{regexp.MustCompile(`([\-\.\d]+)([,}\]])`), []byte("\x1b[36m$1\x1b[m$2")},
+		&colorizer{regexp.MustCompile(`true([,}\]])`), []byte("\x1b[32mtrue\x1b[m$1")},
+		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[31mfalse\x1b[m$1")},
+		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
+	}
 )
 
-type FileOutput struct {
-	handle *os.File
-	last   time.Time
-}
-type ULog struct {
-	file, console, syslog bool
-	fileOutputs           map[string]*FileOutput
-	filePath              string
-	fileTime              int
-	fileLast              time.Time
-	fileSeverity          bool
-	fileFacility          int
-	consoleHandle         io.Writer
-	consoleTime           int
-	consoleSeverity       bool
-	consoleColors         bool
-	syslogHandle          *Syslog
-	syslogRemote          string
-	syslogName            string
-	syslogFacility        int
-	optionUTC             bool
-	level                 int
-	fields                map[string]any
-	sync.Mutex
-	// TODO add compression option
-	// TODO add purge option
-}
-
 func New(target string) *ULog {
-	l := &ULog{
-		fileOutputs:  map[string]*FileOutput{},
-		syslogHandle: nil,
-	}
+	l := &ULog{fileOutputs: map[string]*FileOutput{}}
 	return l.Load(target)
 }
 
 func (l *ULog) Load(target string) *ULog {
 	l.Close()
 	l.Lock()
+	defer l.Unlock()
+
+	l.syslog = false
+	l.syslogRemote = ""
+	l.syslogName = filepath.Base(os.Args[0])
+	l.syslogFacility = LOG_DAEMON
 	l.file = false
 	l.filePath = ""
 	l.fileTime = TIME_DATETIME
@@ -142,81 +171,12 @@ func (l *ULog) Load(target string) *ULog {
 	l.consoleSeverity = true
 	l.consoleColors = true
 	l.consoleHandle = os.Stderr
-	l.syslog = false
-	l.syslogRemote = ""
-	l.syslogName = filepath.Base(os.Args[0])
-	l.syslogFacility = LOG_DAEMON
 	l.optionUTC = false
-	l.level = LOG_INFO
-	l.fields = map[string]any{}
-	console := os.Stderr
+	if l.level == 0 {
+		l.level = LOG_INFO
+	}
 	for _, target := range regexp.MustCompile(`(file|console|syslog|option)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
-		case "file":
-			l.file = true
-			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
-				switch strings.ToLower(option[1]) {
-				case "path":
-					l.filePath = option[2]
-				case "time":
-					option[2] = strings.ToLower(option[2])
-					switch {
-					case option[2] == "datetime":
-						l.fileTime = TIME_DATETIME
-					case option[2] == "msdatetime":
-						l.fileTime = TIME_MSDATETIME
-					case option[2] == "stamp" || option[2] == "timestamp":
-						l.fileTime = TIME_TIMESTAMP
-					case option[2] == "msstamp" || option[2] == "mstimestamp":
-						l.fileTime = TIME_MSTIMESTAMP
-					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
-						l.fileTime = TIME_NONE
-					}
-				case "severity":
-					option[2] = strings.ToLower(option[2])
-					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						l.fileSeverity = false
-					}
-				case "facility":
-					l.fileFacility = facilities[strings.ToLower(option[2])]
-				}
-			}
-			if l.filePath == "" {
-				l.file = false
-			}
-		case "console":
-			l.console = true
-			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
-				option[2] = strings.ToLower(option[2])
-				switch strings.ToLower(option[1]) {
-				case "output":
-					if option[2] == "stdout" {
-						l.consoleHandle = os.Stdout
-						console = os.Stdout
-					}
-				case "time":
-					switch {
-					case option[2] == "datetime":
-						l.consoleTime = TIME_DATETIME
-					case option[2] == "msdatetime":
-						l.consoleTime = TIME_MSDATETIME
-					case option[2] == "stamp" || option[2] == "timestamp":
-						l.consoleTime = TIME_TIMESTAMP
-					case option[2] == "msstamp" || option[2] == "mstimestamp":
-						l.consoleTime = TIME_MSTIMESTAMP
-					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
-						l.consoleTime = TIME_NONE
-					}
-				case "severity":
-					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						l.consoleSeverity = false
-					}
-				case "colors":
-					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
-						l.consoleColors = false
-					}
-				}
-			}
 		case "syslog":
 			l.syslog = true
 			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
@@ -232,6 +192,79 @@ func (l *ULog) Load(target string) *ULog {
 					l.syslogFacility = facilities[strings.ToLower(option[2])]
 				}
 			}
+
+		case "file":
+			l.file = true
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
+				switch strings.ToLower(option[1]) {
+				case "path":
+					l.filePath = option[2]
+
+				case "time":
+					option[2] = strings.ToLower(option[2])
+					switch {
+					case option[2] == "datetime":
+						l.fileTime = TIME_DATETIME
+					case option[2] == "msdatetime":
+						l.fileTime = TIME_MSDATETIME
+					case option[2] == "stamp" || option[2] == "timestamp":
+						l.fileTime = TIME_TIMESTAMP
+					case option[2] == "msstamp" || option[2] == "mstimestamp":
+						l.fileTime = TIME_MSTIMESTAMP
+					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
+						l.fileTime = TIME_NONE
+					}
+
+				case "severity":
+					option[2] = strings.ToLower(option[2])
+					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
+						l.fileSeverity = false
+					}
+
+				case "facility":
+					l.fileFacility = facilities[strings.ToLower(option[2])]
+				}
+			}
+			if l.filePath == "" {
+				l.file = false
+			}
+
+		case "console":
+			l.console = true
+			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
+				option[2] = strings.ToLower(option[2])
+				switch strings.ToLower(option[1]) {
+				case "output":
+					if option[2] == "stdout" {
+						l.consoleHandle = os.Stdout
+					}
+
+				case "time":
+					switch {
+					case option[2] == "datetime":
+						l.consoleTime = TIME_DATETIME
+					case option[2] == "msdatetime":
+						l.consoleTime = TIME_MSDATETIME
+					case option[2] == "stamp" || option[2] == "timestamp":
+						l.consoleTime = TIME_TIMESTAMP
+					case option[2] == "msstamp" || option[2] == "mstimestamp":
+						l.consoleTime = TIME_MSTIMESTAMP
+					case option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes":
+						l.consoleTime = TIME_NONE
+					}
+
+				case "severity":
+					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
+						l.consoleSeverity = false
+					}
+
+				case "colors":
+					if option[2] != "1" && option[2] != "true" && option[2] != "on" && option[2] != "yes" {
+						l.consoleColors = false
+					}
+				}
+			}
+
 		case "option":
 			for _, option := range regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`).FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
@@ -247,15 +280,16 @@ func (l *ULog) Load(target string) *ULog {
 		}
 	}
 
-	if info, err := console.Stat(); err == nil {
-		if info.Mode()&(os.ModeDevice|os.ModeCharDevice) != os.ModeDevice|os.ModeCharDevice {
+	if l.console {
+		if info, err := l.consoleHandle.Stat(); err == nil {
+			if info.Mode()&(os.ModeDevice|os.ModeCharDevice) != os.ModeDevice|os.ModeCharDevice {
+				l.consoleColors = false
+			}
+		}
+		if runtime.GOOS == "windows" {
 			l.consoleColors = false
 		}
 	}
-	if runtime.GOOS == "windows" {
-		l.consoleColors = false
-	}
-	l.Unlock()
 	return l
 }
 
@@ -289,193 +323,96 @@ func (l *ULog) SetLevel(level string) {
 }
 
 func (l *ULog) SetField(key string, value any) {
+	l.Lock()
+	if l.fields == nil {
+		l.fields = map[string]any{}
+	}
 	l.fields[key] = value
+	l.Unlock()
 }
 func (l *ULog) SetFields(fields map[string]any) {
 	for key, value := range fields {
-		l.fields[key] = value
+		l.SetField(key, value)
 	}
 }
 func (l *ULog) ClearFields() {
-	l.fields = map[string]any{}
+	l.Lock()
+	l.fields = nil
+	l.Unlock()
 }
 
-func strftime(layout string, base time.Time) string {
-	var out []string
+func (l *ULog) SetOrder(names []string) {
+	l.Lock()
+	l.order = names
+	l.Unlock()
+}
+func (l *ULog) ClearOrder() {
+	l.Lock()
+	l.order = nil
+	l.Unlock()
+}
 
-	length := len(layout)
-	for index := 0; index < length; index++ {
-		switch layout[index] {
-		case '%':
-			if index < length-1 {
-				switch layout[index+1] {
-				case 'a':
-					out = append(out, base.Format("Mon"))
-				case 'A':
-					out = append(out, base.Format("Monday"))
-				case 'b':
-					out = append(out, base.Format("Jan"))
-				case 'B':
-					out = append(out, base.Format("January"))
-				case 'c':
-					out = append(out, base.Format("Mon Jan 2 15:04:05 2006"))
-				case 'C':
-					out = append(out, fmt.Sprintf("%02d", base.Year()/100))
-				case 'd':
-					out = append(out, fmt.Sprintf("%02d", base.Day()))
-				case 'D':
-					out = append(out, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
-				case 'e':
-					out = append(out, fmt.Sprintf("%2d", base.Day()))
-				case 'f':
-					out = append(out, fmt.Sprintf("%06d", base.Nanosecond()/1000))
-				case 'F':
-					out = append(out, fmt.Sprintf("%04d-%02d-%02d", base.Year(), base.Month(), base.Day()))
-				case 'g':
-					year, _ := base.ISOWeek()
-					out = append(out, fmt.Sprintf("%02d", year%100))
-				case 'G':
-					year, _ := base.ISOWeek()
-					out = append(out, fmt.Sprintf("%04d", year))
-				case 'h':
-					out = append(out, base.Format("Jan"))
-				case 'H':
-					out = append(out, fmt.Sprintf("%02d", base.Hour()))
-				case 'I':
-					if base.Hour() == 0 || base.Hour() == 12 {
-						out = append(out, "12")
-					} else {
-						out = append(out, fmt.Sprintf("%02d", base.Hour()%12))
-					}
-				case 'j':
-					out = append(out, fmt.Sprintf("%03d", base.YearDay()))
-				case 'k':
-					out = append(out, fmt.Sprintf("%2d", base.Hour()))
-				case 'l':
-					if base.Hour() == 0 || base.Hour() == 12 {
-						out = append(out, "12")
-					} else {
-						out = append(out, fmt.Sprintf("%2d", base.Hour()%12))
-					}
-				case 'm':
-					out = append(out, fmt.Sprintf("%02d", base.Month()))
-				case 'M':
-					out = append(out, fmt.Sprintf("%02d", base.Minute()))
-				case 'n':
-					out = append(out, "\n")
-				case 'p':
-					if base.Hour() < 12 {
-						out = append(out, "AM")
-					} else {
-						out = append(out, "PM")
-					}
-				case 'P':
-					if base.Hour() < 12 {
-						out = append(out, "am")
-					} else {
-						out = append(out, "pm")
-					}
-				case 'r':
-					if base.Hour() == 0 || base.Hour() == 12 {
-						out = append(out, "12")
-					} else {
-						out = append(out, fmt.Sprintf("%02d", base.Hour()%12))
-					}
-					out = append(out, fmt.Sprintf(":%02d:%02d", base.Minute(), base.Second()))
-					if base.Hour() < 12 {
-						out = append(out, " AM")
-					} else {
-						out = append(out, " PM")
-					}
-				case 'R':
-					out = append(out, fmt.Sprintf("%02d:%02d", base.Hour(), base.Minute()))
-				case 's':
-					out = append(out, fmt.Sprintf("%d", base.Unix()))
-				case 'S':
-					out = append(out, fmt.Sprintf("%02d", base.Second()))
-				case 't':
-					out = append(out, "\t")
-				case 'T':
-					out = append(out, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
-				case 'u':
-					day := base.Weekday()
-					if day == 0 {
-						day = 7
-					}
-					out = append(out, fmt.Sprintf("%d", day))
-				case 'U':
-					out = append(out, fmt.Sprintf("%d", (base.YearDay()+6-int(base.Weekday()))/7))
-				case 'V':
-					_, week := base.ISOWeek()
-					out = append(out, fmt.Sprintf("%02d", week))
-				case 'w':
-					out = append(out, fmt.Sprintf("%d", base.Weekday()))
-				case 'W':
-					day := int(base.Weekday())
-					if day == 0 {
-						day = 6
-					} else {
-						day -= 1
-					}
-					out = append(out, fmt.Sprintf("%d", (base.YearDay()+6-day)/7))
-				case 'x':
-					out = append(out, fmt.Sprintf("%02d/%02d/%02d", base.Month(), base.Day(), base.Year()%100))
-				case 'X':
-					out = append(out, fmt.Sprintf("%02d:%02d:%02d", base.Hour(), base.Minute(), base.Second()))
-				case 'y':
-					out = append(out, fmt.Sprintf("%02d", base.Year()%100))
-				case 'Y':
-					out = append(out, fmt.Sprintf("%04d", base.Year()))
-				case 'z':
-					out = append(out, base.Format("-0700"))
-				case 'Z':
-					out = append(out, base.Format("MST"))
-				case '%':
-					out = append(out, "%")
-				}
-				index++
-			}
-		default:
-			out = append(out, string(layout[index]))
-		}
-	}
-	return strings.Join(out, "")
+func (l *ULog) SetExternal(external func(string, []byte)) {
+	l.Lock()
+	l.external = external
+	l.Unlock()
+}
+func (l *ULog) ClearExternal() {
+	l.Lock()
+	l.external = nil
+	l.Unlock()
 }
 
 func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
-	var err error
-	if l.level < severity || (!l.syslog && !l.file && !l.console) {
+	l.RLock()
+	if l.level < severity || (!l.syslog && l.external == nil && !l.file && !l.console) {
+		l.RUnlock()
 		return
 	}
-	layout := ""
-	if current, ok := in.(map[string]any); ok {
-		var buffer bytes.Buffer
+	l.RUnlock()
 
+	structured, content := false, bslab.Get(1<<8, nil)
+	defer bslab.Put(content)
+
+	if structure, ok := in.(map[string]any); ok {
+		structured = true
+		l.RLock()
 		for key, value := range l.fields {
-			parts := strings.Split(key, ".")
-			for index := 0; index < len(parts)-1; index++ {
-				if next, ok := current[parts[index]].(map[string]any); ok {
-					current = next
-				} else {
-					current[parts[index]] = map[string]any{}
-					current = current[parts[index]].(map[string]any)
+			if _, exists := structure[key]; !exists {
+				structure[key] = value
+			}
+		}
+
+		buffer := bytes.NewBuffer([]byte{'{'})
+		if len(structure) != 0 {
+			encoder := json.NewEncoder(buffer)
+			encoder.SetEscapeHTML(false)
+			for _, key := range l.order {
+				if _, exists := structure[key]; exists {
+					buffer.WriteString(`"` + key + `":`)
+					encoder.Encode(structure[key])
+					buffer.Truncate(buffer.Len() - 1)
+					buffer.WriteByte(',')
 				}
 			}
-			if current[parts[len(parts)-1]] == nil {
-				current[parts[len(parts)-1]] = value
+			for _, key := range ufmt.Keys(structure) {
+				if !slices.Contains(l.order, key) {
+					buffer.WriteString(`"` + key + `":`)
+					encoder.Encode(structure[key])
+					buffer.Truncate(buffer.Len() - 1)
+					buffer.WriteByte(',')
+				}
 			}
+			buffer.Truncate(buffer.Len() - 1)
 		}
-		// TODO add ordered fields
-		encoder := json.NewEncoder(&buffer)
-		encoder.SetEscapeHTML(false)
-		if err := encoder.Encode(in); err == nil {
-			layout = "%s"
-			a = []any{bytes.TrimSpace(buffer.Bytes())}
-		}
-	} else if _, ok := in.(string); ok {
-		layout = in.(string)
+		l.RUnlock()
+		buffer.WriteByte('}')
+		content = append(content, buffer.Bytes()...)
+
+	} else if layout, ok := in.(string); ok {
+		content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
 	}
-	layout = strings.TrimSpace(layout)
+
 	if l.syslog {
 		if l.syslogHandle == nil {
 			l.Lock()
@@ -484,8 +421,8 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 				if l.syslogRemote != "" {
 					protocol = "udp"
 				}
-				if l.syslogHandle, err = DialSyslog(protocol, l.syslogRemote, l.syslogFacility, l.syslogName); err != nil {
-					l.syslogHandle = nil
+				if handle, err := DialSyslog(protocol, l.syslogRemote, l.syslogFacility, l.syslogName); err == nil {
+					l.syslogHandle = handle
 				}
 			}
 			l.Unlock()
@@ -493,51 +430,73 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 		if l.syslogHandle != nil {
 			switch severity {
 			case LOG_ERR:
-				l.syslogHandle.Err(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Err(string(content))
 			case LOG_WARNING:
-				l.syslogHandle.Warning(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Warning(string(content))
 			case LOG_INFO:
-				l.syslogHandle.Info(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Info(string(content))
 			case LOG_DEBUG:
-				l.syslogHandle.Debug(fmt.Sprintf(layout, a...))
+				l.syslogHandle.Debug(string(content))
 			}
 		}
 	}
+
+	l.RLock()
+	if l.external != nil {
+		l.external(severityNames[severity], content)
+	}
+	l.RUnlock()
+
+	content = append(content, '\n')
 	if l.optionUTC {
 		now = now.UTC()
 	} else {
 		now = now.Local()
 	}
 	if l.file {
-		path := strftime(l.filePath, now)
+		path := ufmt.Strftime(l.filePath, now)
 		l.Lock()
-		if l.fileOutputs[path] == nil {
+		if _, exists := l.fileOutputs[path]; !exists {
 			os.MkdirAll(filepath.Dir(path), 0755)
 			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0644); err == nil {
 				l.fileOutputs[path] = &FileOutput{handle: handle}
 			}
 		}
-		if l.fileOutputs[path] != nil && l.fileOutputs[path].handle != nil {
-			prefix := ""
-			if l.fileFacility != 0 {
-				prefix = fmt.Sprintf("<%d>%s %s[%d]: ", l.fileFacility|severity, now.Format(time.Stamp), l.syslogName, os.Getpid())
-			} else {
-				switch l.fileTime {
-				case TIME_DATETIME:
-					prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
-				case TIME_MSDATETIME:
-					prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%03d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond()/int(time.Millisecond))
-				case TIME_TIMESTAMP:
-					prefix = fmt.Sprintf("%d ", now.Unix())
-				case TIME_MSTIMESTAMP:
-					prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
+		if output, exists := l.fileOutputs[path]; exists {
+			if handle := output.handle; handle != nil {
+				prefix := make([]byte, 0, 128)
+				if l.fileFacility != 0 {
+					prefix = append(prefix, '<')
+					prefix = append(prefix, strconv.Itoa(l.fileFacility|severity)...)
+					prefix = append(prefix, '>')
+					prefix = append(prefix, now.Format(time.Stamp)...)
+					prefix = append(prefix, ' ')
+					prefix = append(prefix, l.syslogName...)
+					prefix = append(prefix, '[')
+					prefix = append(prefix, strconv.Itoa(os.Getpid())...)
+					prefix = append(prefix, []byte{']', ':', ' '}...)
+				} else {
+					switch l.fileTime {
+					case TIME_DATETIME:
+						prefix = append(prefix, now.Format(time.DateTime)...)
+					case TIME_MSDATETIME:
+						prefix = append(prefix, now.Format(time.DateTime+".000")...)
+					case TIME_TIMESTAMP:
+						prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+					case TIME_MSTIMESTAMP:
+						prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
+					}
+					if len(prefix) != 0 {
+						prefix = append(prefix, ' ')
+					}
+					if l.fileSeverity {
+						prefix = append(prefix, severityLabels[severity]...)
+					}
 				}
-				if l.fileSeverity {
-					prefix += severityLabels[severity]
-				}
+				handle.Write(prefix)
+				handle.Write(content)
+				l.fileOutputs[path].last = now
 			}
-			l.fileOutputs[path].handle.WriteString(fmt.Sprintf(prefix+layout+"\n", a...))
-			l.fileOutputs[path].last = now
 		}
 		if now.Sub(l.fileLast) >= 5*time.Second {
 			l.fileLast = now
@@ -550,27 +509,45 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 		}
 		l.Unlock()
 	}
+
 	if l.console {
-		prefix := ""
-		switch l.consoleTime {
-		case TIME_DATETIME:
-			prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
-		case TIME_MSDATETIME:
-			prefix = fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%03d ", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond()/int(time.Millisecond))
-		case TIME_TIMESTAMP:
-			prefix = fmt.Sprintf("%d ", now.Unix())
-		case TIME_MSTIMESTAMP:
-			prefix = fmt.Sprintf("%d ", now.UnixNano()/int64(time.Millisecond))
+		prefix := make([]byte, 0, 128)
+		if l.consoleTime != TIME_NONE {
+			if l.consoleColors {
+				prefix = append(prefix, "\x1b[38;5;250m"...)
+			}
+			switch l.consoleTime {
+			case TIME_DATETIME:
+				prefix = append(prefix, now.Format(time.DateTime)...)
+			case TIME_MSDATETIME:
+				prefix = append(prefix, now.Format(time.DateTime+".000")...)
+			case TIME_TIMESTAMP:
+				prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+			case TIME_MSTIMESTAMP:
+				prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
+			}
+			if l.consoleColors {
+				prefix = append(prefix, "\x1b[m"...)
+			}
+			prefix = append(prefix, ' ')
 		}
 		if l.consoleSeverity {
 			if l.consoleColors {
-				prefix += fmt.Sprintf("%s%s\x1b[0m", severityColors[severity], severityLabels[severity])
-			} else {
-				prefix += severityLabels[severity]
+				prefix = append(prefix, severityColors[severity]...)
+			}
+			prefix = append(prefix, severityLabels[severity]...)
+			if l.consoleColors {
+				prefix = append(prefix, "\x1b[m"...)
+			}
+		}
+		if structured && l.consoleColors {
+			for _, item := range structureColors {
+				content = item.expression.ReplaceAll(content, item.replace)
 			}
 		}
 		l.Lock()
-		fmt.Fprintf(l.consoleHandle, prefix+layout+"\n", a...)
+		l.consoleHandle.Write(prefix)
+		l.consoleHandle.Write(content)
 		l.Unlock()
 	}
 }

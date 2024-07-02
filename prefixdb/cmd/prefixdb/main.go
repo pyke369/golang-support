@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/prefixdb"
 	"github.com/pyke369/golang-support/ufmt"
 )
@@ -46,10 +46,10 @@ var (
 )
 
 func size(in int) string {
-	if in < 1024*1024 {
-		return fmt.Sprintf("%.1fkB", float64(in)/1024)
+	if in < (1 << 20) {
+		return strconv.FormatFloat(float64(in)/(1<<10), 'f', 1, 64) + "kB"
 	}
-	return fmt.Sprintf("%.1fMB", float64(in)/(1024*1024))
+	return strconv.FormatFloat(float64(in)/(1<<20), 'f', 1, 64) + "MB"
 }
 
 func mkjson() {
@@ -74,11 +74,11 @@ func mkjson() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
+					os.Stderr.WriteString("\radding prefixes  [" + os.Args[index] + "] " + strconv.Itoa(count))
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 	start := time.Now()
@@ -88,12 +88,11 @@ func mkjson() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
-			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
-		)
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
+			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%s)\n", os.Args[2], err.Error())
+		os.Stderr.WriteString("saving database   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
 }
 
@@ -125,7 +124,7 @@ func mkoui() {
 									address += ":"
 								}
 							}
-							if prefix, err := netip.ParsePrefix(fmt.Sprintf("%s/%d", address, mask)); err == nil {
+							if prefix, err := netip.ParsePrefix(address + "/" + strconv.Itoa(mask)); err == nil {
 								pfdb.Add(prefix, map[string]any{"company": data.Company}, nil)
 								count++
 							}
@@ -134,11 +133,11 @@ func mkoui() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
+					os.Stderr.WriteString("\radding prefixes  [" + os.Args[index] + "] " + strconv.Itoa(count))
 				}
 			}
 			handle.Close()
-			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%.3fs - %d entries)\n", os.Args[index], float64(time.Since(start))/float64(time.Second), count)
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 	start := time.Now()
@@ -148,12 +147,11 @@ func mkoui() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
-			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
-		)
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
+			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%s)\n", os.Args[2], err.Error())
+		os.Stderr.WriteString("saving database   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
 }
 
@@ -190,12 +188,12 @@ func mkcity() {
 			}
 			if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 				last = now
-				fmt.Fprintf(os.Stderr, "\rloading locations [%s] %d", os.Args[3], len(locations))
+				os.Stderr.WriteString("\rloading locations [" + os.Args[3] + "] " + strconv.Itoa(len(locations)))
 			}
 		}
 		handle.Close()
 		time.Sleep(time.Millisecond)
-		fmt.Fprintf(os.Stderr, "\rloaded locations [%s] (%v - %d entries)\n", os.Args[3], time.Since(start).Truncate(time.Millisecond), len(locations))
+		os.Stderr.WriteString("\rloaded locations [" + os.Args[3] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(len(locations)) + " entries)\n")
 	}
 
 	clusters := [][]string{
@@ -244,12 +242,12 @@ func mkcity() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\radding prefixes  [%s] %d", os.Args[index], count)
+					os.Stderr.WriteString("\radding prefixes  [" + os.Args[index] + "] " + strconv.Itoa(count))
 				}
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 
@@ -260,12 +258,11 @@ func mkcity() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
-			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
-		)
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
+			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database  [%s] failed (%v)\n", os.Args[2], err)
+		os.Stderr.WriteString("saving database  [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
 }
 
@@ -297,12 +294,12 @@ func mkasn() {
 				}
 				if now := time.Now(); now.Sub(last) >= 250*time.Millisecond {
 					last = now
-					fmt.Fprintf(os.Stderr, "\radding prefixes   [%s] %d", os.Args[index], count)
+					os.Stderr.WriteString("\radding prefixes   [" + os.Args[index] + "] " + strconv.Itoa(count))
 				}
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			fmt.Fprintf(os.Stderr, "\radded prefixes   [%s] (%v - %d entries)\n", os.Args[index], time.Since(start).Truncate(time.Millisecond), count)
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 
@@ -313,12 +310,11 @@ func mkasn() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		fmt.Fprintf(os.Stderr, "saved database   [%s] (%.3fs - total[%s] strings[%s] numbers[%s] pairs[%s] clusters[%s] maps[%s] nodes[%s])\n",
-			os.Args[2], float64(time.Since(start))/float64(time.Second), size(pfdb.Total), size(pfdb.Strings[0]),
-			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
-		)
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
+			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database  [%s] failed (%v)\n", os.Args[2], err)
+		os.Stderr.WriteString("saving database  [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
 }
 
@@ -332,7 +328,7 @@ func rlookup(remote, value string, out map[string]any) {
 				data := map[string]any{}
 				json.Unmarshal(body, &data)
 				for key, value := range data {
-					if _, ok := out[key]; !ok {
+					if _, exists := out[key]; !exists {
 						out[key] = value
 					}
 				}
@@ -347,22 +343,23 @@ func lookup() {
 		if strings.HasSuffix(os.Args[index], `.pfdb`) {
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
-				fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
-					os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
+				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
+
 				databases = append(databases, database)
 			} else {
-				fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
+				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
 		} else if strings.HasPrefix(os.Args[index], `http`) {
 			lookup := map[string]any{}
 			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
 				remote = os.Args[index]
-				fmt.Fprintf(os.Stderr, "remote   [%s]\n", os.Args[index])
+				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
 			} else {
-				fmt.Fprintf(os.Stderr, "remote   [%s] failed (not a valid prefixdb server)\n", os.Args[index])
+				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "lookup   [%s] ", os.Args[index])
+			os.Stderr.WriteString("lookup   [" + os.Args[index] + "] ")
 			lookup := map[string]any{}
 			for _, database := range databases {
 				database.Lookup(os.Args[index], lookup)
@@ -371,7 +368,8 @@ func lookup() {
 				rlookup(remote, os.Args[index], lookup)
 			}
 			data, _ := json.Marshal(lookup)
-			fmt.Printf("%s\n", data)
+			os.Stdout.Write(data)
+			os.Stdout.WriteString("\n")
 		}
 	}
 }
@@ -382,19 +380,19 @@ func batch() {
 		if strings.HasSuffix(os.Args[index], `.pfdb`) {
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
-				fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
-					os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
+				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 				databases = append(databases, database)
 			} else {
-				fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
+				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
 		} else if strings.HasPrefix(os.Args[index], `http`) {
 			lookup := map[string]any{}
 			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
 				remote = os.Args[index]
-				fmt.Fprintf(os.Stderr, "remote   [%s]\n", os.Args[index])
+				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
 			} else {
-				fmt.Fprintf(os.Stderr, "remote   [%s] failed (not a valid prefixdb server)\n", os.Args[index])
+				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
 		} else {
 			in, column, parts := os.Stdin, 1, strings.Split(os.Args[index], "@")
@@ -413,7 +411,7 @@ func batch() {
 				for done, record := range records {
 					if len(record) > column {
 						lookup := map[string]any{}
-						if _, ok := cache[record[column]]; ok {
+						if _, exists := cache[record[column]]; exists {
 							lookup = cache[record[column]]
 						} else {
 							for _, database := range databases {
@@ -425,21 +423,30 @@ func batch() {
 							cache[record[column]] = lookup
 						}
 						for field := index + 1; field < len(os.Args); field++ {
-							if lookup[os.Args[field]] != nil {
-								record = append(record, fmt.Sprintf("%v", lookup[os.Args[field]]))
+							if value := lookup[os.Args[field]]; value != nil {
+								if rvalue := j.Number(value, 999); rvalue != 999 {
+									record = append(record, strconv.FormatFloat(rvalue, 'f', -1, 64))
+								} else if rvalue := j.String(value); rvalue != "" {
+									record = append(record, rvalue)
+								} else {
+									if rvalue := j.Bool(value); rvalue {
+										record = append(record, "true")
+									} else {
+										record = append(record, "false")
+									}
+								}
 							} else {
 								record = append(record, "")
 							}
-
 						}
 					}
-					fmt.Fprintf(os.Stderr, "\rlookup   [%s] (%d/%d)                                        \r", record[column], done+1, len(records))
+					os.Stderr.WriteString("\rlookup   [" + record[column] + "] (" + strconv.Itoa(done+1) + "/" + strconv.Itoa(len(records)) + ")                                        \r")
 					writer.Write(record)
 					writer.Flush()
 				}
-				fmt.Fprintf(os.Stderr, "\rlookup   [%d records]                                        \n", len(records))
+				os.Stderr.WriteString("\rlookup   [" + strconv.Itoa(len(records)) + " records]                                        \n")
 			} else {
-				fmt.Fprintf(os.Stderr, "csv      [%s] failed (%v)\n", os.Args[index], err)
+				os.Stderr.WriteString("csv      [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
 			break
 		}
@@ -451,11 +458,11 @@ func server() {
 	for index := 3; index < len(os.Args); index++ {
 		database := prefixdb.New()
 		if err := database.Load(os.Args[index]); err == nil {
-			fmt.Fprintf(os.Stderr, "database [%s] (total[%s] version[%d.%d.%d] description[%s])\n",
-				os.Args[index], size(database.Total), (database.Version>>16)&0xff, (database.Version>>8)&0xff, database.Version&0xff, database.Description)
+			os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+				strconv.Itoa((int(database.Version>>8) & 0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 			databases = append(databases, database)
 		} else {
-			fmt.Fprintf(os.Stderr, "database [%s] failed (%v)\n", os.Args[index], err)
+			os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 		}
 	}
 	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
@@ -478,7 +485,7 @@ func server() {
 		}
 		data, _ := json.Marshal(lookup)
 		response.Write(data)
-		fmt.Fprintf(os.Stderr, "lookup   [%s] %s\n", remote, data)
+		os.Stderr.WriteString("lookup   [" + remote + "] " + string(data) + "\n")
 	})
 	parts := strings.Split(os.Args[2], ",")
 	server := &http.Server{
@@ -487,15 +494,15 @@ func server() {
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 4 << 10,
 	}
-	fmt.Fprintf(os.Stderr, "listen   [%s]\n", os.Args[2])
+	os.Stderr.WriteString("listen   [" + os.Args[2] + "]\n")
 	for {
 		if len(parts) > 1 {
 			if err := server.ListenAndServeTLS(parts[1], parts[2]); err != nil {
-				fmt.Fprintf(os.Stderr, "listen   [%s] failed (%v)\n", os.Args[2], err)
+				os.Stderr.WriteString("listen   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 			}
 		} else {
 			if err := server.ListenAndServe(); err != nil {
-				fmt.Fprintf(os.Stderr, "listen   [%s] failed (%v)\n", os.Args[2], err)
+				os.Stderr.WriteString("listen   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 			}
 		}
 		time.Sleep(5 * time.Second)
@@ -503,15 +510,17 @@ func server() {
 }
 
 func usage(status int) {
-	fmt.Fprintf(os.Stderr, "usage: prefixdb <action> [parameters...]\n\n"+
-		"help                                                                  show this help screen\n"+
-		"json   <database[@<description>]> <JSON prefixes>...                  build database from generic JSON-formatted prefixes lists\n"+
-		"oui    <database[@<description>]> <JSON OUI>...                       build database from macadress.io JSON OUI lists\n"+
-		"city   <database[@<description>]> <CSV locations> <CSV prefixes>...   build database from MaxMind GeoIP2 cities lists\n"+
-		"asn    <database[@<description>]> <CSV prefixes>...                   build database from MaxMind GeoLite2 asnums lists\n"+
-		"lookup <database|url>... <address>...                                 lookup entries in database (or from remote server url)\n"+
-		"batch  <database|url>... <CSV input|->[@<column>] <field>...          batch-lookup entries in input CSV file (or stdin)\n"+
-		"server <listen> <database>...                                         spawn an HTTP(S) server for remote lookup\n")
+	os.Stderr.WriteString(`usage: prefixdb <action> [parameters...]
+
+help                                                                  show this help screen
+json   <database[@<description>]> <JSON prefixes>...                  build database from generic JSON-formatted prefixes lists
+oui    <database[@<description>]> <JSON OUI>...                       build database from macadress.io JSON OUI lists
+city   <database[@<description>]> <CSV locations> <CSV prefixes>...   build database from MaxMind GeoIP2 cities lists
+asn    <database[@<description>]> <CSV prefixes>...                   build database from MaxMind GeoLite2 asnums lists
+lookup <database|url>... <address>...                                 lookup entries in database (or from remote server url)
+batch  <database|url>... <CSV input|->[@<column>] <field>...          batch-lookup entries in input CSV file (or stdin)
+server <listen> <database>...                                         spawn an HTTP(S) server for remote lookup
+`)
 	os.Exit(status)
 }
 
