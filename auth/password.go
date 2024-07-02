@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -22,7 +21,7 @@ func crypt512(key, salt string, rounds int) (out string) {
 	}
 	rounds = max(1000, min(999999999, rounds))
 	if rounds != 5000 {
-		out += fmt.Sprintf("rounds=%d$", rounds)
+		out += "rounds=" + strconv.Itoa(rounds) + "$"
 	}
 	salt = salt[:min(16, len(salt))]
 	if salt == "" {

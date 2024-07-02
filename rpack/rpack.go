@@ -3,10 +3,10 @@ package rpack
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 type RPACK struct {
@@ -134,9 +136,9 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 	})
 	fmt.Fprintf(os.Stderr, "\r%-120.120s\rpacked %d file(s) %d byte(s) in %v\n", "", count, size, time.Since(start).Truncate(time.Millisecond))
 	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
-		random := make([]byte, 64)
-		rand.Read(random)
-		uid := fmt.Sprintf("rpack_%8.8x", md5.Sum(random))
+		random := [8]byte{}
+		rand.Read(random[:])
+		uid := "rpack_" + ufmt.Hex(random[:])
 		fmt.Fprintf(handle,
 			`package %s
 
@@ -189,7 +191,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 		}
 	}
 	if pack == nil || pack[rpath] == nil {
-		err = fmt.Errorf("rpack: resource not found")
+		err = errors.New("rpack: resource not found")
 		return
 	}
 	if pack[rpath].raw == nil {

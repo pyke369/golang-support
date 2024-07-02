@@ -2,10 +2,10 @@ package uuid
 
 import (
 	"crypto/rand"
-	"fmt"
 	"strings"
 
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 type UUID [16]byte
@@ -31,5 +31,5 @@ func Check(in string) bool {
 }
 
 func (u UUID) String() string {
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+	return ufmt.Hex(u[0:4]) + "-" + ufmt.Hex(u[4:6]) + "-" + ufmt.Hex(u[6:8]) + "-" + ufmt.Hex(u[8:10]) + "-" + ufmt.Hex(u[10:16])
 }

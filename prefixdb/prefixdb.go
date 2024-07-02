@@ -5,10 +5,10 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -498,9 +498,10 @@ func (d *PrefixDB) Load(path string) error {
 			return errors.New(`prefixdb: invalid preamble`)
 		}
 		if version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7]); (version & 0xff0000) > (VERSION & 0xff0000) {
-			return fmt.Errorf(`prefixdb: library major version %d is incompatible with database major version %d`, (VERSION&0xff0000)>>16, (version&0xff0000)>>16)
+			return errors.New("prefixdb: incompatible library and database major versions")
 		} else {
-			if len(data) < 24 || fmt.Sprintf("%x", md5.Sum(data[24:])) != fmt.Sprintf("%x", data[8:24]) {
+			hash := md5.Sum(data[24:])
+			if len(data) < 24 || slices.Compare(hash[:], data[8:24]) != 0 {
 				return errors.New(`prefixdb: checksum is invalid`)
 			}
 			d.Lock()

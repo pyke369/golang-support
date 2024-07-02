@@ -11,10 +11,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
+	"errors"
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...string) (token string, err error) {
@@ -27,7 +29,7 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 		rest := []byte(secret)
 		for {
 			if block, rest = pem.Decode(rest); block == nil {
-				return "", fmt.Errorf("ujwt: invalid private key")
+				return "", errors.New("token: invalid private key")
 			}
 			if block.Type == "RSA PRIVATE KEY" || block.Type == "EC PRIVATE KEY" {
 				if block.Type == "RSA PRIVATE KEY" {
@@ -64,12 +66,12 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 	} else if alg == "RS256" {
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("ujwt: %v", err)
+			return "", ufmt.Wrap(err, "token")
 		}
 		sum := sha256.Sum256([]byte(token))
 		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 		if err != nil {
-			return "", fmt.Errorf("ujwt: %v", err)
+			return "", ufmt.Wrap(err, "token")
 		}
 		token += "." + base64.RawURLEncoding.EncodeToString(signature)
 	} else if alg == "ES256" {
@@ -77,15 +79,15 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 
 		key, err := x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("ujwt: %v", err)
+			return "", ufmt.Wrap(err, "token")
 		}
 		if key.Curve.Params().BitSize != 256 {
-			return "", fmt.Errorf("ujwt: invalid elliptic curve size %d", key.Curve.Params().BitSize)
+			return "", errors.New("token: invalid elliptic curve size")
 		}
 		sum := sha256.Sum256([]byte(token))
 		r, s, err := ecdsa.Sign(rand.Reader, key, sum[:])
 		if err != nil {
-			return "", fmt.Errorf("ujwt: %v", err)
+			return "", ufmt.Wrap(err, "token")
 		}
 		r.FillBytes(signature[:32])
 		s.FillBytes(signature[32:])
@@ -97,7 +99,7 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 func TokenDecode(token string, secrets []string) (claims map[string]any, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("ujwt: invalid token format")
+		return nil, errors.New("token: invalid format")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
@@ -108,7 +110,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 		return nil, err
 	}
 	if (header["typ"] != "" && header["typ"] != "JWT") || (header["alg"] != "none" && header["alg"] != "HS256" && header["alg"] != "RS256" && header["alg"] != "ES256") {
-		return nil, fmt.Errorf("ujwt: unsupported token format")
+		return nil, errors.New("token: unsupported format")
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
@@ -154,7 +156,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 			}
 		}
 		if !pass {
-			return nil, fmt.Errorf("ujwt: invalid signature")
+			return nil, errors.New("token: invalid signature")
 		}
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
@@ -164,11 +166,11 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 	if err := json.Unmarshal(decoded, &claims); err != nil {
 		return nil, err
 	}
-	if _, ok := claims["exp"]; ok {
-		if expire, ok := claims["exp"].(float64); !ok {
-			return claims, fmt.Errorf("ujwt: invalid expiration claim")
+	if value, exists := claims["exp"]; exists {
+		if expire, ok := value.(float64); !ok {
+			return claims, errors.New("token: invalid expiration claim")
 		} else if time.Now().After(time.Unix(int64(expire), 0)) {
-			return claims, fmt.Errorf("ujwt: expired token")
+			return claims, errors.New("token: expired")
 		}
 	}
 	return

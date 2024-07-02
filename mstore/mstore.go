@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"io/fs"
 	"math"
@@ -19,6 +18,8 @@ import (
 
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -159,15 +160,15 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 		created = true
 	}
 	if chunk.handle, err = os.OpenFile(path, flags, 0644); err != nil {
-		return nil, fmt.Errorf("mstore: %w", err)
+		return nil, ufmt.Wrap(err, "mstore")
 	}
 	if err = chunk.handle.Truncate(size); err != nil {
 		chunk.handle.Close()
-		return nil, fmt.Errorf("mstore: %w", err)
+		return nil, ufmt.Wrap(err, "mstore")
 	}
 	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED); err != nil {
 		chunk.handle.Close()
-		return nil, fmt.Errorf("mstore: %w", err)
+		return nil, ufmt.Wrap(err, "mstore")
 	}
 	if created {
 		binary.BigEndian.PutUint32(chunk.data[0:], magic)
@@ -619,7 +620,7 @@ func (m *metric) Import(in map[string]any) error {
 		if mode := ModeIndexes[j.String(column["mode"])]; mode != 0 {
 			m = m.WithColumn(mode, int64(j.Number(column["size"])), j.String(column["description"]))
 		} else {
-			return fmt.Errorf(`mstore: invalid column mode "%s"`, j.String(column["mode"]))
+			return errors.New("mstore: invalid column mode " + j.String(column["mode"]))
 		}
 	}
 	for _, value := range j.Slice(in["values"]) {

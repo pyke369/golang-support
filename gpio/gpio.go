@@ -2,9 +2,10 @@ package gpio
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -85,13 +86,13 @@ func NewGPIO(index ...int) (gpio *GPIO, err error) {
 	if len(index) > 0 {
 		chip = index[0]
 	}
-	handle, err := os.Open(fmt.Sprintf("/dev/gpiochip%d", chip))
+	handle, err := os.Open("/dev/gpiochip" + strconv.Itoa(chip))
 	if err != nil {
 		return nil, err
 	}
 	info := _GPIO_CHIPINFO{}
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, handle.Fd(), _GPIO_GET_CHIPINFO, uintptr(unsafe.Pointer(&info))); errno != 0 {
-		return nil, fmt.Errorf("errno: %d", errno)
+		return nil, errors.New("errno: " + strconv.Itoa(int(errno)))
 	}
 	gpio = &GPIO{
 		handle: handle.Fd(),

@@ -2,12 +2,12 @@
 
 package ulog
 
-import "fmt"
+import "errors"
 
 type Syslog struct{}
 
 func DialSyslog(network, raddr string, priority int, tag string) (handle *Syslog, err error) {
-	return nil, fmt.Errorf("unsupported")
+	return nil, errors.New("unsupported")
 }
 func (this *Syslog) Close() {
 }

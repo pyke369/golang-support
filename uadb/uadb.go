@@ -2,7 +2,7 @@ package uadb
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"hash/crc32"
 	"os"
 	"sort"
@@ -83,7 +83,7 @@ func (db *UADB) Load(path string) error {
 			return err
 		}
 		if loaded.Version == "" || len(loaded.Agents) == 0 || len(loaded.Devices) == 0 || len(loaded.Systems) == 0 || len(loaded.Crawlers) == 0 {
-			return fmt.Errorf("invalid uadb database")
+			return errors.New("invalid uadb database")
 		}
 		db.Version, db.Agents, db.Devices, db.Systems, db.Crawlers = loaded.Version, loaded.Agents, loaded.Devices, loaded.Systems, loaded.Crawlers
 		db.lock.Lock()
@@ -234,7 +234,7 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 		db.last = time.Now()
 		sorter := []string{}
 		for key, value := range db.cache {
-			sorter = append(sorter, fmt.Sprintf("%d@@%d", value.last, key))
+			sorter = append(sorter, strconv.Itoa(value.last)+"@@"+strconv.Itoa(int(key)))
 		}
 		sort.Strings(sorter)
 		for index := 0; index < len(sorter)-db.highest; index++ {

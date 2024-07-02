@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/prefixdb"
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 type LOCATION struct {
@@ -92,7 +93,7 @@ func mkjson() {
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%v)\n", os.Args[2], err)
+		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%s)\n", os.Args[2], err.Error())
 	}
 }
 
@@ -119,7 +120,7 @@ func mkoui() {
 									}
 								}
 								value, _ := strconv.ParseInt(fields[index], 16, 32)
-								address += fmt.Sprintf("%02x", value)
+								address += ufmt.Hex([]byte{byte(value)})
 								if index == 2 || index == 4 {
 									address += ":"
 								}
@@ -152,7 +153,7 @@ func mkoui() {
 			size(pfdb.Numbers[0]), size(pfdb.Pairs[0]), size(pfdb.Clusters[0]), size(pfdb.Maps[0]), size(pfdb.Nodes[0]),
 		)
 	} else {
-		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%v)\n", os.Args[2], err)
+		fmt.Fprintf(os.Stderr, "saving database   [%s] failed (%s)\n", os.Args[2], err.Error())
 	}
 }
 
@@ -286,7 +287,7 @@ func mkasn() {
 						if asnum, _ := strconv.Atoi(fields[1][1]); asnum != 0 {
 							if prefix, err := netip.ParsePrefix(fields[0][1]); err == nil {
 								pfdb.Add(prefix, map[string]any{
-									"as_number": fmt.Sprintf("AS%d", asnum),
+									"as_number": "AS" + strconv.Itoa(asnum),
 									"as_name":   fields[2][1],
 								}, nil)
 								count++
@@ -323,7 +324,7 @@ func mkasn() {
 
 func rlookup(remote, value string, out map[string]any) {
 	if remote != "" && value != "" && out != nil {
-		if request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s?remote=%s", remote, value), nil); err == nil {
+		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+value, nil); err == nil {
 			request.Header.Add("X-Forwarded-For", value)
 			if response, err := client.Do(request); err == nil {
 				body, _ := io.ReadAll(response.Body)

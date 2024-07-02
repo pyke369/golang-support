@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
 )
 
 type UConfig struct {
@@ -76,7 +76,7 @@ func escape(in string) string {
 		if instring {
 			offset := strings.IndexAny(escaped, in[index:index+1])
 			if offset >= 0 {
-				out = append(out, []byte(fmt.Sprintf("@@@%02d@@@", offset))...)
+				out = append(out, []byte("@@@"+ufmt.Int(offset, 2)+"@@@")...)
 			} else {
 				out = append(out, in[index:index+1]...)
 			}
@@ -149,7 +149,7 @@ func (c *UConfig) SetPrefix(prefix string) {
 
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
-	content := fmt.Sprintf("/*base:%s*/\n", base)
+	content := "/*base:" + base + "*/\n"
 	c.top = ""
 	if len(inline) > 0 && inline[0] {
 		content += in
@@ -159,7 +159,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		} else {
 			c.top = filepath.Dir(filepath.Join(base, in))
 		}
-		content += fmt.Sprintf("{{<%s}}", in)
+		content += "{{<" + in + "}}"
 	}
 
 	for {
@@ -190,7 +190,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		switch content[indexes[2]:indexes[3]] {
 		case "<":
 			if arguments[0][0:1] != "/" {
-				arguments[0] = fmt.Sprintf("%s/%s", base, arguments[0])
+				arguments[0] = base + "/" + arguments[0]
 			}
 			nbase := ""
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
@@ -202,7 +202,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				}
 			}
 			if nbase != "" && strings.Contains(expanded, "\n") {
-				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
+				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
 			}
 		case "=":
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
@@ -211,7 +211,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 						for _, line := range strings.Split(string(mcontent), "\n") {
 							line = strings.TrimSpace(line)
 							if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {
-								expanded += fmt.Sprintf("\"%s\"\n", line)
+								expanded += `"` + line + `"` + "\n"
 							}
 						}
 					}
@@ -219,13 +219,13 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 			}
 		case "|":
 			if arguments[0][0:1] != "/" {
-				arguments[0] = fmt.Sprintf("%s/%s", base, arguments[0])
+				arguments[0] = base + "/" + arguments[0]
 			}
 			nbase := ""
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
 					if element[0:1] != "/" {
-						element = fmt.Sprintf("%s/%s", base, element)
+						element = base + "/" + element
 					}
 					if mcontent, err := exec.Command(element, strings.Join(arguments[1:], " ")).Output(); err == nil {
 						nbase = filepath.Dir(element)
@@ -234,7 +234,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				}
 			}
 			if nbase != "" && strings.Contains(expanded, "\n") {
-				expanded = fmt.Sprintf("/*base:%s*/\n%s\n/*base:%s*/\n", nbase, expanded, base)
+				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
 			}
 		case "@":
 			requester := http.Client{
@@ -250,7 +250,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		case "&":
 			expanded += os.Getenv(arguments[0])
 		case "!":
-			if matcher := rcache.Get(fmt.Sprintf(`(?i)^--?(no-?)?(?:%s)(?:(=)(.+))?$`, arguments[0])); matcher != nil {
+			if matcher := rcache.Get("(?i)^--?(no-?)?(?:" + arguments[0] + ")(?:(=)(.+))?$"); matcher != nil {
 				for index := 1; index < len(os.Args); index++ {
 					option := os.Args[index]
 					if option == "--" {
@@ -279,19 +279,19 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 			}
 		case "+":
 			if arguments[0][0:1] != "/" {
-				arguments[0] = fmt.Sprintf("%s/%s", base, arguments[0])
+				arguments[0] = base + "/" + arguments[0]
 			}
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
 					element = filepath.Base(element)
-					expanded += fmt.Sprintf("%s ", strings.TrimSuffix(element, filepath.Ext(element)))
+					expanded += strings.TrimSuffix(element, filepath.Ext(element)) + " "
 				}
 			}
 			expanded = strings.TrimSpace(expanded)
 		case "_":
 			expanded = filepath.Base(in)
 		}
-		content = fmt.Sprintf("%s%s%s", content[0:indexes[0]], expanded, content[indexes[1]:])
+		content = content[0:indexes[0]] + expanded + content[indexes[1]:]
 	}
 
 	var config any
@@ -301,7 +301,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
 				if start := strings.LastIndex(content[:syntax.Offset], "\n") + 1; start >= 0 {
 					line := strings.Count(content[:start], "\n") + 1
-					return fmt.Errorf("uconfig: %s at line %d near %s", syntax, line, content[start:syntax.Offset])
+					return errors.New("uconfig: " + syntax.Error() + " at line " + strconv.Itoa(line) + " near" + content[start:syntax.Offset])
 				}
 			}
 			return err
@@ -310,7 +310,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 
 	c.Lock()
 	c.config = config
-	c.hash = fmt.Sprintf("%x", sha1.Sum([]byte(content)))
+	hash := sha1.Sum([]byte(content))
+	c.hash = ufmt.Hex(hash[:])
 	c.cache = map[string]any{}
 	reduce(c.config)
 	c.Unlock()
@@ -426,7 +427,7 @@ func (c *UConfig) GetPaths(path string) (paths []string) {
 	switch reflect.TypeOf(current).Kind() {
 	case reflect.Slice:
 		for index := 0; index < len(current.([]any)); index++ {
-			item := fmt.Sprintf("%s%s%d", path, prefix, index)
+			item := path + prefix + strconv.Itoa(index)
 			if c.prefix != "" {
 				item = strings.TrimPrefix(item, c.prefix+c.separator)
 			}
@@ -434,7 +435,7 @@ func (c *UConfig) GetPaths(path string) (paths []string) {
 		}
 	case reflect.Map:
 		for key := range current.(map[string]any) {
-			item := fmt.Sprintf("%s%s%s", path, prefix, key)
+			item := path + prefix + key
 			if c.prefix != "" {
 				item = strings.TrimPrefix(item, c.prefix+c.separator)
 			}

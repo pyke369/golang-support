@@ -10,11 +10,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,7 +24,9 @@ import (
 
 	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
 	"github.com/pyke369/golang-support/uuid"
+
 	"golang.org/x/net/http/httpproxy"
 )
 
@@ -157,7 +159,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					conn = tls.Client(conn, config.TLSConfig)
 					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 						conn.Close()
-						return nil, fmt.Errorf(`uws: %s`, err.Error())
+						return nil, ufmt.Wrap(err, "uws")
 					}
 				}
 				if proxy != nil {
@@ -172,28 +174,28 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 							port = "80"
 						}
 					}
-					payload := fmt.Sprintf("CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n", host, port, host, port)
+					payload := "CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n"
 					if user := proxy.User; user != nil {
 						password, _ := user.Password()
-						payload += fmt.Sprintf("Proxy-Authorization: basic %s\r\n", base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)))
+						payload += "Proxy-Authorization: basic " + base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)) + "\r\n"
 					}
 					payload += "\r\n"
 
 					conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 					if _, err := conn.Write([]byte(payload)); err != nil {
 						conn.Close()
-						return nil, fmt.Errorf(`uws: %s`, err.Error())
+						return nil, ufmt.Wrap(err, "uws")
 					}
 					conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 					if response, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
 						response.Body.Close()
 						if response.StatusCode != 200 {
 							conn.Close()
-							return nil, fmt.Errorf(`uws: proxy connection error (http status %d)`, response.StatusCode)
+							return nil, errors.New("uws: proxy connection http status " + strconv.Itoa(response.StatusCode))
 						}
 					} else {
 						conn.Close()
-						return nil, fmt.Errorf(`uws: %s`, err.Error())
+						return nil, ufmt.Wrap(err, "uws")
 					}
 
 					if url.Scheme == "https" {
@@ -204,7 +206,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						conn = tls.Client(conn, config.TLSConfig)
 						if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 							conn.Close()
-							return nil, fmt.Errorf(`uws: %s`, err.Error())
+							return nil, ufmt.Wrap(err, "uws")
 						}
 					}
 				}
@@ -212,7 +214,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 				if err := request.Write(conn); err != nil {
 					conn.Close()
-					return nil, fmt.Errorf(`uws: %s`, err.Error())
+					return nil, ufmt.Wrap(err, "uws")
 				}
 				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
@@ -225,7 +227,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						strings.ToLower(response.Header.Get("Upgrade")) != "websocket" || !bytes.Equal(ckey[:], skey) {
 						response.Body.Close()
 						conn.Close()
-						return nil, fmt.Errorf(`uws: invalid protocol upgrade (http status %d)`, response.StatusCode)
+						return nil, errors.New("uws: protocol upgrade http status " + strconv.Itoa(response.StatusCode))
 					}
 					protocol := response.Header.Get("Sec-WebSocket-Protocol")
 					if len(config.Protocols) > 0 && protocol == "" && config.NeedProtocol {
@@ -253,13 +255,13 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					return nil, err
 				}
 			} else {
-				return nil, fmt.Errorf(`uws: %s`, err.Error())
+				return nil, ufmt.Wrap(err, "uws")
 			}
 		} else {
-			return nil, fmt.Errorf(`uws: %s`, err.Error())
+			return nil, ufmt.Wrap(err, "uws")
 		}
 	} else {
-		return nil, fmt.Errorf(`uws: %s`, err.Error())
+		return nil, ufmt.Wrap(err, "uws")
 	}
 	return
 }
@@ -587,7 +589,7 @@ close:
 						}
 					} else {
 						if control == nil {
-							control = bslab.Get(132, nil)
+							control = bslab.Get(256, nil)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)

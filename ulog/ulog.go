@@ -118,6 +118,8 @@ type ULog struct {
 	level                 int
 	fields                map[string]any
 	sync.Mutex
+	// TODO add compression option
+	// TODO add purge option
 }
 
 func New(target string) *ULog {
@@ -463,6 +465,7 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 				current[parts[len(parts)-1]] = value
 			}
 		}
+		// TODO add ordered fields
 		encoder := json.NewEncoder(&buffer)
 		encoder.SetEscapeHTML(false)
 		if err := encoder.Encode(in); err == nil {

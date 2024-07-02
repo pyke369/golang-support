@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
+
 	"golang.org/x/crypto/ssh"
 )
 
@@ -97,16 +100,16 @@ func (c *sshConnection) Reset() {
 
 func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOptions, extra ...int) (transport *sshTransport, err error) {
 	if remote == "" {
-		return nil, fmt.Errorf("ssh: invalid remote parameter")
+		return nil, errors.New("ssh: invalid remote parameter")
 	}
 	if credentials == nil || credentials.Username == "" || (credentials.Password == "" && credentials.Key == "") {
-		return nil, fmt.Errorf("ssh: invalid credentials")
+		return nil, errors.New("ssh: invalid credentials")
 	}
 	if options == nil {
 		options = &SSHOptions{Mode: TEXT}
 	}
 	if options.SubSystem != "" && options.SubSystem != "netconf" {
-		return nil, fmt.Errorf("ssh: invalid subsystem")
+		return nil, errors.New("ssh: invalid subsystem")
 	}
 	if _, err := netip.ParseAddrPort(remote); err != nil {
 		if options.SubSystem == "netconf" {
@@ -130,10 +133,10 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		}
 	}
 	if options.Marker == "" {
-		return nil, fmt.Errorf("ssh: invalid marker")
+		return nil, errors.New("ssh: invalid marker")
 	}
 	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
-		return nil, fmt.Errorf("ssh: invalid mode")
+		return nil, errors.New("ssh: invalid mode")
 	}
 
 	key := fmt.Sprintf("%s%v%v", remote, credentials, options)
@@ -145,9 +148,9 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	auth := []ssh.AuthMethod{}
 	if credentials.Key != "" {
 		if private, err := os.ReadFile(credentials.Key); err != nil {
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		} else if signer, err := ssh.ParsePrivateKey(private); err != nil {
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		} else {
 			auth = append(auth, ssh.PublicKeys(signer))
 		}
@@ -188,7 +191,8 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	)
 
 	if len(cache) > 0 && cache[0] {
-		ckey = fmt.Sprintf("/tmp/_%x.json", md5.Sum([]byte(t.remote+t.options.Mode+t.options.SubSystem+t.options.Marker+t.options.Filter+command)))
+		hash := md5.Sum([]byte(t.remote + t.options.Mode + t.options.SubSystem + t.options.Marker + t.options.Filter + command))
+		ckey = "/tmp/_" + ufmt.Hex(hash[:]) + ".json"
 		if content, err := os.ReadFile(ckey); err == nil {
 			if json.Unmarshal(content, &result) == nil {
 				return result, nil
@@ -196,7 +200,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 		}
 	}
 	if command == "" {
-		return nil, fmt.Errorf("ssh: invalid or missing parameter")
+		return nil, errors.New("ssh: invalid or missing parameter")
 	}
 	if timeout <= 0 {
 		timeout = sshExecTimeout
@@ -219,7 +223,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 		t.Unlock()
 		if conn == nil {
 			if time.Since(start) >= timeout/2 {
-				return nil, fmt.Errorf("ssh: max connections reached")
+				return nil, errors.New("ssh: max connections reached")
 			}
 			time.Sleep(time.Second)
 		} else {
@@ -230,28 +234,28 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	if conn.session == nil {
 		if conn.client, err = ssh.Dial("tcp", t.remote, t.config); err != nil {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		}
 		if conn.session, err = conn.client.NewSession(); err != nil {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		}
 		if conn.input, err = conn.session.StdinPipe(); err != nil {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		}
 		if conn.output, err = conn.session.StdoutPipe(); err != nil {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		}
 		if t.options.SubSystem != "" {
 			if err = conn.session.RequestSubsystem(t.options.SubSystem); err != nil {
 				conn.Reset()
-				return nil, fmt.Errorf("ssh: %w", err)
+				return nil, ufmt.Wrap(err, "ssh")
 			}
 		} else if err = conn.session.Shell(); err != nil {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: %w", err)
+			return nil, ufmt.Wrap(err, "ssh")
 		}
 
 		go func() {
@@ -312,7 +316,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	for {
 		if time.Since(start) >= timeout {
 			conn.Reset()
-			return nil, fmt.Errorf("ssh: readyness timeout")
+			return nil, errors.New("ssh: readyness timeout")
 		}
 		conn.Lock()
 		if conn.result != nil {
@@ -344,7 +348,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	}
 	if _, err = fmt.Fprintf(conn.input, command+"\n"); err != nil {
 		conn.Reset()
-		return nil, fmt.Errorf("ssh: %w", err)
+		return nil, ufmt.Wrap(err, "ssh")
 	}
 	if t.options.Trace {
 		fmt.Fprintf(os.Stderr, "> %s\n", command)
@@ -374,7 +378,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			result = parseXML(strings.Join(value, ""))
 		}
 	case <-time.After(timeout - time.Since(start)):
-		err = fmt.Errorf("ssh: execution timeout")
+		err = errors.New("ssh: execution timeout")
 		conn.Reset()
 	}
 	conn.Lock()

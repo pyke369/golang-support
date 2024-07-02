@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ufmt"
 	"github.com/pyke369/golang-support/uuid"
 )
 
@@ -113,13 +114,13 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 			out, _ = io.ReadAll(response.Body)
 			response.Body.Close()
 			if response.StatusCode/100 != 2 || len(out) == 0 {
-				return nil, fmt.Errorf("jsonrpc: HTTP error %d", response.StatusCode)
+				return nil, errors.New("jsonrpc: HTTP error " + strconv.Itoa(response.StatusCode))
 			}
 		} else {
-			return nil, fmt.Errorf("jsonrpc: %v", err)
+			return nil, ufmt.Wrap(err, "jsonrpc")
 		}
 	} else {
-		return nil, fmt.Errorf("jsonrpc: %v", err)
+		return nil, ufmt.Wrap(err, "jsonrpc")
 	}
 	return
 }
@@ -131,7 +132,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 	}
 	for index, call := range calls {
 		if call.Method == "" {
-			return nil, fmt.Errorf("jsonrpc: invalid method for call #%d", index)
+			return nil, errors.New("jsonrpc: invalid method for call #" + strconv.Itoa(index))
 		}
 		call.id, call.paired = call.Id, false
 		if call.Notification {
@@ -181,7 +182,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 	}
 	responses, ids := []RESPONSE{}, map[string]*CALL{}
 	if err := json.Unmarshal(payload, &responses); err != nil {
-		return nil, fmt.Errorf("jsonrpc: %v", err)
+		return nil, ufmt.Wrap(err, "jsonrpc")
 	}
 	if calls == nil {
 		calls = []*CALL{}
@@ -305,7 +306,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 						} else if kind == reflect.Slice {
 							params := map[string]any{}
 							for index, value := range request.Params.([]any) {
-								params[fmt.Sprintf("_%d", index)] = value
+								params["_"+strconv.Itoa(index)] = value
 							}
 							request.Params = params
 						}
@@ -316,7 +317,13 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 					go func(request REQUEST) {
 						defer func() {
 							if r := recover(); r != nil {
-								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: fmt.Sprintf("jsonrpc: %v", r)}}
+								err := errors.New("unknown")
+								if value, ok := r.(error); ok {
+									err = value
+								} else if value, ok := r.(string); ok {
+									err = errors.New(value)
+								}
+								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ufmt.Wrap(err, "jsonrpc").Error()}}
 							}
 						}()
 						opaque := routes[request.Method].Opaque
