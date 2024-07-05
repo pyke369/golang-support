@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -604,4 +605,66 @@ func NumberMap(in any, extra ...bool) (out map[string]float64) {
 		}
 	}
 	return
+}
+
+func Size(in string, fallback int64, extra ...bool) int64 {
+	return SizeBounds(in, fallback, 0, math.MaxInt64, extra...)
+}
+func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out int64) {
+	if captures := rcache.Get(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`).FindStringSubmatch(strings.TrimSpace(strings.ToUpper(in))); captures != nil {
+		value, err := strconv.ParseFloat(captures[1], 64)
+		if err != nil {
+			return fallback
+		}
+		scale := float64(1000)
+		if captures[3] == "B" || (len(extra) != 0 && extra[0]) {
+			scale = float64(1024)
+		}
+		out = int64(value * math.Pow(scale, float64(strings.Index("_KMGTP", captures[2]))))
+	} else {
+		return fallback
+	}
+	return max(min(out, highest), max(0, lowest))
+}
+
+func Duration(in string, fallback float64) time.Duration {
+	return DurationBounds(in, fallback, 0, math.MaxFloat64)
+}
+func DurationBounds(in string, fallback, lowest, highest float64) (out time.Duration) {
+	in = strings.TrimSpace(in)
+
+	value := float64(0.0)
+	if captures := rcache.Get(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`).FindAllStringSubmatch(strings.ToUpper(in), -1); captures != nil {
+		for index := 0; index < len(captures); index++ {
+			if uvalue, err := strconv.ParseFloat(captures[index][1], 64); err == nil {
+				switch captures[index][2] {
+				case "Y":
+					value += uvalue * 86400 * 365.256
+				case "MO":
+					value += uvalue * 86400 * 365.256 / 12
+				case "D":
+					value += uvalue * 86400
+				case "H":
+					value += uvalue * 3600
+				case "MN":
+					value += uvalue * 60
+				case "S":
+					value += uvalue
+				case "":
+					value += uvalue
+				case "MS":
+					value += uvalue / 1000
+				case "US":
+					value += uvalue / 1000000
+				}
+			}
+		}
+	} else if captures := rcache.Get(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`).FindStringSubmatch(in); captures != nil {
+		hours, _ := strconv.ParseFloat(captures[1], 64)
+		minutes, _ := strconv.ParseFloat(captures[2], 64)
+		seconds, _ := strconv.ParseFloat(captures[3], 64)
+		milliseconds, _ := strconv.ParseFloat(captures[4], 64)
+		value = (hours * 3600) + (min(minutes, 59) * 60) + min(seconds, 59) + (milliseconds / 1000)
+	}
+	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
 }

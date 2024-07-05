@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	CHASH_MAGIC    uint32 = 0x48414843
-	CHASH_REPLICAS uint8  = 128
+	chashMagic    uint32 = 0x48414843
+	chashReplicas uint8  = 128
 )
 
 type item struct {
@@ -25,7 +25,7 @@ type CHash struct {
 	ringSize uint32
 	replicas uint8
 	frozen   bool
-	sync.RWMutex
+	mu       sync.RWMutex
 }
 
 type ByHash []item
@@ -70,9 +70,9 @@ func murmur2(key []byte, keySize int) uint32 {
 }
 
 func (c *CHash) freeze() {
-	c.Lock()
+	c.mu.Lock()
 	if c.frozen {
-		c.Unlock()
+		c.mu.Unlock()
 		return
 	}
 	c.ringSize = 0
@@ -81,7 +81,7 @@ func (c *CHash) freeze() {
 	}
 	if c.ringSize == 0 {
 		c.frozen = true
-		c.Unlock()
+		c.mu.Unlock()
 		return
 	}
 
@@ -107,58 +107,53 @@ func (c *CHash) freeze() {
 	}
 	sort.Sort(ByHash(c.ring))
 	c.frozen = true
-	c.Unlock()
+	c.mu.Unlock()
 }
 
-func New(replicas ...uint8) *CHash {
+func New(in ...uint8) *CHash {
 	chash := &CHash{
 		targets:  make(map[string]uint8),
 		names:    nil,
 		ring:     nil,
 		ringSize: 0,
-		replicas: CHASH_REPLICAS,
+		replicas: chashReplicas,
 		frozen:   false,
 	}
-	if len(replicas) > 0 {
-		chash.replicas = replicas[0]
+	if len(in) > 0 {
+		chash.replicas = in[0]
 	}
-	if chash.replicas < 1 {
-		chash.replicas = 1
-	}
-	if chash.replicas > CHASH_REPLICAS {
-		chash.replicas = CHASH_REPLICAS
-	}
+	chash.replicas = min(chashReplicas, max(1, chash.replicas))
 	return chash
 }
 
 func (c *CHash) AddTarget(name string, weight uint8) bool {
 	if weight > 0 && weight <= 100 && len(name) <= 128 && c.targets[name] != weight {
-		c.Lock()
+		c.mu.Lock()
 		c.targets[name] = weight
 		c.frozen = false
-		c.Unlock()
+		c.mu.Unlock()
 		return true
 	}
 	return false
 }
 func (c *CHash) RemoveTarget(name string) bool {
-	c.Lock()
+	c.mu.Lock()
 	delete(c.targets, name)
 	c.frozen = false
-	c.Unlock()
+	c.mu.Unlock()
 	return true
 }
 func (c *CHash) ClearTargets() bool {
-	c.Lock()
+	c.mu.Lock()
 	c.targets = make(map[string]uint8)
 	c.frozen = false
-	c.Unlock()
+	c.mu.Unlock()
 	return true
 }
 
 func (c *CHash) Serialize() []byte {
 	c.freeze()
-	c.RLock()
+	c.mu.RLock()
 	size := uint32(4) + 4 + 1 + 2 + 4
 	for _, name := range c.names {
 		size += 1 + 1 + uint32(len(name))
@@ -166,10 +161,10 @@ func (c *CHash) Serialize() []byte {
 	size += (c.ringSize * 6)
 	serialized := make([]byte, size)
 	offset := uint32(0)
-	serialized[offset] = byte(CHASH_MAGIC & 0xff)
-	serialized[offset+1] = byte((CHASH_MAGIC >> 8) & 0xff)
-	serialized[offset+2] = byte((CHASH_MAGIC >> 16) & 0xff)
-	serialized[offset+3] = byte((CHASH_MAGIC >> 24) & 0xff)
+	serialized[offset] = byte(chashMagic & 0xff)
+	serialized[offset+1] = byte((chashMagic >> 8) & 0xff)
+	serialized[offset+2] = byte((chashMagic >> 16) & 0xff)
+	serialized[offset+3] = byte((chashMagic >> 24) & 0xff)
 	serialized[offset+4] = byte(size & 0xff)
 	serialized[offset+5] = byte((size >> 8) & 0xff)
 	serialized[offset+6] = byte((size >> 16) & 0xff)
@@ -197,7 +192,7 @@ func (c *CHash) Serialize() []byte {
 		serialized[offset+5] = byte((item.target >> 8) & 0xff)
 		offset += 6
 	}
-	c.RUnlock()
+	c.mu.RUnlock()
 	return serialized
 }
 func (c *CHash) FileSerialize(path string) bool {
@@ -222,10 +217,10 @@ func (c *CHash) Unserialize(serialized []byte) bool {
 	replicas := serialized[8]
 	names := uint16(serialized[9]) + (uint16(serialized[10]) << 8)
 	ringSize := uint32(serialized[11]) + (uint32(serialized[12]) << 8) + (uint32(serialized[13]) << 16) + (uint32(serialized[14]) << 24)
-	if magic != CHASH_MAGIC || size != uint32(len(serialized)) {
+	if magic != chashMagic || size != uint32(len(serialized)) {
 		return false
 	}
-	c.Lock()
+	c.mu.Lock()
 	c.targets = make(map[string]uint8)
 	c.names = make([]string, names)
 	c.ring = make([]item, ringSize)
@@ -239,7 +234,7 @@ func (c *CHash) Unserialize(serialized []byte) bool {
 		offset += 2 + length
 	}
 	if offset > size {
-		c.Unlock()
+		c.mu.Unlock()
 		return false
 	}
 	for item := uint32(0); item < ringSize && offset < size; item++ {
@@ -248,11 +243,11 @@ func (c *CHash) Unserialize(serialized []byte) bool {
 		offset += 6
 	}
 	if offset != size {
-		c.Unlock()
+		c.mu.Unlock()
 		return false
 	}
 	c.frozen = true
-	c.Unlock()
+	c.mu.Unlock()
 	return true
 }
 func (c *CHash) FileUnserialize(path string) bool {
@@ -280,12 +275,12 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 	var start uint32 = 0
 
 	c.freeze()
-	c.RLock()
+	c.mu.RLock()
 	if count > len(c.targets) {
 		count = len(c.targets)
 	}
 	if c.ringSize == 0 || count < 1 {
-		c.RUnlock()
+		c.mu.RUnlock()
 		return []string{}
 	}
 	hash := murmur2([]byte(candidate), -1)
@@ -324,7 +319,7 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 			start = 0
 		}
 	}
-	c.RUnlock()
+	c.mu.RUnlock()
 	return result
 }
 func (c *CHash) LookupBalance(candidate string, count int) string {

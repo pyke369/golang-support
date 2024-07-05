@@ -19,6 +19,7 @@ import (
 	"time"
 	"unsafe"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ufmt"
 )
@@ -43,11 +44,8 @@ type replacer struct {
 
 var (
 	escaped   = "{}[],#/*;:= "
-	unescaper = regexp.MustCompile(`@@@\d+@@@`)                                    // match escaped characters (to reverse previous escaping)
-	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`)           // match external content macros
-	sizer     = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)           // match size value
-	duration1 = regexp.MustCompile(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`)                  // match duration value form1 (free)
-	duration2 = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`) // match duration value form2 (timecode)
+	unescaper = regexp.MustCompile(`@@@\d+@@@`)                          // match escaped characters (to reverse previous escaping)
+	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`) // match external content macros
 	replacers = []replacer{
 		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                                    // remove # and // commented portions
 		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                                 // remove /* */ commented portions
@@ -610,21 +608,7 @@ func (c *UConfig) GetSizeBounds(path string, fallback, lowest, highest int64, ex
 	if err != nil {
 		return fallback
 	}
-	nvalue := int64(0)
-	if matches := sizer.FindStringSubmatch(strings.TrimSpace(strings.ToUpper(value))); matches != nil {
-		fvalue, err := strconv.ParseFloat(matches[1], 64)
-		if err != nil {
-			return fallback
-		}
-		scale := float64(1000)
-		if matches[3] == "B" || (len(extra) != 0 && extra[0]) {
-			scale = float64(1024)
-		}
-		nvalue = int64(fvalue * math.Pow(scale, float64(strings.Index("_KMGTP", matches[2]))))
-	} else {
-		return fallback
-	}
-	return max(min(nvalue, highest), max(0, lowest))
+	return j.SizeBounds(value, fallback, lowest, highest, extra...)
 }
 
 func (c *UConfig) GetDuration(path string, fallback float64) time.Duration {
@@ -635,42 +619,9 @@ func (c *UConfig) GetDurationBounds(path string, fallback, lowest, highest float
 	if err != nil {
 		return time.Duration(fallback * float64(time.Second))
 	}
-	nvalue := float64(0.0)
-	if matches := duration1.FindAllStringSubmatch(strings.TrimSpace(strings.ToUpper(value)), -1); matches != nil {
-		for index := 0; index < len(matches); index++ {
-			if uvalue, err := strconv.ParseFloat(matches[index][1], 64); err == nil {
-				switch matches[index][2] {
-				case "Y":
-					nvalue += uvalue * 86400 * 365.256
-				case "MO":
-					nvalue += uvalue * 86400 * 365.256 / 12
-				case "D":
-					nvalue += uvalue * 86400
-				case "H":
-					nvalue += uvalue * 3600
-				case "MN":
-					nvalue += uvalue * 60
-				case "S":
-					nvalue += uvalue
-				case "":
-					nvalue += uvalue
-				case "MS":
-					nvalue += uvalue / 1000
-				case "US":
-					nvalue += uvalue / 1000000
-				}
-			}
-		}
-	}
-	if matches := duration2.FindStringSubmatch(strings.TrimSpace(value)); matches != nil {
-		hours, _ := strconv.ParseFloat(matches[1], 64)
-		minutes, _ := strconv.ParseFloat(matches[2], 64)
-		seconds, _ := strconv.ParseFloat(matches[3], 64)
-		milliseconds, _ := strconv.ParseFloat(matches[4], 64)
-		nvalue = (hours * 3600) + (min(minutes, 59) * 60) + min(seconds, 59) + (milliseconds / 1000)
-	}
-	return time.Duration(max(min(nvalue, highest), max(0, lowest))) * time.Second
+	return j.DurationBounds(value, fallback, lowest, highest)
 }
+
 func Seconds(in time.Duration) float64 {
 	return float64(in) / float64(time.Second)
 }

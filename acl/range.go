@@ -9,7 +9,7 @@ import (
 	"github.com/pyke369/golang-support/uconfig"
 )
 
-type RANGE struct {
+type timeRange struct {
 	dates [2]time.Time
 	days  [2]int
 	times [2]int
@@ -17,13 +17,13 @@ type RANGE struct {
 
 func Ranges(in time.Time, values []string, fallback bool) (match bool, index int) {
 	if len(values) > 0 {
-		ranges, matcher1, matcher2, matcher3, days := []RANGE{},
+		ranges, matcher1, matcher2, matcher3, days := []timeRange{},
 			rcache.Get(`^(\d{4}-\d{2}-\d{2})?-(\d{4}-\d{2}-\d{2})?$`),
 			rcache.Get(`^(mon|tue|wed|thu|fri|sat|sun)?-(mon|tue|wed|thu|fri|sat|sun)?$`),
 			rcache.Get(`^(?:(\d{2}):(\d{2})(?::(\d{2}))?)?-(?:(\d{2}):(\d{2})(?::(\d{2}))?)?$`),
 			map[string]int{"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
 		for _, path := range values {
-			entry := RANGE{}
+			entry := timeRange{}
 			for _, value := range strings.Split(path, " ") {
 				if captures := matcher1.FindStringSubmatch(value); len(captures) == 3 {
 					if value, err := time.Parse("2006-01-02", captures[1]); err == nil {

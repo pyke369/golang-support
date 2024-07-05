@@ -4,18 +4,18 @@ package ulog
 
 import "errors"
 
-type Syslog struct{}
+type syslogWriter struct{}
 
-func DialSyslog(network, raddr string, priority int, tag string) (handle *Syslog, err error) {
+func dialSyslog(network, raddr string, priority int, tag string) (handle *syslogWriter, err error) {
 	return nil, errors.New("unsupported")
 }
-func (this *Syslog) Close() {
+func (this *s) Close() {
 }
-func (this *Syslog) Debug(m string) {
+func (this *s) Debug(m string) {
 }
-func (this *Syslog) Err(m string) {
+func (this *s) Err(m string) {
 }
-func (this *Syslog) Info(m string) {
+func (this *s) Info(m string) {
 }
-func (this *Syslog) Warning(m string) {
+func (this *s) Warning(m string) {
 }

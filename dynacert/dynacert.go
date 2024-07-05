@@ -21,33 +21,33 @@ type certificate struct {
 }
 
 type DYNACERT struct {
-	sync.RWMutex
 	certificates []*certificate
 	last         time.Time
+	mu           sync.RWMutex
 }
 
 func (d *DYNACERT) Add(predicate, public, private string) {
-	d.Lock()
+	d.mu.Lock()
 	d.certificates = append(d.certificates, &certificate{predicate: strings.TrimSpace(predicate), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	d.last = time.Now().Add(-time.Minute)
-	d.Unlock()
+	d.mu.Unlock()
 }
 
 func (d *DYNACERT) Clear() {
-	d.Lock()
+	d.mu.Lock()
 	d.certificates = nil
-	d.Unlock()
+	d.mu.Unlock()
 }
 
 func (d *DYNACERT) Count() int {
-	d.RLock()
-	defer d.RUnlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return len(d.certificates)
 }
 
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
 	if time.Since(d.last) >= 15*time.Second {
-		d.Lock()
+		d.mu.Lock()
 		if time.Since(d.last) >= 15*time.Second {
 			var info os.FileInfo
 
@@ -62,10 +62,10 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 				}
 			}
 		}
-		d.Unlock()
+		d.mu.Unlock()
 	}
-	d.RLock()
-	defer d.RUnlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if len(d.certificates) == 0 {
 		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
