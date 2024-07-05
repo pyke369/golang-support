@@ -155,7 +155,8 @@ var (
 		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[31mfalse\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
 	}
-	optionsParser = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
+	optionParser   = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
+	templateParser = regexp.MustCompile(`\{\{\s*[^\s\}]+\s*\}\}`)
 )
 
 func New(target string) *ULog {
@@ -263,7 +264,7 @@ func (l *ULog) Load(target string) *ULog {
 		switch strings.ToLower(target[1]) {
 		case "syslog":
 			l.syslog = true
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "remote":
 					l.syslogRemote = option[2]
@@ -280,7 +281,7 @@ func (l *ULog) Load(target string) *ULog {
 			}
 
 		case "file":
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "path":
 					l.filePath, l.file = option[2], true
@@ -310,7 +311,7 @@ func (l *ULog) Load(target string) *ULog {
 
 		case "console":
 			l.console = true
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
 				case "output":
@@ -341,7 +342,7 @@ func (l *ULog) Load(target string) *ULog {
 			}
 
 		case "option":
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
 				case "utc":
@@ -353,7 +354,7 @@ func (l *ULog) Load(target string) *ULog {
 			}
 
 		case "purge":
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "path":
 					l.purgePath = strings.TrimSpace(option[2])
@@ -372,7 +373,7 @@ func (l *ULog) Load(target string) *ULog {
 			}
 
 		case "compress":
-			for _, option := range optionsParser.FindAllStringSubmatch(target[2], -1) {
+			for _, option := range optionParser.FindAllStringSubmatch(target[2], -1) {
 				switch strings.ToLower(option[1]) {
 				case "path":
 					l.compressPath = strings.TrimSpace(option[2])
@@ -481,12 +482,39 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 	structured, content := false, bslab.Get(1<<8, nil)
 	defer bslab.Put(content)
 
+	templates := map[string]any{
+		"datetime":    now.Format(time.DateTime),
+		"msdatetime":  now.Format(time.DateTime + ".000"),
+		"timestamp":   now.Unix(),
+		"mstimestamp": now.UnixNano() / int64(time.Millisecond),
+	}
 	if structure, ok := in.(map[string]any); ok {
 		structured = true
 		l.mu.RLock()
 		for key, value := range l.fields {
 			if _, exists := structure[key]; !exists {
 				structure[key] = value
+			}
+		}
+
+		for key, value := range structure {
+			key = strings.TrimSpace(key)
+			if strings.HasPrefix(key, "{{") && strings.HasSuffix(key, "}}") {
+				delete(structure, key)
+				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
+				templates[key] = value
+			}
+		}
+		for key, value := range structure {
+			if value, ok := value.(string); ok {
+				if strings.HasPrefix(value, "{{") && strings.HasSuffix(value, "}}") {
+					value = strings.ToLower(strings.TrimSpace(value[2 : len(value)-2]))
+					if value, ok := templates[value]; ok {
+						structure[key] = value
+					} else {
+						delete(structure, key)
+					}
+				}
 			}
 		}
 
@@ -562,6 +590,18 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 	}
 	if l.file {
 		path := ufmt.Strftime(l.filePath, now)
+		if structured {
+			path = templateParser.ReplaceAllStringFunc(path, func(key string) string {
+				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
+				if value, ok := templates[key]; ok {
+					if value, ok := value.(string); ok {
+						return value
+					}
+				}
+				return ""
+			})
+		}
+
 		l.mu.Lock()
 		if _, exists := l.fileOutputs[path]; !exists {
 			os.MkdirAll(filepath.Dir(path), 0755)
