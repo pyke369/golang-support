@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +52,9 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 	}
 	if !expire.IsZero() {
 		claims["exp"] = expire.Unix()
+	}
+	if _, exists := claims["iat"]; !exists {
+		claims["iat"] = time.Now().Unix()
 	}
 	marshaled, err := json.Marshal(claims)
 	if err != nil {
@@ -167,10 +171,24 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 		return nil, err
 	}
 	if value, exists := claims["exp"]; exists {
-		if expire, ok := value.(float64); !ok {
-			return claims, errors.New("token: invalid expiration claim")
-		} else if time.Now().After(time.Unix(int64(expire), 0)) {
-			return claims, errors.New("token: expired")
+		if value, ok := value.(float64); !ok {
+			return claims, errors.New("token: invalid exp claim")
+		} else if time.Now().After(time.Unix(int64(value), 0)) {
+			return claims, errors.New("token: expired exp:" + strconv.FormatInt(int64(value), 10))
+		}
+	}
+	if value, exists := claims["iat"]; exists {
+		if value, ok := value.(float64); !ok {
+			return claims, errors.New("token: invalid iat claim")
+		} else if time.Now().Before(time.Unix(int64(value), 0)) {
+			return claims, errors.New("token: issued in future iat:" + strconv.FormatInt(int64(value), 10))
+		}
+	}
+	if value, exists := claims["nbf"]; exists {
+		if value, ok := value.(float64); !ok {
+			return claims, errors.New("token: invalid nbf claim")
+		} else if time.Now().Before(time.Unix(int64(value), 0)) {
+			return claims, errors.New("token: not valid yet nbf:" + strconv.FormatInt(int64(value), 10))
 		}
 	}
 	return
