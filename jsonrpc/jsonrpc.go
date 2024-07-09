@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -555,6 +556,13 @@ func Map(in any) (out map[string]any) {
 		return
 	}
 	return map[string]any{}
+}
+func Keys(in map[string]any) (out []string) {
+	for key := range in {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return
 }
 func StringMap(in any, extra ...bool) (out map[string]string) {
 	noempty := len(extra) > 0 && extra[0]

@@ -2,7 +2,6 @@ package ufmt
 
 import (
 	"errors"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,14 +89,6 @@ func Duration(duration time.Duration) string {
 		return duration.Truncate(time.Millisecond).String()
 	}
 	return duration.Truncate(10 * time.Millisecond).String()
-}
-
-func Keys(in map[string]any) (out []string) {
-	for key := range in {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return
 }
 
 func Strftime(layout string, base time.Time) string {

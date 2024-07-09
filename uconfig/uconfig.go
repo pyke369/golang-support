@@ -447,25 +447,24 @@ func (c *UConfig) GetPaths(path string) (paths []string) {
 }
 
 func (c *UConfig) value(path string) (string, error) {
+	c.RLock()
+	defer c.RUnlock()
+
 	current := c.config
 	if c.prefix != "" {
 		path = c.prefix + c.separator + path
 	}
-	c.RLock()
 	if current == nil || path == "" {
-		c.RUnlock()
 		return "", errors.New(`uconfig: invalid parameter`)
 	}
 	c.cacheLock.RLock()
 	if c.cache[path] != nil {
 		if current, ok := c.cache[path].(bool); ok && !current {
 			c.cacheLock.RUnlock()
-			c.RUnlock()
 			return "", errors.New(`uconfig: invalid path`)
 		}
 		if current, ok := c.cache[path].(string); ok {
 			c.cacheLock.RUnlock()
-			c.RUnlock()
 			return current, nil
 		}
 	}
@@ -477,7 +476,6 @@ func (c *UConfig) value(path string) (string, error) {
 			c.cacheLock.Lock()
 			c.cache[path] = false
 			c.cacheLock.Unlock()
-			c.RUnlock()
 			return "", errors.New(`uconfig: invalid path`)
 		}
 		if kind == reflect.Slice {
@@ -487,7 +485,6 @@ func (c *UConfig) value(path string) (string, error) {
 				c.cacheLock.Lock()
 				c.cache[path] = false
 				c.cacheLock.Unlock()
-				c.RUnlock()
 				return "", errors.New(`uconfig: invalid path`)
 			}
 		}
@@ -496,13 +493,11 @@ func (c *UConfig) value(path string) (string, error) {
 		c.cacheLock.Lock()
 		c.cache[path] = current.(string)
 		c.cacheLock.Unlock()
-		c.RUnlock()
 		return current.(string), nil
 	}
 	c.cacheLock.Lock()
 	c.cache[path] = false
 	c.cacheLock.Unlock()
-	c.RUnlock()
 	return "", errors.New(`uconfig: invalid path`)
 }
 
