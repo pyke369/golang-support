@@ -530,7 +530,7 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 					buffer.WriteByte(',')
 				}
 			}
-			for _, key := range j.Keys(structure) {
+			for _, key := range j.MapKeys(structure) {
 				if !slices.Contains(l.order, key) {
 					buffer.WriteString(`"` + key + `":`)
 					encoder.Encode(structure[key])

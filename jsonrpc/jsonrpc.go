@@ -557,13 +557,6 @@ func Map(in any) (out map[string]any) {
 	}
 	return map[string]any{}
 }
-func Keys(in map[string]any) (out []string) {
-	for key := range in {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return
-}
 func StringMap(in any, extra ...bool) (out map[string]string) {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := in.(map[string]string); ok {
@@ -611,6 +604,20 @@ func NumberMap(in any, extra ...bool) (out map[string]float64) {
 				out[key] = value
 			}
 		}
+	}
+	return
+}
+func MapKeys(in map[string]any) (out []string) {
+	for key := range in {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return
+}
+func SwitchMap(in map[string]string) (out map[string]string) {
+	out = map[string]string{}
+	for key, value := range in {
+		out[value] = key
 	}
 	return
 }
