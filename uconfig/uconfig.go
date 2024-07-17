@@ -534,6 +534,14 @@ func (c *UConfig) GetStrings(path string, extra ...bool) []string {
 	return list
 }
 
+func (c *UConfig) GetMap(path string) (out map[string]string) {
+	out = map[string]string{}
+	for _, key := range c.GetPaths(path) {
+		out[c.Base(key)] = c.GetString(key)
+	}
+	return
+}
+
 func (c *UConfig) GetString(path string, fallback ...string) string {
 	if value, err := c.value(path); err == nil {
 		return value
