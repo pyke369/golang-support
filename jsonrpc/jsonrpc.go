@@ -607,6 +607,14 @@ func NumberMap(in any, extra ...bool) (out map[string]float64) {
 	}
 	return
 }
+func IntegerMap(in any, extra ...bool) (out map[string]int) {
+	out = map[string]int{}
+	for key, value := range NumberMap(in, extra...) {
+		out[key] = int(value)
+	}
+	return
+}
+
 func MapKeys(in map[string]any) (out []string) {
 	for key := range in {
 		out = append(out, key)
