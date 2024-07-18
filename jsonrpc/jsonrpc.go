@@ -615,8 +615,14 @@ func IntegerMap(in any, extra ...bool) (out map[string]int) {
 	return
 }
 
-func MapKeys(in map[string]any) (out []string) {
-	for key := range in {
+func KeysLength(in any) (out int) {
+	for key := range Map(in) {
+		out = max(len(key), out)
+	}
+	return
+}
+func MapKeys(in any) (out []string) {
+	for key := range Map(in) {
 		out = append(out, key)
 	}
 	sort.Strings(out)
