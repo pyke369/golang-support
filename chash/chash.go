@@ -180,7 +180,7 @@ func (c *CHash) Serialize() []byte {
 	for _, name := range c.names {
 		serialized[offset] = c.targets[name]
 		serialized[offset+1] = byte(len(name) & 0xff)
-		copy(serialized[offset+2:offset+2+uint32(serialized[offset+1])], []byte(name))
+		copy(serialized[offset+2:offset+2+uint32(serialized[offset+1])], name)
 		offset += 2 + uint32(serialized[offset+1])
 	}
 	for _, item := range c.ring {
@@ -196,7 +196,7 @@ func (c *CHash) Serialize() []byte {
 	return serialized
 }
 func (c *CHash) FileSerialize(path string) bool {
-	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return false
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func FQDN() (string, string) {
+func FQDN() (hostname, address string) {
 	if hostname, err := os.Hostname(); err == nil {
 		if addresses, err := net.LookupHost(hostname); err == nil {
 			for _, address := range addresses {

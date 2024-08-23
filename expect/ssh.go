@@ -37,7 +37,7 @@ type SSHOptions struct {
 	Filter    string
 }
 type sshConnection struct {
-	sync.Mutex
+	mu      sync.Mutex
 	active  bool
 	running bool
 	last    time.Time
@@ -45,7 +45,7 @@ type sshConnection struct {
 	session *ssh.Session
 	input   io.WriteCloser
 	output  io.Reader
-	result  chan ([]string)
+	result  chan []string
 }
 type sshTransport struct {
 	remote  string
@@ -82,7 +82,7 @@ func init() {
 }
 
 func (c *sshConnection) Reset() {
-	c.Lock()
+	c.mu.Lock()
 	if c.session != nil {
 		c.session.Close()
 	}
@@ -93,7 +93,7 @@ func (c *sshConnection) Reset() {
 		close(c.result)
 	}
 	c.active, c.running, c.last, c.result, c.client, c.session, c.input, c.output = false, false, time.Time{}, nil, nil, nil, nil, nil
-	c.Unlock()
+	c.mu.Unlock()
 }
 
 func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOptions, extra ...int) (transport *sshTransport, err error) {
@@ -282,14 +282,14 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 						}
 						sline := strings.TrimSpace(line)
 						if mmatcher != nil && mmatcher.MatchString(sline) {
-							conn.Lock()
+							conn.mu.Lock()
 							if conn.result == nil {
 								conn.result = make(chan []string)
 							}
 							if conn.result != nil && conn.running {
 								conn.result <- lines
 							}
-							conn.Unlock()
+							conn.mu.Unlock()
 							lines, begin = lines[:0], 0
 							continue
 						}
@@ -313,13 +313,13 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			conn.Reset()
 			return nil, errors.New("ssh: readyness timeout")
 		}
-		conn.Lock()
+		conn.mu.Lock()
 		if conn.result != nil {
 			conn.running = true
-			conn.Unlock()
+			conn.mu.Unlock()
 			break
 		}
-		conn.Unlock()
+		conn.mu.Unlock()
 		time.Sleep(time.Second / 6)
 	}
 
@@ -353,7 +353,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 
 		case JSON:
 			for index, line := range value {
-				if len(line) != 0 && line[0] == '{' {
+				if line != "" && line[0] == '{' {
 					value = value[index:]
 					break
 				}
@@ -362,7 +362,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 
 		case XML:
 			for index, line := range value {
-				if len(line) != 0 && line[0] == '<' {
+				if line != "" && line[0] == '<' {
 					value = value[index:]
 					break
 				}
@@ -373,11 +373,11 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 		err = errors.New("ssh: execution timeout")
 		conn.Reset()
 	}
-	conn.Lock()
+	conn.mu.Lock()
 	conn.active, conn.running = false, false
-	conn.Unlock()
+	conn.mu.Unlock()
 	if ckey != "" {
-		if handle, err := os.OpenFile(ckey, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); err == nil {
+		if handle, err := os.OpenFile(ckey, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
 			encoder := json.NewEncoder(handle)
 			encoder.SetEscapeHTML(false)
 			encoder.Encode(result)

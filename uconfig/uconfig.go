@@ -26,14 +26,14 @@ import (
 
 type UConfig struct {
 	input     string
-	config    any
-	hash      string
-	cache     map[string]any
 	separator string
+	mu        sync.RWMutex
+	hash      string
 	prefix    string
 	top       string
+	config    any
 	cacheLock sync.RWMutex
-	sync.RWMutex
+	cache     map[string]any
 }
 
 type replacer struct {
@@ -125,22 +125,16 @@ func reduce(in any) {
 	}
 }
 
-func New(in string, inline ...bool) (*UConfig, error) {
-	config := &UConfig{
-		input:     in,
-		config:    nil,
-		separator: ".",
-	}
-	return config, config.Load(in, inline...)
-}
-
-func (c *UConfig) Reload(inline ...bool) error {
-	return c.Load(c.input, inline...)
+func New(in string, inline ...bool) (config *UConfig, err error) {
+	config = &UConfig{input: in, separator: "."}
+	err = config.Load(in, inline...)
+	return config, err
 }
 
 func (c *UConfig) SetSeparator(separator string) {
 	c.separator = separator
 }
+
 func (c *UConfig) SetPrefix(prefix string) {
 	c.prefix = prefix
 }
@@ -306,29 +300,35 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		}
 	}
 
-	c.Lock()
+	c.mu.Lock()
 	c.config, c.top = config, top
 	hash := sha1.Sum([]byte(content))
 	c.hash = ufmt.Hex(hash[:])
 	c.cache = map[string]any{}
 	reduce(c.config)
-	c.Unlock()
+	c.mu.Unlock()
 	return nil
 }
 
+func (c *UConfig) Reload(inline ...bool) error {
+	return c.Load(c.input, inline...)
+}
+
 func (c *UConfig) Loaded() bool {
-	c.RLock()
-	defer c.RUnlock()
-	return !(c.config == nil)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.config != nil
 }
 
 func (c *UConfig) Top() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.top
 }
 
 func (c *UConfig) Hash() string {
-	c.RLock()
-	defer c.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.hash
 }
 
@@ -378,8 +378,8 @@ func (c *UConfig) Base(path string) string {
 
 func (c *UConfig) GetPaths(path string) (paths []string) {
 	paths = []string{}
-	c.RLock()
-	defer c.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	current, prefix := c.config, ""
 	if c.prefix != "" {
 		if path == "" {
@@ -447,8 +447,8 @@ func (c *UConfig) GetPaths(path string) (paths []string) {
 }
 
 func (c *UConfig) value(path string) (string, error) {
-	c.RLock()
-	defer c.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
 	current := c.config
 	if c.prefix != "" {
@@ -551,10 +551,10 @@ func (c *UConfig) GetString(path string, fallback ...string) string {
 	}
 	return ""
 }
-func (c *UConfig) GetStringMatch(path string, fallback, match string) string {
+func (c *UConfig) GetStringMatch(path, fallback, match string) string {
 	return c.GetStringMatchCaptures(path, fallback, match)[0]
 }
-func (c *UConfig) GetStringMatchCaptures(path string, fallback, match string) []string {
+func (c *UConfig) GetStringMatchCaptures(path, fallback, match string) []string {
 	value, err := c.value(path)
 	if err != nil {
 		return []string{fallback}

@@ -15,7 +15,7 @@ func (m *Multiflag) Set(value string) error {
 	if len(parts) >= 2 {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(strings.Join(parts[1:], ":"))
-		if len(key) > 0 && len(value) > 0 {
+		if key != "" && value != "" {
 			*m = append(*m, [2]string{key, value})
 		}
 	}

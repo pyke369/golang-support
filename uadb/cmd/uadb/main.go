@@ -102,7 +102,7 @@ func build() {
 				os.Stderr.WriteString("- loaded " + strconv.Itoa(len(target.Crawlers)) + " crawler(s)\n")
 
 				if payload, err := json.Marshal(target); err == nil {
-					if os.WriteFile(os.Args[2], payload, 0644) == nil {
+					if os.WriteFile(os.Args[2], payload, 0o644) == nil {
 						os.Stderr.WriteString("- saved target database " + os.Args[2] + " (" + strconv.Itoa(len(payload)) + " bytes)\n")
 					}
 				}

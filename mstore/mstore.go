@@ -51,8 +51,8 @@ const (
 )
 
 type Store struct {
-	prefix string
-	sync.Mutex
+	prefix  string
+	mu      sync.Mutex
 	metrics map[string]*metric
 	chunks  map[string]*chunk
 	last    time.Time
@@ -61,8 +61,8 @@ type Column struct {
 	Mode        int64
 	Size        int64
 	Description string
-	sync.Mutex
-	mapping []map[int]*entry
+	mu          sync.Mutex
+	mapping     []map[int]*entry
 }
 type metric struct {
 	store       *Store
@@ -134,8 +134,8 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 	if size < 4 {
 		return nil, errors.New("mstore: invalid size")
 	}
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if chunk, exists := s.chunks[path]; exists {
 		if len(chunk.data) != int(size) {
 			return nil, errors.New("mstore: size mismatch")
@@ -159,7 +159,7 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 		}
 		created = true
 	}
-	if chunk.handle, err = os.OpenFile(path, flags, 0644); err != nil {
+	if chunk.handle, err = os.OpenFile(path, flags, 0o644); err != nil {
 		return nil, ufmt.Wrap(err, "mstore")
 	}
 	if err = chunk.handle.Truncate(size); err != nil {
@@ -184,8 +184,8 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 	return chunk.data, nil
 }
 func (s *Store) cleanup() {
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := time.Now()
 	if now.Sub(s.last) >= time.Minute {
 		s.last = now
@@ -204,7 +204,7 @@ func (s *Store) cleanup() {
 // store public api
 func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 	if len(readonly) == 0 || !readonly[0] {
-		os.MkdirAll(prefix, 0755)
+		os.MkdirAll(prefix, 0o755)
 	}
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
@@ -215,8 +215,8 @@ func (s *Store) Metric(name string) *metric {
 	if name == "" {
 		return nil
 	}
-	s.Lock()
-	defer s.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if metric, exists := s.metrics[name]; exists {
 		return metric
 	}
@@ -242,7 +242,7 @@ func (s *Store) Rename(from, to string) error {
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
 	}
-	os.MkdirAll(filepath.Dir(to), 0755)
+	os.MkdirAll(filepath.Dir(to), 0o755)
 	return os.Rename(from, to)
 }
 func (s *Store) Trim(name string, start, end time.Time) error {
@@ -309,7 +309,7 @@ func (m *metric) meta(create bool) error {
 		if len(m.columns) == 0 {
 			return errors.New("mstore: empty columns list")
 		}
-		os.MkdirAll(m.path, 0755)
+		os.MkdirAll(m.path, 0o755)
 		if info, err := os.Stat(m.path); err != nil || !info.IsDir() {
 			return errors.New("mstore: invalid metric")
 		}
@@ -335,7 +335,7 @@ func (m *metric) meta(create bool) error {
 		offset += 128
 		binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(data[:offset]))
 		offset += 4
-		if os.WriteFile(path, data[:offset], 0644) != nil {
+		if os.WriteFile(path, data[:offset], 0o644) != nil {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.frozen = true
@@ -357,8 +357,8 @@ func (m *metric) mapping(column int, flush bool) error {
 	if column >= len(m.columns) || (m.columns[column].Mode != ModeText && m.columns[column].Mode != ModeBinary) {
 		return errors.New("mstore: invalid column")
 	}
-	m.columns[column].Lock()
-	defer m.columns[column].Unlock()
+	m.columns[column].mu.Lock()
+	defer m.columns[column].mu.Unlock()
 	path := filepath.Join(m.path, ".map"+strconv.FormatInt(int64(column), 10))
 	if m.columns[column].mapping != nil {
 		count := len(m.columns[column].mapping[1])
@@ -377,7 +377,7 @@ func (m *metric) mapping(column int, flush bool) error {
 				offset += 2 + length
 			}
 			binary.BigEndian.PutUint32(data[size-4:], crc32.ChecksumIEEE(data[:size-4]))
-			if os.WriteFile(path, data, 0644) != nil {
+			if os.WriteFile(path, data, 0o644) != nil {
 				return errors.New("mstore: invalid mapping")
 			}
 		}
@@ -400,7 +400,7 @@ func (m *metric) mapping(column int, flush bool) error {
 	}
 	return nil
 }
-func (m *metric) put(value int64, size int64, data []byte) {
+func (m *metric) put(value, size int64, data []byte) {
 	length := len(data)
 	switch size {
 	case 1:
@@ -409,15 +409,15 @@ func (m *metric) put(value int64, size int64, data []byte) {
 		}
 	case 2:
 		if length >= 2 {
-			binary.BigEndian.PutUint16(data[:], uint16(value))
+			binary.BigEndian.PutUint16(data, uint16(value))
 		}
 	case 4:
 		if length >= 4 {
-			binary.BigEndian.PutUint32(data[:], uint32(value))
+			binary.BigEndian.PutUint32(data, uint32(value))
 		}
 	case 8:
 		if length >= 8 {
-			binary.BigEndian.PutUint64(data[:], uint64(value))
+			binary.BigEndian.PutUint64(data, uint64(value))
 		}
 	}
 }
@@ -430,15 +430,15 @@ func (m *metric) get(size int64, data []byte) (value int64) {
 		}
 	case 2:
 		if length >= 2 {
-			value = int64(int16(binary.BigEndian.Uint16(data[:])))
+			value = int64(int16(binary.BigEndian.Uint16(data)))
 		}
 	case 4:
 		if length >= 4 {
-			value = int64(int32(binary.BigEndian.Uint32(data[:])))
+			value = int64(int32(binary.BigEndian.Uint32(data)))
 		}
 	case 8:
 		if length >= 8 {
-			value = int64(binary.BigEndian.Uint64(data[:]))
+			value = int64(binary.BigEndian.Uint64(data))
 		}
 	}
 	return
@@ -457,7 +457,7 @@ func (m *metric) WithInterval(interval int64) *metric {
 	}
 	return m
 }
-func (m *metric) WithColumn(mode int64, size int64, description string) *metric {
+func (m *metric) WithColumn(mode, size int64, description string) *metric {
 	if !m.frozen {
 		if mode == ModeGauge || mode == ModeCounter || mode == ModeIncrement || mode == ModeText || mode == ModeBinary {
 			if size == 0 {
@@ -689,21 +689,21 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 						}
 						if len(content) > 0 && m.mapping(column, false) == nil {
 							key := int(crc32.ChecksumIEEE(content))
-							m.columns[column].Lock()
+							m.columns[column].mu.Lock()
 							if value, exists := m.columns[column].mapping[0][key]; exists {
-								m.columns[column].Unlock()
+								m.columns[column].mu.Unlock()
 								m.put(int64(value.index), m.columns[column].Size, data[coffset:])
 
 							} else if len(m.columns[column].mapping[0]) < (1<<(m.columns[column].Size*8))-2 {
 								value := &entry{index: len(m.columns[column].mapping[0]) + 1, value: content}
 								m.columns[column].mapping[0][key] = value
 								m.columns[column].mapping[1][value.index] = value
-								m.columns[column].Unlock()
+								m.columns[column].mu.Unlock()
 								if m.mapping(column, true) == nil {
 									m.put(int64(value.index), m.columns[column].Size, data[coffset:])
 								}
 							} else {
-								m.columns[column].Unlock()
+								m.columns[column].mu.Unlock()
 							}
 						}
 					}

@@ -116,7 +116,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if url, err := url.Parse(endpoint); err == nil {
 		proxy, _ := config.Proxy(url)
-		if request, err := http.NewRequest("GET", endpoint, nil); err == nil {
+		if request, err := http.NewRequest("GET", endpoint, http.NoBody); err == nil {
 			nonce := uuid.New().String()
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
@@ -336,7 +336,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				}
 			}
 			origin := request.Header.Get("Origin")
-			if strings.ToLower(origin) == "null" {
+			if strings.EqualFold(origin, "null") {
 				origin = ""
 			}
 			ws = &Socket{
@@ -672,7 +672,7 @@ func cval(value, fallback, lowest, highest int) int {
 
 const xorsize = int(unsafe.Sizeof(uintptr(0)))
 
-func xor(mask []byte, data []byte) {
+func xor(mask, data []byte) {
 	offset, length := 0, len(data)
 	if length >= xorsize {
 		var value [xorsize]byte

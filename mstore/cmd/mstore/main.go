@@ -54,7 +54,7 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 			if captures[2] == "-" {
 				direction = -1
 			}
-			switch true {
+			switch {
 			case len(captures[4]) >= 2 && captures[4][:2] == "mo":
 				out = out.AddDate(0, direction*amount, 0)
 			case captures[4][0] == 's':
@@ -133,8 +133,7 @@ func main() {
 				lines = append(lines, line)
 			}
 		}
-		lines = append(lines, "  ]")
-		lines = append(lines, "}")
+		lines = append(lines, "  ]", "}")
 		os.Stdout.WriteString(strings.Join(lines, "\n"))
 		os.Stdout.WriteString("\n")
 
@@ -230,14 +229,14 @@ func main() {
 			}
 			column := []int64{index, mode}
 			if len(parts) > 2 {
-				min, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
+				value, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
 				bail(err, 9)
-				column = append(column, min)
+				column = append(column, value)
 			}
 			if len(parts) > 3 {
-				max, err := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64)
+				value, err := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64)
 				bail(err, 10)
-				column = append(column, max)
+				column = append(column, value)
 			}
 			columns = append(columns, column)
 		}

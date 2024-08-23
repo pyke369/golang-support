@@ -112,7 +112,7 @@ func mkoui() {
 					if json.Unmarshal([]byte(line), &data) == nil {
 						if fields := ouiMatcher.FindStringSubmatch(strings.TrimSpace(data.Mac)); len(fields) > 6 {
 							for index := 1; index <= 6; index++ {
-								if len(fields[index]) != 0 {
+								if fields[index] != "" {
 									mask += 4 * len(fields[index])
 									if len(fields[index]) == 1 {
 										fields[index] += "0"
@@ -320,7 +320,7 @@ func mkasn() {
 
 func rlookup(remote, value string, out map[string]any) {
 	if remote != "" && value != "" && out != nil {
-		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+value, nil); err == nil {
+		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+value, http.NoBody); err == nil {
 			request.Header.Add("X-Forwarded-For", value)
 			if response, err := client.Do(request); err == nil {
 				body, _ := io.ReadAll(response.Body)
@@ -352,7 +352,8 @@ func lookup() {
 			}
 		} else if strings.HasPrefix(os.Args[index], `http`) {
 			lookup := map[string]any{}
-			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
+			rlookup(os.Args[index], "8.8.8.8", lookup)
+			if len(lookup) != 0 {
 				remote = os.Args[index]
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
 			} else {
@@ -388,7 +389,8 @@ func batch() {
 			}
 		} else if strings.HasPrefix(os.Args[index], `http`) {
 			lookup := map[string]any{}
-			if rlookup(os.Args[index], "8.8.8.8", lookup); len(lookup) != 0 {
+			rlookup(os.Args[index], "8.8.8.8", lookup)
+			if len(lookup) != 0 {
 				remote = os.Args[index]
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
 			} else {

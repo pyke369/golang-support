@@ -61,13 +61,16 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 		return "", err
 	}
 	token += base64.RawURLEncoding.EncodeToString(marshaled)
-	if alg == "none" {
+	switch {
+	case alg == "none":
 		token += "."
-	} else if alg == "HS256" {
+
+	case alg == "HS256":
 		signature := hmac.New(sha256.New, []byte(secret))
 		signature.Write([]byte(token))
 		token += "." + base64.RawURLEncoding.EncodeToString(signature.Sum(nil))
-	} else if alg == "RS256" {
+
+	case alg == "RS256":
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
 			return "", ufmt.Wrap(err, "token")
@@ -78,7 +81,8 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 			return "", ufmt.Wrap(err, "token")
 		}
 		token += "." + base64.RawURLEncoding.EncodeToString(signature)
-	} else if alg == "ES256" {
+
+	case alg == "ES256":
 		var signature [64]byte
 
 		key, err := x509.ParseECPrivateKey(block.Bytes)

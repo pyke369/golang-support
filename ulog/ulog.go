@@ -150,7 +150,7 @@ var (
 		&colorizer{regexp.MustCompile(`"(warn(:?ing)?)":`), []byte("\"\x1b[33m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)":`), []byte("\"\x1b[38;5;250m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)"([,}\]])`), []byte("\"\x1b[34m$1\x1b[m\"$2")},
-		&colorizer{regexp.MustCompile(`([\-\.\d]+)([,}\]])`), []byte("\x1b[36m$1\x1b[m$2")},
+		&colorizer{regexp.MustCompile(`([\-.\d]+)([,}\]])`), []byte("\x1b[36m$1\x1b[m$2")},
 		&colorizer{regexp.MustCompile(`true([,}\]])`), []byte("\x1b[32mtrue\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[31mfalse\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
@@ -200,7 +200,7 @@ func New(target string) *ULog {
 								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= l.compressAge {
 									ok := false
 									if source, err := os.Open(path); err == nil {
-										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644); err == nil {
+										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644); err == nil {
 											gzwriter := gzip.NewWriter(target)
 											_, err := io.Copy(gzwriter, source)
 											gzwriter.Close()
@@ -604,8 +604,8 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 
 		l.mu.Lock()
 		if _, exists := l.fileOutputs[path]; !exists {
-			os.MkdirAll(filepath.Dir(path), 0755)
-			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0644); err == nil {
+			os.MkdirAll(filepath.Dir(path), 0o755)
+			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o644); err == nil {
 				l.fileOutputs[path] = &fileOutput{handle: handle}
 			}
 		}

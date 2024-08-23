@@ -202,7 +202,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 		last := len(parts) - 1
 		for depth, part := range parts {
 			part = strings.TrimSpace(part)
-			if len(part) == 0 {
+			if part == "" {
 				continue
 			}
 			if captures := matcher.FindStringSubmatch(part); captures != nil {

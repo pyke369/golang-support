@@ -7,32 +7,32 @@ import (
 )
 
 var (
+	mu    sync.RWMutex
 	cache map[string]*regexp.Regexp = map[string]*regexp.Regexp{}
 	hit   int64
 	miss  int64
-	lock  sync.RWMutex
 )
 
 func Get(expression string) *regexp.Regexp {
-	lock.RLock()
+	mu.RLock()
 	if cache[expression] != nil {
 		atomic.AddInt64(&hit, 1)
-		defer lock.RUnlock()
+		defer mu.RUnlock()
 		return cache[expression]
 	}
 	atomic.AddInt64(&miss, 1)
-	lock.RUnlock()
+	mu.RUnlock()
 	if regex, err := regexp.Compile(expression); err == nil {
-		lock.Lock()
-		defer lock.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
 		cache[expression] = regex
 		return cache[expression]
 	}
 	return nil
 }
 
-func Stats() (int, int64, int64) {
-	lock.RLock()
-	defer lock.RUnlock()
+func Stats() (size int, hit, miss int64) {
+	mu.RLock()
+	defer mu.RUnlock()
 	return len(cache), atomic.LoadInt64(&hit), atomic.LoadInt64(&miss)
 }

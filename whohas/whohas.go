@@ -23,8 +23,8 @@ type BACKEND struct {
 type CACHE struct {
 	TTL   time.Duration
 	last  time.Time
+	mu    sync.RWMutex
 	items map[string]*LOOKUP
-	sync.RWMutex
 }
 type LOOKUP struct {
 	index    int
@@ -56,7 +56,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 	cbackends := backends
 	if cache != nil && cache.items != nil {
 		now := time.Now()
-		cache.RLock()
+		cache.mu.RLock()
 		if cache.items[cpath] != nil && now.Sub(cache.items[cpath].deadline) < 0 {
 			lookup = cache.items[cpath]
 			if cache.items[cpath].Host != "" {
@@ -84,7 +84,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				cbackends = backends
 			}
 		}
-		cache.RUnlock()
+		cache.mu.RUnlock()
 	}
 
 	if lookup == nil {
@@ -117,7 +117,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				if backend.Path != "" {
 					rpath = backend.Path
 				}
-				if request, err := http.NewRequest(method, lookup.Protocol+"://"+backend.Host+rpath, nil); err == nil {
+				if request, err := http.NewRequest(method, lookup.Protocol+"://"+backend.Host+rpath, http.NoBody); err == nil {
 					request = request.WithContext(ctx)
 					request.Header.Set("User-Agent", "whohas")
 					if backend.Probe {
@@ -200,7 +200,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 
 	if cache != nil {
 		now := time.Now()
-		cache.Lock()
+		cache.mu.Lock()
 		if cache.items == nil {
 			cache.items = map[string]*LOOKUP{}
 		}
@@ -230,7 +230,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				cache.items[cpath] = lookup
 			}
 		}
-		cache.Unlock()
+		cache.mu.Unlock()
 	}
 
 	return
@@ -242,11 +242,11 @@ func Evict(path string, cache *CACHE, ckey string) {
 		if index := strings.Index(path, "?"); index >= 0 {
 			cpath = path[:index]
 		}
-		cache.Lock()
+		cache.mu.Lock()
 		delete(cache.items, cpath)
 		if ckey != "" {
 			delete(cache.items, "k"+ckey)
 		}
-		cache.Unlock()
+		cache.mu.Unlock()
 	}
 }

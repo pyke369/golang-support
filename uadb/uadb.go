@@ -245,7 +245,7 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 	db.lock.Unlock()
 }
 
-func (db *UADB) Stats() (int, int64, int64) {
+func (db *UADB) Stats() (size int, hit, miss int64) {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
 	return len(db.cache), atomic.LoadInt64(&(db.hit)), atomic.LoadInt64(&(db.miss))

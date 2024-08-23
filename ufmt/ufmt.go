@@ -70,8 +70,7 @@ func Hex(in []byte, extra ...string) (out string) {
 		length := len(in)
 		buffer := make([]byte, 0, length+(len(separator))*(length-1))
 		for index, value := range in {
-			buffer = append(buffer, hex[value>>4])
-			buffer = append(buffer, hex[value&0x0f])
+			buffer = append(buffer, hex[value>>4], hex[value&0x0f])
 			if index < length-1 {
 				buffer = append(buffer, separator...)
 			}

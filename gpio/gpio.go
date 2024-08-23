@@ -21,7 +21,6 @@ const (
 	_GPIO_GET_LINEINFO_WATCH   = 0xc100b406
 	_GPIO_GET_LINEINFO_UNWATCH = 0xc004b40c
 )
-const ()
 
 var (
 	_GPIO_LINE_FLAGS = map[int]string{

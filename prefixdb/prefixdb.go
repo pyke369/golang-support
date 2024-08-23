@@ -42,7 +42,7 @@ type cluster struct {
 	data   []byte   // reduced cluster pairs
 }
 type PrefixDB struct {
-	sync.RWMutex
+	mu          sync.RWMutex
 	tree        node
 	strings     map[string]*[3]int  // fame / initial index / final index
 	numbers     map[float64]*[3]int // fame / initial index / final index
@@ -72,7 +72,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 		ones += 96
 	}
 	bits := address.As16()
-	d.Lock()
+	d.mu.Lock()
 	pnode := &d.tree
 	for bit := 0; bit < ones; bit++ {
 		down := 0
@@ -179,7 +179,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 			pnode.data = append(pnode.data, 0x7000000000000000|((uint64(index)<<32)&0x0fffffff00000000))
 		}
 	}
-	d.Unlock()
+	d.mu.Unlock()
 }
 
 func wbytes(bytes, value int, data []byte) {
@@ -229,14 +229,14 @@ func wnbits(bits, value0, value1 int, data []byte) {
 }
 func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	// layout header + signature placeholder + description
-	d.Lock()
+	d.mu.Lock()
 	d.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'D', 'E', 'S', 'C', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	if description == "" {
 		description = time.Now().Format(`20060102150405`)
 	}
 	d.Description = description
-	copy(d.data[28:47], []byte(description))
+	copy(d.data[28:47], description)
 
 	// layout strings dictionary (ordered by fame)
 	d.Strings[0] = 0
@@ -482,11 +482,11 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		if path == "-" {
 			_, err = os.Stdout.Write(d.data)
 		} else {
-			err = os.WriteFile(path, d.data, 0644)
+			err = os.WriteFile(path, d.data, 0o644)
 		}
 	}
 
-	d.Unlock()
+	d.mu.Unlock()
 	return d.data, err
 }
 
@@ -504,7 +504,7 @@ func (d *PrefixDB) Load(path string) error {
 			if len(data) < 24 || slices.Compare(hash[:], data[8:24]) != 0 {
 				return errors.New(`prefixdb: checksum is invalid`)
 			}
-			d.Lock()
+			d.mu.Lock()
 			d.data = data
 			d.Total = len(data)
 			d.Version = version
@@ -576,7 +576,7 @@ func (d *PrefixDB) Load(path string) error {
 					}
 				}
 			}
-			d.Unlock()
+			d.mu.Unlock()
 			if d.Strings[2] == 0 || d.Numbers[2] == 0 || d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 {
 				return errors.New(`prefixdb: structure is invalid`)
 			}
@@ -741,7 +741,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 		return
 	}
 	address, offset := parsed.As16(), 0
-	d.RLock()
+	d.mu.RLock()
 	for bit := 0; bit < 128; bit++ {
 		down := 0
 		if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
@@ -800,7 +800,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 			break
 		}
 	}
-	d.RUnlock()
+	d.mu.RUnlock()
 	if country, ok := out["country_code"].(string); ok && country != "" {
 		if value, ok := out["latitude"].(float64); ok && value == 0.0 {
 			if value, ok := out["longitude"].(float64); ok && value == 0.0 {
