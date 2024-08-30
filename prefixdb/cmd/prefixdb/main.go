@@ -15,7 +15,7 @@ import (
 
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/prefixdb"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type LOCATION struct {
@@ -78,7 +78,7 @@ func mkjson() {
 				}
 			}
 			handle.Close()
-			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ustr.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 	start := time.Now()
@@ -88,7 +88,7 @@ func mkjson() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
@@ -119,7 +119,7 @@ func mkoui() {
 									}
 								}
 								value, _ := strconv.ParseInt(fields[index], 16, 32)
-								address += ufmt.Hex([]byte{byte(value)})
+								address += ustr.Hex([]byte{byte(value)})
 								if index == 2 || index == 4 {
 									address += ":"
 								}
@@ -137,7 +137,7 @@ func mkoui() {
 				}
 			}
 			handle.Close()
-			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ustr.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 	start := time.Now()
@@ -147,7 +147,7 @@ func mkoui() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
@@ -193,7 +193,7 @@ func mkcity() {
 		}
 		handle.Close()
 		time.Sleep(time.Millisecond)
-		os.Stderr.WriteString("\rloaded locations [" + os.Args[3] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(len(locations)) + " entries)\n")
+		os.Stderr.WriteString("\rloaded locations [" + os.Args[3] + "] (" + ustr.Duration(time.Since(start)) + " - " + strconv.Itoa(len(locations)) + " entries)\n")
 	}
 
 	clusters := [][]string{
@@ -247,7 +247,7 @@ func mkcity() {
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ustr.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 
@@ -258,7 +258,7 @@ func mkcity() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {
@@ -299,7 +299,7 @@ func mkasn() {
 			}
 			handle.Close()
 			time.Sleep(time.Millisecond)
-			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ufmt.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
+			os.Stderr.WriteString("\radded prefixes   [" + os.Args[index] + "] (" + ustr.Duration(time.Since(start)) + " - " + strconv.Itoa(count) + " entries)\n")
 		}
 	}
 
@@ -310,7 +310,7 @@ func mkasn() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ufmt.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 	} else {

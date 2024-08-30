@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type UUID [16]byte
@@ -31,5 +31,5 @@ func Check(in string) bool {
 }
 
 func (u UUID) String() string {
-	return ufmt.Hex(u[0:4]) + "-" + ufmt.Hex(u[4:6]) + "-" + ufmt.Hex(u[6:8]) + "-" + ufmt.Hex(u[8:10]) + "-" + ufmt.Hex(u[10:16])
+	return ustr.Hex(u[0:4]) + "-" + ustr.Hex(u[4:6]) + "-" + ustr.Hex(u[6:8]) + "-" + ustr.Hex(u[8:10]) + "-" + ustr.Hex(u[10:16])
 }

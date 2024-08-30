@@ -18,7 +18,7 @@ import (
 
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/sys/unix"
 )
@@ -160,15 +160,15 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 		created = true
 	}
 	if chunk.handle, err = os.OpenFile(path, flags, 0o644); err != nil {
-		return nil, ufmt.Wrap(err, "mstore")
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	if err = chunk.handle.Truncate(size); err != nil {
 		chunk.handle.Close()
-		return nil, ufmt.Wrap(err, "mstore")
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED); err != nil {
 		chunk.handle.Close()
-		return nil, ufmt.Wrap(err, "mstore")
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	if created {
 		binary.BigEndian.PutUint32(chunk.data[0:], magic)

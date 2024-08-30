@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -146,9 +146,9 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	auth := []ssh.AuthMethod{}
 	if credentials.Key != "" {
 		if private, err := os.ReadFile(credentials.Key); err != nil {
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		} else if signer, err := ssh.ParsePrivateKey(private); err != nil {
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		} else {
 			auth = append(auth, ssh.PublicKeys(signer))
 		}
@@ -190,7 +190,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 
 	if len(cache) > 0 && cache[0] {
 		hash := md5.Sum([]byte(t.remote + t.options.Mode + t.options.SubSystem + t.options.Marker + t.options.Filter + command))
-		ckey = "/tmp/_" + ufmt.Hex(hash[:]) + ".json"
+		ckey = "/tmp/_" + ustr.Hex(hash[:]) + ".json"
 		if content, err := os.ReadFile(ckey); err == nil {
 			if json.Unmarshal(content, &result) == nil {
 				return result, nil
@@ -232,28 +232,28 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	if conn.session == nil {
 		if conn.client, err = ssh.Dial("tcp", t.remote, t.config); err != nil {
 			conn.Reset()
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		}
 		if conn.session, err = conn.client.NewSession(); err != nil {
 			conn.Reset()
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		}
 		if conn.input, err = conn.session.StdinPipe(); err != nil {
 			conn.Reset()
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		}
 		if conn.output, err = conn.session.StdoutPipe(); err != nil {
 			conn.Reset()
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		}
 		if t.options.SubSystem != "" {
 			if err = conn.session.RequestSubsystem(t.options.SubSystem); err != nil {
 				conn.Reset()
-				return nil, ufmt.Wrap(err, "ssh")
+				return nil, ustr.Wrap(err, "ssh")
 			}
 		} else if err = conn.session.Shell(); err != nil {
 			conn.Reset()
-			return nil, ufmt.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "ssh")
 		}
 
 		go func() {
@@ -343,7 +343,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	}
 	if _, err = conn.input.Write([]byte(command + "\n")); err != nil {
 		conn.Reset()
-		return nil, ufmt.Wrap(err, "ssh")
+		return nil, ustr.Wrap(err, "ssh")
 	}
 	select {
 	case value := <-conn.result:

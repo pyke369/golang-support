@@ -24,7 +24,7 @@ import (
 
 	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
 
 	"golang.org/x/net/http/httpproxy"
@@ -159,7 +159,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					conn = tls.Client(conn, config.TLSConfig)
 					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 						conn.Close()
-						return nil, ufmt.Wrap(err, "uws")
+						return nil, ustr.Wrap(err, "uws")
 					}
 				}
 				if proxy != nil {
@@ -184,7 +184,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 					if _, err := conn.Write([]byte(payload)); err != nil {
 						conn.Close()
-						return nil, ufmt.Wrap(err, "uws")
+						return nil, ustr.Wrap(err, "uws")
 					}
 					conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 					if response, err := http.ReadResponse(bufio.NewReader(conn), nil); err == nil {
@@ -195,7 +195,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						}
 					} else {
 						conn.Close()
-						return nil, ufmt.Wrap(err, "uws")
+						return nil, ustr.Wrap(err, "uws")
 					}
 
 					if url.Scheme == "https" {
@@ -206,7 +206,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						conn = tls.Client(conn, config.TLSConfig)
 						if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 							conn.Close()
-							return nil, ufmt.Wrap(err, "uws")
+							return nil, ustr.Wrap(err, "uws")
 						}
 					}
 				}
@@ -214,7 +214,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
 				if err := request.Write(conn); err != nil {
 					conn.Close()
-					return nil, ufmt.Wrap(err, "uws")
+					return nil, ustr.Wrap(err, "uws")
 				}
 				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
@@ -255,13 +255,13 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					return nil, err
 				}
 			} else {
-				return nil, ufmt.Wrap(err, "uws")
+				return nil, ustr.Wrap(err, "uws")
 			}
 		} else {
-			return nil, ufmt.Wrap(err, "uws")
+			return nil, ustr.Wrap(err, "uws")
 		}
 	} else {
-		return nil, ufmt.Wrap(err, "uws")
+		return nil, ustr.Wrap(err, "uws")
 	}
 	return
 }

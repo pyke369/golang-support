@@ -4,6 +4,7 @@
 - chash
 - dynacert
 - expect
+- file
 - fqdn
 - gpio
 - jsonrpc
@@ -12,12 +13,13 @@
 - multiflag
 - netlink
 - prefixdb
+- process
 - rcache
 - rpack
 - uadb
 - ubgp
 - uconfig
-- ufmt
+- ustr
 - ulog
 - uuid
 - uws

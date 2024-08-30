@@ -21,7 +21,7 @@ import (
 
 	"github.com/pyke369/golang-support/bslab"
 	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 const (
@@ -471,7 +471,7 @@ func (l *ULog) ClearExternal() {
 	l.mu.Unlock()
 }
 
-func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
+func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	l.mu.RLock()
 	if l.level < severity || (!l.syslog && l.external == nil && !l.file && !l.console) {
 		l.mu.RUnlock()
@@ -589,7 +589,7 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 		now = now.Local()
 	}
 	if l.file {
-		path := ufmt.Strftime(l.filePath, now)
+		path := ustr.Strftime(l.filePath, now)
 		if structured {
 			path = templateParser.ReplaceAllStringFunc(path, func(key string) string {
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
@@ -700,27 +700,27 @@ func (l *ULog) log(now time.Time, severity int, in any, a ...any) {
 }
 
 func (l *ULog) Error(layout any, a ...any) {
-	l.log(time.Now(), LOG_ERR, layout, a...)
+	l.Log(time.Now(), LOG_ERR, layout, a...)
 }
 func (l *ULog) Warn(layout any, a ...any) {
-	l.log(time.Now(), LOG_WARNING, layout, a...)
+	l.Log(time.Now(), LOG_WARNING, layout, a...)
 }
 func (l *ULog) Info(layout any, a ...any) {
-	l.log(time.Now(), LOG_INFO, layout, a...)
+	l.Log(time.Now(), LOG_INFO, layout, a...)
 }
 func (l *ULog) Debug(layout any, a ...any) {
-	l.log(time.Now(), LOG_DEBUG, layout, a...)
+	l.Log(time.Now(), LOG_DEBUG, layout, a...)
 }
 
 func (l *ULog) ErrorTime(now time.Time, layout any, a ...any) {
-	l.log(now, LOG_ERR, layout, a...)
+	l.Log(now, LOG_ERR, layout, a...)
 }
 func (l *ULog) WarnTime(now time.Time, layout any, a ...any) {
-	l.log(now, LOG_WARNING, layout, a...)
+	l.Log(now, LOG_WARNING, layout, a...)
 }
 func (l *ULog) InfoTime(now time.Time, layout any, a ...any) {
-	l.log(now, LOG_INFO, layout, a...)
+	l.Log(now, LOG_INFO, layout, a...)
 }
 func (l *ULog) DebugTime(now time.Time, layout any, a ...any) {
-	l.log(now, LOG_DEBUG, layout, a...)
+	l.Log(now, LOG_DEBUG, layout, a...)
 }

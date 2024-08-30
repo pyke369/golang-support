@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type RPACK struct {
@@ -134,18 +134,18 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 			compressor.Close()
 			pack.Content = base64.StdEncoding.EncodeToString(compressed.Bytes())
 			entries[rpath] = pack
-			os.Stderr.WriteString("\r" + ufmt.String(rpath, -120, 120))
+			os.Stderr.WriteString("\r" + ustr.String(rpath, -120, 120))
 			count++
 			size += info.Size()
 		}
 		return nil
 	})
-	os.Stderr.WriteString("\r" + ufmt.String("", -120, 120))
-	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ufmt.Duration(time.Since(start)) + "\n")
+	os.Stderr.WriteString("\r" + ustr.String("", -120, 120))
+	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ustr.Duration(time.Since(start)) + "\n")
 	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644); err == nil {
 		random := [8]byte{}
 		rand.Read(random[:])
-		uid := "rpack_" + ufmt.Hex(random[:])
+		uid := "rpack_" + ustr.Hex(random[:])
 		handle.WriteString(`package ` + pkgname + `
 
 import (
@@ -165,7 +165,7 @@ var ` + uid + ` map[string]*rpack.RPACK = map[string]*rpack.RPACK{
 		}
 		length += 3
 		for path, entry := range entries {
-			handle.WriteString(`	` + ufmt.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Default: ` + ufmt.Bool(entry.Default) +
+			handle.WriteString(`	` + ustr.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Default: ` + ustr.Bool(entry.Default) +
 				`, Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
 		}
 		handle.WriteString(`}

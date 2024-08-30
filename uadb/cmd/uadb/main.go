@@ -19,7 +19,7 @@ import (
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uadb"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 func build() {
@@ -127,7 +127,7 @@ func lookup() {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			os.Stdout.WriteString("  " + ufmt.String(key, -20, 20) + "  " + lookup[key] + "\n")
+			os.Stdout.WriteString("  " + ustr.String(key, -20, 20) + "  " + lookup[key] + "\n")
 		}
 	}
 }
@@ -175,7 +175,7 @@ func bench() {
 				close(queue)
 				waiter.Wait()
 				os.Stdout.WriteString("\r- lookup " + strconv.Itoa(int(total)) + " user-agents (found " + strconv.Itoa(int(atomic.LoadInt32(&found))) +
-					" / " + strconv.Itoa(int(total-atomic.LoadInt32(&found))) + " unknown / " + ufmt.Duration(time.Since(start)) + ")\n")
+					" / " + strconv.Itoa(int(total-atomic.LoadInt32(&found))) + " unknown / " + ustr.Duration(time.Since(start)) + ")\n")
 			}
 			time.Sleep(time.Second)
 		}

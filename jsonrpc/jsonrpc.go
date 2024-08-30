@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
 )
 
@@ -118,10 +118,10 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 				return nil, errors.New("jsonrpc: HTTP error " + strconv.Itoa(response.StatusCode))
 			}
 		} else {
-			return nil, ufmt.Wrap(err, "jsonrpc")
+			return nil, ustr.Wrap(err, "jsonrpc")
 		}
 	} else {
-		return nil, ufmt.Wrap(err, "jsonrpc")
+		return nil, ustr.Wrap(err, "jsonrpc")
 	}
 	return
 }
@@ -183,7 +183,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 	}
 	responses, ids := []RESPONSE{}, map[string]*CALL{}
 	if err := json.Unmarshal(payload, &responses); err != nil {
-		return nil, ufmt.Wrap(err, "jsonrpc")
+		return nil, ustr.Wrap(err, "jsonrpc")
 	}
 	if calls == nil {
 		calls = []*CALL{}
@@ -327,7 +327,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 								} else if value, ok := r.(string); ok {
 									err = errors.New(value)
 								}
-								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ufmt.Wrap(err, "jsonrpc").Error()}}
+								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ustr.Wrap(err, "jsonrpc").Error()}}
 							}
 						}()
 						opaque := routes[request.Method].Opaque

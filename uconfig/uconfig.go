@@ -21,7 +21,7 @@ import (
 
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type UConfig struct {
@@ -47,21 +47,21 @@ var (
 	unescaper = regexp.MustCompile(`@@@\d+@@@`)                          // match escaped characters (to reverse previous escaping)
 	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`) // match external content macros
 	replacers = []replacer{
-		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                                    // remove # and // commented portions
-		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                                 // remove /* */ commented portions
-		replacer{regexp.MustCompile(`(?m)^\s+`), ``, false},                                                    // trim leading spaces
-		replacer{regexp.MustCompile(`(?m)\s+$`), ``, false},                                                    // trim trailing spaces
-		replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false},                     // add missing key-value separators
-		replacer{regexp.MustCompile(`(?m);$`), `,`, false},                                                     // replace ; line terminators by ,
-		replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false},                                            // replace = key-value separators by :
-		replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false},                              // add missing objects/arrays , separators
-		replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false},                                    // add missing values trailing , seperators
-		replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true},                         // add missing key-(object/array-)value separator
-		replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false},                                     // add missing quotes around keys
-		replacer{regexp.MustCompile("([:,\\[\\s]+)([^\",\\[\\]{}\\s\n\r]+?)(\\s*[,\\]}])"), `$1"$2"$3`, false}, // add missing quotes around values
-		replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false},                                               // add still issing objects/arrays , separators
-		replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false},                                           // trim leading and trailing spaces in quoted strings
-		replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false},                                              // remove objets/arrays last element extra ,
+		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                        // remove # and // commented portions
+		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                     // remove /* */ commented portions
+		replacer{regexp.MustCompile(`(?m)^\s+`), ``, false},                                        // trim leading spaces
+		replacer{regexp.MustCompile(`(?m)\s+$`), ``, false},                                        // trim trailing spaces
+		replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false},         // add missing key-value separators
+		replacer{regexp.MustCompile(`(?m);$`), `,`, false},                                         // replace ; line terminators by ,
+		replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false},                                // replace = key-value separators by :
+		replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false},                  // add missing objects/arrays , separators
+		replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false},                        // add missing values trailing , seperators
+		replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true},             // add missing key-(object/array-)value separator
+		replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false},                         // add missing quotes around keys
+		replacer{regexp.MustCompile(`([:,\[\s]+)([^",\[\]{}\s]+?)(\s*[,\]}])`), `$1"$2"$3`, false}, // add missing quotes around values
+		replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false},                                   // add still issing objects/arrays , separators
+		replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false},                               // trim leading and trailing spaces in quoted strings
+		replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false},                                  // remove objets/arrays last element extra ,
 	}
 )
 
@@ -74,7 +74,7 @@ func escape(in string) string {
 		if instring {
 			offset := strings.IndexAny(escaped, in[index:index+1])
 			if offset >= 0 {
-				out = append(out, []byte("@@@"+ufmt.Int(offset, 2)+"@@@")...)
+				out = append(out, []byte("@@@"+ustr.Int(offset, 2)+"@@@")...)
 			} else {
 				out = append(out, in[index:index+1]...)
 			}
@@ -303,7 +303,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	c.mu.Lock()
 	c.config, c.top = config, top
 	hash := sha1.Sum([]byte(content))
-	c.hash = ufmt.Hex(hash[:])
+	c.hash = ustr.Hex(hash[:])
 	c.cache = map[string]any{}
 	reduce(c.config)
 	c.mu.Unlock()
@@ -573,7 +573,11 @@ func (c *UConfig) GetStringMatchCaptures(path, fallback, match string) []string 
 	return []string{value}
 }
 
-func (c *UConfig) GetInteger(path string, fallback int64) int64 {
+func (c *UConfig) GetInteger(path string, extra ...int64) int64 {
+	fallback := int64(0)
+	if len(extra) != 0 {
+		fallback = extra[0]
+	}
 	return c.GetIntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
 func (c *UConfig) GetIntegerBounds(path string, fallback, lowest, highest int64) int64 {
@@ -588,7 +592,11 @@ func (c *UConfig) GetIntegerBounds(path string, fallback, lowest, highest int64)
 	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) GetFloat(path string, fallback float64) float64 {
+func (c *UConfig) GetFloat(path string, extra ...float64) float64 {
+	fallback := float64(0)
+	if len(extra) != 0 {
+		fallback = extra[0]
+	}
 	return c.GetFloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
 func (c *UConfig) GetFloatBounds(path string, fallback, lowest, highest float64) float64 {
@@ -614,7 +622,11 @@ func (c *UConfig) GetSizeBounds(path string, fallback, lowest, highest int64, ex
 	return j.SizeBounds(value, fallback, lowest, highest, extra...)
 }
 
-func (c *UConfig) GetDuration(path string, fallback float64) time.Duration {
+func (c *UConfig) GetDuration(path string, extra ...float64) time.Duration {
+	fallback := float64(0)
+	if len(extra) != 0 {
+		fallback = extra[0]
+	}
 	return c.GetDurationBounds(path, fallback, 0, math.MaxFloat64)
 }
 func (c *UConfig) GetDurationBounds(path string, fallback, lowest, highest float64) time.Duration {

@@ -1,4 +1,4 @@
-package ufmt
+package ustr
 
 import (
 	"errors"
@@ -207,4 +207,58 @@ func Strftime(layout string, base time.Time) string {
 		}
 	}
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+const (
+	OptionTrim  = 0x01
+	OptionSpace = 0x02
+	OptionLower = 0x04
+	OptionUpper = 0x08
+	OptionEmpty = 0x10
+	OptionFirst = 0x20
+	OptionJSON  = 0x40
+)
+
+func Options(in string) (out int) {
+	for _, value := range strings.Fields(strings.ToLower(in)) {
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix("trim", value) {
+			out |= OptionTrim
+		}
+		if strings.HasPrefix("space", value) {
+			out |= OptionSpace
+		}
+		if strings.HasPrefix("lower", value) {
+			out |= OptionLower
+		}
+		if strings.HasPrefix("upper", value) {
+			out |= OptionUpper
+		}
+		if strings.HasPrefix("empty", value) {
+			out |= OptionEmpty
+		}
+		if strings.HasPrefix("first", value) {
+			out |= OptionFirst
+		}
+		if strings.HasPrefix("json", value) {
+			out |= OptionJSON
+		}
+	}
+	return
+}
+
+func Transform(in string, options int) string {
+	if options&OptionTrim != 0 {
+		in = strings.TrimSpace(in)
+	}
+	if options&OptionSpace != 0 {
+		in = strings.ReplaceAll(strings.ReplaceAll(in, " ", ""), "\t", "")
+	}
+	if options&OptionLower != 0 {
+		in = strings.ToLower(in)
+	}
+	if options&OptionUpper != 0 {
+		in = strings.ToUpper(in)
+	}
+	return in
 }

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pyke369/golang-support/ufmt"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...string) (token string, err error) {
@@ -73,12 +73,12 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 	case alg == "RS256":
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return "", ufmt.Wrap(err, "token")
+			return "", ustr.Wrap(err, "token")
 		}
 		sum := sha256.Sum256([]byte(token))
 		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 		if err != nil {
-			return "", ufmt.Wrap(err, "token")
+			return "", ustr.Wrap(err, "token")
 		}
 		token += "." + base64.RawURLEncoding.EncodeToString(signature)
 
@@ -87,7 +87,7 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 
 		key, err := x509.ParseECPrivateKey(block.Bytes)
 		if err != nil {
-			return "", ufmt.Wrap(err, "token")
+			return "", ustr.Wrap(err, "token")
 		}
 		if key.Curve.Params().BitSize != 256 {
 			return "", errors.New("token: invalid elliptic curve size")
@@ -95,7 +95,7 @@ func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...
 		sum := sha256.Sum256([]byte(token))
 		r, s, err := ecdsa.Sign(rand.Reader, key, sum[:])
 		if err != nil {
-			return "", ufmt.Wrap(err, "token")
+			return "", ustr.Wrap(err, "token")
 		}
 		r.FillBytes(signature[:32])
 		s.FillBytes(signature[32:])
