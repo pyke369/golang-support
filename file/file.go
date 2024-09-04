@@ -17,20 +17,33 @@ import (
 func Read(path string, extra ...map[string]any) (lines []string) {
 	var matcher *regexp.Regexp
 
-	options := 0
+	options, capture, separator := 0, false, ""
 	if len(extra) > 0 {
 		if value, ok := extra[0]["options"].(string); ok {
 			options = ustr.Options(value)
 		}
 		if value, ok := extra[0]["match"].(string); ok {
-			matcher = rcache.Get(strings.ToLower(strings.TrimSpace(value)))
+			matcher = rcache.Get(strings.TrimSpace(value))
+			if value, ok := extra[0]["separator"].(string); ok {
+				capture, separator = true, value
+			}
 		}
 	}
+
 	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
 			line = ustr.Transform(line, options)
-			if (line == "" && options&ustr.OptionEmpty != 0) || (matcher != nil && !matcher.MatchString(line)) {
+			if line == "" && options&ustr.OptionEmpty != 0 {
 				continue
+			}
+			if matcher != nil {
+				captures := matcher.FindStringSubmatch(line)
+				if captures == nil {
+					continue
+				}
+				if capture && len(captures) > 1 {
+					line = strings.Join(captures[1:], separator)
+				}
 			}
 			lines = append(lines, line)
 			if len(lines) != 0 && options&ustr.OptionFirst != 0 {
@@ -38,6 +51,7 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 			}
 		}
 	}
+
 	return
 }
 
