@@ -152,7 +152,7 @@ var (
 		&colorizer{regexp.MustCompile(`"([^"]+)"([,}\]])`), []byte("\"\x1b[34m$1\x1b[m\"$2")},
 		&colorizer{regexp.MustCompile(`([\-.\d]+)([,}\]])`), []byte("\x1b[36m$1\x1b[m$2")},
 		&colorizer{regexp.MustCompile(`true([,}\]])`), []byte("\x1b[32mtrue\x1b[m$1")},
-		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[31mfalse\x1b[m$1")},
+		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[33mfalse\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
 	}
 	optionParser   = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
