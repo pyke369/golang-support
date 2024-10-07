@@ -13,8 +13,6 @@ import (
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
-
-	"golang.org/x/sys/unix"
 )
 
 func Self() string {
@@ -112,14 +110,4 @@ func Exec(command string, extra ...map[string]any) (lines []string) {
 	}
 
 	return
-}
-
-func Affinity(pids, cores []int) {
-	set := unix.CPUSet{}
-	for _, core := range cores {
-		set.Set(core)
-	}
-	for _, pid := range pids {
-		unix.SchedSetaffinity(pid, &set)
-	}
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/pyke369/golang-support/rcache"
+
+	"golang.org/x/sys/unix"
 )
 
 type TASK struct {
@@ -52,4 +54,14 @@ func Task(in string) (out []*TASK) {
 		}
 	}
 	return
+}
+
+func Affinity(pids, cores []int) {
+	set := unix.CPUSet{}
+	for _, core := range cores {
+		set.Set(core)
+	}
+	for _, pid := range pids {
+		unix.SchedSetaffinity(pid, &set)
+	}
 }
