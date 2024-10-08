@@ -246,10 +246,10 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						client:    true,
 						connected: true,
 					}
-					go ws.receive(nil)
 					if config.OpenHandler != nil {
-						go config.OpenHandler(ws)
+						config.OpenHandler(ws)
 					}
+					go ws.receive(nil)
 				} else {
 					conn.Close()
 					return nil, err
@@ -350,10 +350,10 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				conn:      conn,
 				connected: true,
 			}
-			go ws.receive(reader)
 			if config.OpenHandler != nil {
-				go config.OpenHandler(ws)
+				config.OpenHandler(ws)
 			}
+			go ws.receive(reader)
 		}
 		return
 	}
@@ -416,7 +416,7 @@ func (s *Socket) Close(code int) {
 		s.closing = true
 		s.clock.Unlock()
 		if s.config != nil && s.config.CloseHandler != nil {
-			go s.config.CloseHandler(s, code)
+			s.config.CloseHandler(s, code)
 		}
 		if !s.errored {
 			payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_CLOSE, 0}}
