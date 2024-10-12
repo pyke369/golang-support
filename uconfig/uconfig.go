@@ -45,7 +45,7 @@ type replacer struct {
 var (
 	escaped   = "{}[],#/*;:= "
 	unescaper = regexp.MustCompile(`@@@\d+@@@`)                          // match escaped characters (to reverse previous escaping)
-	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`) // match external content macros
+	expander  = regexp.MustCompile(`{{([</=|@&!\-+_])\s*([^{}]*?)\s*}}`) // match external content macros
 	replacers = []replacer{
 		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                        // remove # and // commented portions
 		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                     // remove /* */ commented portions
@@ -117,6 +117,7 @@ func reduce(in any) {
 			for _, value := range in.(map[string]any) {
 				reduce(value)
 			}
+
 		case reflect.Slice:
 			for index := 0; index < len(in.([]any)); index++ {
 				reduce(in.([]any)[index])
@@ -179,8 +180,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				base = content[start+7 : start+7+end]
 			}
 		}
-		switch content[indexes[2]:indexes[3]] {
-		case "<":
+		switch content[indexes[2]] {
+		case '<', '/': // file(s) content ('/' == path expansion)
 			if arguments[0][0:1] != "/" {
 				arguments[0] = base + "/" + arguments[0]
 			}
@@ -194,9 +195,22 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				}
 			}
 			if nbase != "" && strings.Contains(expanded, "\n") {
+				if content[indexes[2]] == '/' {
+					expand := nbase
+					for _, part := range strings.Split(strings.Trim(base, "/"), "/") {
+						expand = strings.Trim(strings.TrimPrefix(strings.Trim(expand, "/"), part), "/")
+					}
+					if expand != "" {
+						parts := strings.Split(strings.Trim(expand, "/"), "/")
+						for index := len(parts) - 1; index >= 0; index-- {
+							expanded = parts[index] + " {\n" + expanded + "\n}\n"
+						}
+					}
+				}
 				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
 			}
-		case "=":
+
+		case '=': // file(s) line(s)
 			if elements, err := filepath.Glob(arguments[0]); err == nil {
 				for _, element := range elements {
 					if mcontent, err := os.ReadFile(element); err == nil {
@@ -209,7 +223,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					}
 				}
 			}
-		case "|":
+
+		case '|': // command(s) output
 			if arguments[0][0:1] != "/" {
 				arguments[0] = base + "/" + arguments[0]
 			}
@@ -228,7 +243,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 			if nbase != "" && strings.Contains(expanded, "\n") {
 				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
 			}
-		case "@":
+
+		case '@': // url content
 			requester := http.Client{
 				Timeout: time.Duration(5 * time.Second),
 			}
@@ -239,9 +255,11 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					}
 				}
 			}
-		case "&":
+
+		case '&': // environment value
 			expanded += os.Getenv(arguments[0])
-		case "!":
+
+		case '!': // program argument value
 			if matcher := rcache.Get("(?i)^--?(no-?)?(?:" + arguments[0] + ")(?:(=)(.+))?$"); matcher != nil {
 				for index := 1; index < len(os.Args); index++ {
 					option := os.Args[index]
@@ -265,11 +283,13 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					}
 				}
 			}
-		case "-":
+
+		case '-': // program name
 			if index := strings.Index(os.Args[0], "-"); index >= 0 {
 				expanded = strings.ToLower(os.Args[0][index+1:])
 			}
-		case "+":
+
+		case '+': // filename(s)
 			if arguments[0][0:1] != "/" {
 				arguments[0] = base + "/" + arguments[0]
 			}
@@ -280,7 +300,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				}
 			}
 			expanded = strings.TrimSpace(expanded)
-		case "_":
+
+		case '_': // base filename
 			expanded = filepath.Base(in)
 		}
 		content = content[0:indexes[0]] + expanded + content[indexes[1]:]
@@ -431,6 +452,7 @@ func (c *UConfig) GetPaths(path string) (paths []string) {
 			}
 			paths = append(paths, item)
 		}
+
 	case reflect.Map:
 		for key := range current.(map[string]any) {
 			item := path + prefix + key
