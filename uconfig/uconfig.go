@@ -2,131 +2,267 @@ package uconfig
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"hash/crc32"
 	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/pyke369/golang-support/bslab"
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ustr"
 )
 
 type UConfig struct {
+	size      int
 	input     string
 	separator string
-	mu        sync.RWMutex
-	hash      string
+	hash      uint32
 	prefix    string
 	top       string
 	config    any
-	cacheLock sync.RWMutex
+	mu        sync.RWMutex
 	cache     map[string]any
 }
 
-type replacer struct {
-	search  *regexp.Regexp
-	replace string
-	loop    bool
-}
-
-var (
-	escaped   = "{}[],#/*;:= "
-	unescaper = regexp.MustCompile(`@@@\d+@@@`)                          // match escaped characters (to reverse previous escaping)
-	expander  = regexp.MustCompile(`{{([<=|@&!\-\+_])\s*([^{}]*?)\s*}}`) // match external content macros
-	replacers = []replacer{
-		replacer{regexp.MustCompile("(?m)^(.*?)(?:#|//).*?$"), `$1`, false},                        // remove # and // commented portions
-		replacer{regexp.MustCompile(`/\*[^\*]*\*/`), ``, true},                                     // remove /* */ commented portions
-		replacer{regexp.MustCompile(`(?m)^\s+`), ``, false},                                        // trim leading spaces
-		replacer{regexp.MustCompile(`(?m)\s+$`), ``, false},                                        // trim trailing spaces
-		replacer{regexp.MustCompile(`(?m)^(\S+)\s+([^{}\[\],;:=]+);$`), "$1 = $2;", false},         // add missing key-value separators
-		replacer{regexp.MustCompile(`(?m);$`), `,`, false},                                         // replace ; line terminators by ,
-		replacer{regexp.MustCompile(`(\S+?)\s*[:=]`), `$1:`, false},                                // replace = key-value separators by :
-		replacer{regexp.MustCompile(`([}\]])(\s*)([^,}\]\s])`), `$1,$2$3`, false},                  // add missing objects/arrays , separators
-		replacer{regexp.MustCompile("(?m)(^[^:]+:.+?[^,])$"), `$1,`, false},                        // add missing values trailing , seperators
-		replacer{regexp.MustCompile(`(?m)(^[^\[{][^:\[{]+)\s+([\[{])`), `$1:$2`, true},             // add missing key-(object/array-)value separator
-		replacer{regexp.MustCompile(`(?m)^([^":{}\[\]]+)`), `"$1"`, false},                         // add missing quotes around keys
-		replacer{regexp.MustCompile(`([:,\[\s]+)([^",\[\]{}\s]+?)(\s*[,\]}])`), `$1"$2"$3`, false}, // add missing quotes around values
-		replacer{regexp.MustCompile("\"[\r\n]"), "\",\n", false},                                   // add still issing objects/arrays , separators
-		replacer{regexp.MustCompile(`"\s*(.+?)\s*"`), `"$1"`, false},                               // trim leading and trailing spaces in quoted strings
-		replacer{regexp.MustCompile(`,+(\s*[}\]])`), `$1`, false},                                  // remove objets/arrays last element extra ,
-	}
+const (
+	value  = 0
+	space  = 1
+	ostart = 2
+	oend   = 3
+	astart = 4
+	aend   = 5
+	kvsep  = 6
+	vsep   = 7
 )
 
-func escape(in string) string {
-	instring, out := false, []byte{}
-	for index := 0; index < len(in); index++ {
-		if in[index:index+1] == `"` && (index == 0 || in[index-1:index] != `\`) {
+var (
+	psep    = string(filepath.Separator)
+	esep    = []byte{'\n', ' ', '"', '>', '{', '}', '[', ']', ','}
+	options = map[string]string{}
+)
+
+func init() {
+done:
+	for aindex, arg := range os.Args {
+		if aindex == 0 || arg == "-" || arg[0] != '-' {
+			continue
+		}
+		if arg == "--" {
+			break
+		}
+		parts, index, negate := strings.Split(arg, "-"), 1, false
+		for index < len(parts) {
+			if parts[index] == "" {
+				index++
+				if index > 2 {
+					break done
+				}
+				continue
+			}
+			if strings.EqualFold(parts[index], "no") {
+				index++
+				negate = true
+				continue
+			}
+			sparts := strings.Split(parts[index], "=")
+			name := strings.ToLower(sparts[0])
+			if len(sparts) == 1 {
+				if !negate && aindex < len(os.Args)-1 && os.Args[aindex+1][0] != '-' {
+					options[name] = os.Args[aindex+1]
+				} else {
+					if negate {
+						options[name] = "false"
+					} else {
+						options[name] = "true"
+					}
+				}
+			} else {
+				options[name] = sparts[1]
+			}
+			break
+		}
+	}
+}
+
+func mode(char byte) int {
+	switch char {
+	case ' ':
+		return space
+	case '{':
+		return ostart
+	case '}':
+		return oend
+	case '[':
+		return astart
+	case ']':
+		return aend
+	case ':':
+		return kvsep
+	case ',':
+		return vsep
+	default:
+		return value
+	}
+}
+
+func grow(in []byte, extra int) (out []byte) {
+	out = in
+	if len(in)+extra > cap(in) {
+		out = bslab.Get(len(in) + extra)
+		out = append(out, in...)
+		bslab.Put(in)
+	}
+	return
+}
+
+func escape(in []byte, extra ...int) (out []byte) {
+	out = in
+	length := len(out)
+	if length == 0 {
+		return
+	}
+	start, end := 0, length
+	if len(extra) > 0 {
+		start = min(length, max(0, extra[0]))
+		if len(extra) > 1 {
+			end = min(length, max(0, extra[1]))
+		}
+	}
+	end--
+	if end < start {
+		return
+	}
+
+	offsets := make([]int, 0, min(256, end-start+1))
+	for offset := start; offset <= end; offset++ {
+		if out[offset] == '"' {
+			offsets = append(offsets, offset)
+		}
+	}
+	if len(offsets) == 0 {
+		return
+	}
+
+	target := length + len(offsets)
+	if target > cap(out) {
+		out = slices.Grow(out, target)
+	}
+	out = out[:target]
+	for index := len(offsets) - 1; index >= 0; index-- {
+		offset := offsets[index]
+		copy(out[offset+2:], out[offset+1:])
+		out[offset], out[offset+1] = '\\', '"'
+	}
+
+	return
+}
+
+func expand(in []byte, extra ...int) (out []byte) {
+	out = in
+	length := len(out)
+	if length == 0 {
+		return
+	}
+	start, end := 0, length
+	if len(extra) > 0 {
+		start = min(length, max(0, extra[0]))
+		if len(extra) > 1 {
+			end = min(length, max(0, extra[1]))
+		}
+	}
+	end--
+	if end < start {
+		return
+	}
+
+	offsets, size, instring, previous := make([][2]int, 0, min(256, end-start+1)), 0, false, byte(0)
+	for offset := start; offset <= end; offset++ {
+		char := out[offset]
+		if char == '"' && previous != '\\' {
 			instring = !instring
 		}
-		if instring {
-			offset := strings.IndexAny(escaped, in[index:index+1])
-			if offset >= 0 {
-				out = append(out, []byte("@@@"+ustr.Int(offset, 2)+"@@@")...)
-			} else {
-				out = append(out, in[index:index+1]...)
-			}
-		} else {
-			out = append(out, in[index:index+1]...)
-		}
-	}
-	return string(out)
-}
 
-func unescape(in string) string {
-	return unescaper.ReplaceAllStringFunc(in, func(a string) string {
-		offset, _ := strconv.Atoi(a[3:5])
-		if offset < len(escaped) {
-			return escaped[offset : offset+1]
-		}
-		return ""
-	})
-}
+		if !instring {
+			switch char {
+			case '{', '[':
+				if offset > start+1 {
+					switch out[offset-1] {
+					case ' ':
+						switch out[offset-2] {
+						case ' ':
 
-func reduce(in any) {
-	if in != nil {
-		switch reflect.TypeOf(in).Kind() {
-		case reflect.Map:
-			for key := range in.(map[string]any) {
-				parts := []string{}
-				for _, value := range strings.Split(key, " ") {
-					if value != "" {
-						parts = append(parts, value)
+						case ':', '=':
+							out[offset-1] = out[offset-2]
+							out[offset-2] = ' '
+
+						default:
+							offsets = append(offsets, [2]int{offset - 1, 1})
+							size++
+						}
+
+					case ':', '=':
+						switch out[offset-2] {
+						case ' ', '"':
+
+						default:
+							offsets = append(offsets, [2]int{offset - 1, 1})
+							size++
+						}
+
+					default:
+						offsets = append(offsets, [2]int{offset, 2})
+						size += 2
 					}
 				}
-				if len(parts) > 1 {
-					if in.(map[string]any)[parts[0]] == nil || reflect.TypeOf(in.(map[string]any)[parts[0]]).Kind() != reflect.Map {
-						in.(map[string]any)[parts[0]] = make(map[string]any)
-					}
-					in.(map[string]any)[parts[0]].(map[string]any)[parts[1]] = in.(map[string]any)[key]
-					delete(in.(map[string]any), key)
+
+			case '\n':
+				if offset > start && bytes.IndexByte(esep, out[offset-1]) == -1 {
+					offsets = append(offsets, [2]int{offset, 1})
+					size++
+				}
+				if offset < end && bytes.IndexByte(esep, out[offset+1]) == -1 {
+					offsets = append(offsets, [2]int{offset + 1, 1})
+					size++
 				}
 			}
-			for _, value := range in.(map[string]any) {
-				reduce(value)
-			}
-		case reflect.Slice:
-			for index := 0; index < len(in.([]any)); index++ {
-				reduce(in.([]any)[index])
-			}
+		}
+
+		previous = char
+	}
+	if len(offsets) == 0 {
+		return
+	}
+
+	target := length + size
+	if target > cap(out) {
+		out = slices.Grow(out, target)
+	}
+	out = out[:target]
+	for index := len(offsets) - 1; index >= 0; index-- {
+		offset := offsets[index]
+		copy(out[offset[0]+offset[1]:], out[offset[0]:])
+		for cindex := 0; cindex < offset[1]; cindex++ {
+			out[offset[0]+cindex] = ' '
 		}
 	}
+
+	return
 }
 
 func New(in string, inline ...bool) (config *UConfig, err error) {
-	config = &UConfig{input: in, separator: "."}
+	config = &UConfig{size: 64 << 10, input: in, separator: "."}
 	err = config.Load(in, inline...)
 	return config, err
 }
@@ -141,172 +277,515 @@ func (c *UConfig) SetPrefix(prefix string) {
 
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
-	content := "/*base:" + base + "*/\n"
-	top := ""
+	payload, top := bslab.Get(max(c.size, 3+len(base)+3+len(in))), ""
+	payload = append(payload, '<', '<', '%')
+	payload = append(payload, base...)
+	payload = append(payload, '>', '>', ' ')
 	if len(inline) > 0 && inline[0] {
-		content += in
+		payload = append(payload, in...)
 	} else {
 		if filepath.IsAbs(in) {
 			top = filepath.Dir(in)
 		} else {
 			top = filepath.Dir(filepath.Join(base, in))
 		}
-		content += "{{<" + in + "}}"
+		payload = append(payload, '<', '<', '~')
+		payload = append(payload, in...)
+		payload = append(payload, '>', '>')
 	}
 
-	for {
-		indexes := expander.FindStringSubmatchIndex(content)
-		if indexes == nil {
-			content = escape(content)
-			for index := 0; index < len(replacers); index++ {
-				mcontent := ""
-				for mcontent != content {
-					mcontent = content
-					content = replacers[index].search.ReplaceAllString(content, replacers[index].replace)
-					if !replacers[index].loop {
-						break
-					}
-				}
-			}
-			content = unescape(strings.Trim(content, " \n,"))
-			break
+	// remove commented-out sections and expand macros
+	length, previous, instring, cstart, cmode, mstart := len(payload), byte(0), false, -1, -1, -1
+	for cindex := 0; cindex < length; cindex++ {
+		char := payload[cindex]
+
+		if cstart < 0 && char == '"' && previous != '\\' {
+			instring = !instring
 		}
 
-		expanded := ""
-		arguments := strings.Split(content[indexes[4]:indexes[5]], " ")
-		if start := strings.LastIndex(content[0:indexes[2]], "/*base:"); start >= 0 {
-			if end := strings.Index(content[start+7:indexes[2]], "*/"); end > 0 {
-				base = content[start+7 : start+7+end]
-			}
-		}
-		switch content[indexes[2]:indexes[3]] {
-		case "<":
-			if arguments[0][0:1] != "/" {
-				arguments[0] = base + "/" + arguments[0]
-			}
-			nbase := ""
-			if elements, err := filepath.Glob(arguments[0]); err == nil {
-				for _, element := range elements {
-					if mcontent, err := os.ReadFile(element); err == nil {
-						nbase = filepath.Dir(element)
-						expanded += string(mcontent)
-					}
+		if !instring {
+			if mstart == -1 {
+				if char == '\r' || char == ';' {
+					char = '\n'
+					payload[cindex] = char
+				} else if char == '\t' {
+					char = ' '
+					payload[cindex] = char
 				}
-			}
-			if nbase != "" && strings.Contains(expanded, "\n") {
-				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
-			}
-		case "=":
-			if elements, err := filepath.Glob(arguments[0]); err == nil {
-				for _, element := range elements {
-					if mcontent, err := os.ReadFile(element); err == nil {
-						for _, line := range strings.Split(string(mcontent), "\n") {
-							line = strings.TrimSpace(line)
-							if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {
-								expanded += `"` + line + `"` + "\n"
-							}
+
+				if cstart == -1 {
+					if char == '*' && previous == '/' {
+						cstart, cmode = cindex-1, 1
+
+					} else if char == '#' || (char == '/' && previous == '/') {
+						cstart, cmode = cindex-1, 2
+						if char == '#' {
+							cstart = cindex
 						}
 					}
+
+				} else if (cmode == 1 && char == '/' && previous == '*') || (cmode == 2 && char == '\n') {
+					if cmode == 1 {
+						payload[cindex] = ' '
+					}
+					payload = slices.Delete(payload, cstart, cindex)
+					cindex = cstart
+					length, cstart, cmode = len(payload), -1, -1
+					continue
 				}
 			}
-		case "|":
-			if arguments[0][0:1] != "/" {
-				arguments[0] = base + "/" + arguments[0]
-			}
-			nbase := ""
-			if elements, err := filepath.Glob(arguments[0]); err == nil {
-				for _, element := range elements {
-					if element[0:1] != "/" {
-						element = base + "/" + element
+
+			if cstart == -1 {
+				if mstart == -1 {
+					if char == '<' && previous == '<' {
+						mstart = cindex - 1
 					}
-					if mcontent, err := exec.Command(element, strings.Join(arguments[1:], " ")).Output(); err == nil {
-						nbase = filepath.Dir(element)
-						expanded += string(mcontent)
+
+				} else if char == '>' && previous == '>' {
+					macro, arg, btrack := byte(0), "", false
+					if cindex-mstart >= 4 {
+						macro, arg = payload[mstart+2], strings.TrimSpace(string(payload[mstart+3:cindex-1]))
 					}
-				}
-			}
-			if nbase != "" && strings.Contains(expanded, "\n") {
-				expanded = "/*base:" + nbase + "*/\n" + expanded + "\n/*base:" + base + "*/\n"
-			}
-		case "@":
-			requester := http.Client{
-				Timeout: time.Duration(5 * time.Second),
-			}
-			if response, err := requester.Get(arguments[0]); err == nil {
-				if (response.StatusCode / 100) == 2 {
-					if mcontent, err := io.ReadAll(response.Body); err == nil {
-						expanded += string(mcontent)
-					}
-				}
-			}
-		case "&":
-			expanded += os.Getenv(arguments[0])
-		case "!":
-			if matcher := rcache.Get("(?i)^--?(no-?)?(?:" + arguments[0] + ")(?:(=)(.+))?$"); matcher != nil {
-				for index := 1; index < len(os.Args); index++ {
-					option := os.Args[index]
-					if option == "--" {
-						break
-					}
-					if captures := matcher.FindStringSubmatch(option); captures != nil {
-						if captures[2] == "=" {
-							expanded = captures[3]
-						} else {
-							if index == len(os.Args)-1 || strings.HasPrefix(os.Args[index+1], "-") {
-								expanded = "true"
-								if captures[1] != "" {
-									expanded = "false"
+
+					if macro == '%' {
+						base, mstart = arg, -1
+
+					} else {
+						var insert []byte
+
+						switch macro {
+						case '~', '/': // files content
+							if !filepath.IsAbs(arg) {
+								arg = filepath.Join(base, arg)
+							}
+							sizes, size := map[string]int{}, 0
+							paths, err := filepath.Glob(arg)
+							if err == nil {
+								for _, path := range paths {
+									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+										sizes[path] = int(info.Size())
+										size += 4 + len(path) + 4 + 3*int(info.Size()) + 4 + len(base) + 3
+										if macro == '/' {
+											size += len(path) + 7*strings.Count(path, psep)
+										}
+									}
 								}
-							} else {
-								expanded = os.Args[index+1]
 							}
+							if size != 0 {
+								insert = bslab.Get(size)
+								for _, path := range paths {
+									nbase, parts := filepath.Dir(path), []string{}
+									insert = append(insert, ' ', '<', '<', '%')
+									insert = append(insert, nbase...)
+									insert = append(insert, '>', '>', '\n', ' ')
+									if macro == '/' {
+										index := 0
+										for index < min(len(nbase), len(arg)) {
+											if nbase[index] != arg[index] {
+												break
+											}
+											index++
+										}
+										if nbase = nbase[index:]; nbase != "" {
+											parts = strings.Split(nbase, psep)
+											for _, part := range parts {
+												insert = append(insert, part...)
+												insert = append(insert, ' ', ':', ' ', '{', ' ')
+											}
+										}
+									}
+									if handle, err := os.Open(path); err == nil {
+										start := len(insert)
+										insert = insert[:start+sizes[path]]
+										if read, err := handle.Read(insert[start:]); err != nil || read != sizes[path] {
+											insert = insert[:start]
+										} else {
+											insert = expand(insert, start)
+										}
+										handle.Close()
+									}
+									for index := 0; index < len(parts); index++ {
+										insert = append(insert, ' ', '}')
+									}
+									insert = append(insert, ' ', '<', '<', '%')
+									insert = append(insert, base...)
+									insert = append(insert, '>', '>', '\n', ' ')
+									btrack = true
+								}
+							}
+
+						case '^': // files lines
+							if !filepath.IsAbs(arg) {
+								arg = filepath.Join(base, arg)
+							}
+							sizes, size, empty := map[string]int{}, 0, true
+							paths, err := filepath.Glob(arg)
+							if err == nil {
+								for _, path := range paths {
+									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() >= 2 {
+										sizes[path] = int(info.Size())
+										size += int(info.Size()) + 5*(int(info.Size())/2)
+									}
+								}
+							}
+							insert = bslab.Get(4 + size + 2)
+							insert = append(insert, ' ', ' ', '[', ' ')
+							for _, path := range paths {
+								handle, err := os.Open(path)
+								if err != nil {
+									continue
+								}
+								lines := bslab.Get(sizes[path])
+								lines = lines[:sizes[path]]
+								if read, err := handle.Read(lines); err == nil && read == sizes[path] {
+									start := 0
+									for index, char := range lines {
+										if char == '\n' {
+											for _, char := range lines[start:index] {
+												if char == ' ' || char == '\t' || char == '\r' {
+													start++
+													continue
+												}
+												break
+											}
+											if start != index {
+												end := index - 1
+												for end > start {
+													char = lines[end]
+													if char == '\r' || char == ' ' || char == '\t' {
+														end--
+														continue
+													}
+													break
+												}
+												if start <= end && lines[start] != '#' {
+													insert = append(insert, '"')
+													offset := len(insert)
+													insert = append(insert, lines[start:end+1]...)
+													insert = escape(insert, offset)
+													insert = append(insert, '"', ',', ' ')
+													empty = false
+												}
+											}
+											start = index + 1
+										}
+									}
+								}
+								bslab.Put(lines)
+								handle.Close()
+							}
+							if !empty {
+								insert = insert[:len(insert)-2]
+							}
+							insert = append(insert, ']', ' ')
+
+						case '|': // command output
+							args := strings.Split(arg, " ")
+							ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+							if value, err := exec.CommandContext(ctx, args[0], strings.Join(args[1:], " ")).Output(); err == nil {
+								if len(value) > 0 {
+									insert = bslab.Get(3 * len(value))
+									insert = append(insert, value...)
+									insert = expand(insert)
+								}
+								btrack = true
+							}
+							cancel()
+
+						case '@': // url content
+							client := http.Client{Timeout: 5 * time.Second}
+							if response, err := client.Get(arg); err == nil {
+								if response.StatusCode/100 == 2 {
+									if size := min(256<<10, int(response.ContentLength)); size > 0 {
+										insert = bslab.Get(3 * size)
+										offset := 0
+										for {
+											read, err := response.Body.Read(insert[offset:size])
+											offset += read
+											if err != nil || read == 0 || offset >= size {
+												break
+											}
+										}
+										insert = insert[:offset]
+										insert = expand(insert)
+										btrack = true
+									}
+								}
+								response.Body.Close()
+							}
+
+						case '&': // environment value
+							value := strings.TrimSpace(os.Getenv(arg))
+							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = append(insert, ' ', ' ', '"')
+							insert = append(insert, value...)
+							insert = escape(insert, 3)
+							insert = append(insert, '"', ' ')
+
+						case '!': // argument value
+							value := options[strings.ToLower(arg)]
+							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = append(insert, ' ', ' ', '"')
+							insert = append(insert, value...)
+							insert = escape(insert, 3)
+							insert = append(insert, '"', ' ')
+
+						case '-': // program subname
+							value := ""
+							if index := strings.Index(os.Args[0], "-"); index >= 0 {
+								value = os.Args[0][index+1:]
+							}
+							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = append(insert, ' ', ' ', '"')
+							insert = append(insert, value...)
+							insert = escape(insert, 3)
+							insert = append(insert, '"', ' ')
+
+						case '+', '*': // paths
+							if !filepath.IsAbs(arg) {
+								arg = filepath.Join(base, arg)
+							}
+							size := 0
+							paths, err := filepath.Glob(arg)
+							if err == nil {
+								for _, path := range paths {
+									size += 1 + 2*len(path) + 1
+								}
+							}
+							insert = bslab.Get(4 + size + len(paths)*3 + 2)
+							insert = append(insert, ' ', ' ', '[', ' ')
+							if len(paths) != 0 {
+								for _, path := range paths {
+									insert = append(insert, '"')
+									path = filepath.Base(path)
+									start := len(insert)
+									if macro == '*' {
+										if index := strings.LastIndex(path, "."); index != -1 {
+											path = path[:index]
+										}
+									}
+									insert = append(insert, path...)
+									insert = escape(insert, start)
+									insert = append(insert, '"', ',', ' ')
+								}
+								insert = insert[:len(insert)-2]
+							}
+							insert = append(insert, ']', ' ')
+
+						case '_': // configuration basename
+							value := ""
+							if len(inline) == 0 || !inline[0] {
+								value = filepath.Base(in)
+							}
+							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = append(insert, ' ', ' ', '"')
+							insert = append(insert, value...)
+							insert = escape(insert, 3)
+							insert = append(insert, '"', ' ')
 						}
-						break
+
+						payload = grow(payload, len(insert)-(cindex+1-mstart))
+						payload = slices.Replace(payload, mstart, cindex+1, insert...)
+
+						cindex = mstart
+						if !btrack {
+							cindex += len(insert)
+						}
+						bslab.Put(insert)
+						length, mstart = len(payload), -1
+						continue
 					}
 				}
 			}
-		case "-":
-			if index := strings.Index(os.Args[0], "-"); index >= 0 {
-				expanded = strings.ToLower(os.Args[0][index+1:])
+		}
+		previous = char
+	}
+	if cstart != -1 {
+		payload = slices.Delete(payload, cstart, len(payload))
+	}
+
+	// remove base macros + build tokens list
+	tokens := make([][2]int, 0, 4<<10)
+	for pass := 1; pass <= 2; pass++ {
+		length, previous, instring, cstart, cmode, mstart = len(payload), byte(0), false, 0, -1, -1
+		for cindex := 0; cindex < length; cindex++ {
+			char := payload[cindex]
+			if char == '"' && previous != '\\' {
+				instring = !instring
 			}
-		case "+":
-			if arguments[0][0:1] != "/" {
-				arguments[0] = base + "/" + arguments[0]
-			}
-			if elements, err := filepath.Glob(arguments[0]); err == nil {
-				for _, element := range elements {
-					element = filepath.Base(element)
-					expanded += strings.TrimSuffix(element, filepath.Ext(element)) + " "
+
+			switch pass {
+			case 1:
+				if char == '\n' {
+					char = ','
+					payload[cindex] = char
+				}
+				if !instring {
+					if char == '=' {
+						char = ':'
+						payload[cindex] = char
+					}
+					if mstart == -1 {
+						if char == '<' && previous == '<' {
+							mstart = cindex - 1
+						}
+					} else if char == '>' && previous == '>' {
+						for index := mstart; index <= cindex; index++ {
+							payload[index] = ' '
+						}
+						mstart = -1
+					}
+				}
+
+			case 2:
+				if cmode == -1 {
+					cmode = mode(char)
+				}
+				if (cmode == 0 && !instring) || cmode != 0 {
+					if value := mode(char); cmode != value {
+						tokens = append(tokens, [2]int{cmode, cindex - cstart})
+						cstart, cmode = cindex, value
+					}
+					if cindex == length-1 {
+						tokens = append(tokens, [2]int{cmode, cindex + 1 - cstart})
+					}
 				}
 			}
-			expanded = strings.TrimSpace(expanded)
-		case "_":
-			expanded = filepath.Base(in)
+			previous = char
 		}
-		content = content[0:indexes[0]] + expanded + content[indexes[1]:]
+	}
+
+	// remove redundant values separators + add missing quotes
+	offset := 0
+	for index, token := range tokens {
+		length := token[1]
+		if token[0] == vsep && length > 1 {
+			for cindex := offset + 1; cindex < offset+length; cindex++ {
+				payload[cindex] = ' '
+			}
+		}
+		if token[0] == value {
+			if payload[offset] != '"' {
+				if index > 0 && offset > 0 && payload[offset-1] == ' ' {
+					offset--
+					payload[offset] = '"'
+					tokens[index-1][1]--
+				} else {
+					payload = grow(payload, 1)
+					payload = slices.Insert(payload, offset, '"')
+				}
+				tokens[index][1]++
+				length++
+			}
+			if payload[offset+length-1] != '"' {
+				if index < len(tokens)-1 && offset+length < len(payload)-1 && payload[offset+length] == ' ' {
+					payload[offset+length] = '"'
+					tokens[index+1][1]--
+				} else {
+					payload = grow(payload, 1)
+					payload = slices.Insert(payload, offset+length, '"')
+				}
+				tokens[index][1]++
+				length++
+			}
+		}
+		offset += length
+	}
+
+	// remove extra values separators (reverse pass)
+	previous, offset = byte(0xff), len(payload)
+	for index := len(tokens) - 1; index >= 0; index-- {
+		token := tokens[index]
+		cmode := token[0]
+		offset -= token[1]
+		if cmode == vsep && previous != value && previous != astart {
+			for cindex := offset; cindex < offset+token[1]; cindex++ {
+				payload[cindex] = ' '
+			}
+			tokens[index][0], cmode = space, space
+		}
+		if cmode != space {
+			previous = byte(cmode)
+		}
+	}
+
+	// remove extra values separators (forward pass) + add missing key/value separators
+	previous, offset = byte(0xff), 0
+	for index, token := range tokens {
+		cmode, length := token[0], token[1]
+		if cmode == vsep && (previous == 0xff || previous == ostart || previous == astart) {
+			for cindex := offset; cindex < offset+token[1]; cindex++ {
+				payload[cindex] = ' '
+			}
+			tokens[index][0], cmode = space, space
+		}
+		if (cmode == ostart && previous != kvsep) || (cmode == astart && previous != astart && previous != vsep && previous != kvsep) || (cmode == value && previous == value) {
+			if index > 0 && offset > 0 && payload[offset-1] == ' ' {
+				offset--
+				payload[offset] = ':'
+				tokens[index-1][1]--
+			} else {
+				payload = grow(payload, 1)
+				payload = slices.Insert(payload, offset, ':')
+			}
+			tokens[index][1]++
+			length++
+		}
+		if cmode != space {
+			previous = byte(cmode)
+		}
+		offset += length
+	}
+
+	// normalize to JSON object
+	for _, char := range payload {
+		if char != ' ' {
+			if char != '{' {
+				payload[0] = '{'
+				payload = grow(payload, 1)
+				payload = append(payload, '}')
+			}
+			break
+		}
+	}
+	if value := len(payload); value > c.size {
+		c.size = value
+	}
+
+	// compute hash
+	defer bslab.Put(payload)
+	source, hasher := bslab.Get(1<<10), crc32.NewIEEE()
+	for _, char := range payload {
+		if char != ' ' {
+			if len(source) < cap(source) {
+				source = append(source, char)
+			}
+			if len(source) == cap(source) {
+				hasher.Write(source)
+				source = source[:0]
+			}
+		}
+	}
+	if len(source) != 0 {
+		hasher.Write(source)
+	}
+	bslab.Put(source)
+	if hasher.Sum32() == c.hash {
+		return nil
 	}
 
 	var config any
 
-	if err := json.Unmarshal([]byte(content), &config); err != nil {
-		if err := json.Unmarshal([]byte("{"+content+"}"), &config); err != nil {
-			if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(content)) {
-				if start := strings.LastIndex(content[:syntax.Offset], "\n") + 1; start >= 0 {
-					line := strings.Count(content[:start], "\n") + 1
-					return errors.New("uconfig: " + syntax.Error() + " at line " + strconv.Itoa(line) + " near" + content[start:syntax.Offset])
-				}
-			}
-			return err
+	// decode JSON object as resulting configuration
+	if err := json.Unmarshal(payload, &config); err != nil {
+		if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(payload)) {
+			start, end := max(0, int(syntax.Offset)-30), min(len(payload), int(syntax.Offset)+30)
+			return errors.New("uconfig: " + syntax.Error() + " near '" + string(payload[start:end]) + "'")
 		}
+		return errors.New("uconfig: " + err.Error())
 	}
+	c.config, c.top, c.hash, c.cache = config, top, hasher.Sum32(), map[string]any{}
 
-	c.mu.Lock()
-	c.config, c.top = config, top
-	hash := sha1.Sum([]byte(content))
-	c.hash = ustr.Hex(hash[:])
-	c.cache = map[string]any{}
-	reduce(c.config)
-	c.mu.Unlock()
 	return nil
 }
 
@@ -315,24 +794,15 @@ func (c *UConfig) Reload(inline ...bool) error {
 }
 
 func (c *UConfig) Loaded() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.config != nil
 }
-
 func (c *UConfig) Top() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	return c.top
 }
-
-func (c *UConfig) Hash() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *UConfig) Hash() uint32 {
 	return c.hash
 }
-
-func (c *UConfig) String() string {
+func (c *UConfig) Dump() string {
 	if c.config != nil {
 		config := &bytes.Buffer{}
 		encoder := json.NewEncoder(config)
@@ -346,167 +816,170 @@ func (c *UConfig) String() string {
 }
 
 func (c *UConfig) Path(in ...string) string {
-	total, count, separator := 0, 0, len(c.separator)
+	length, size := len(in), 0
 	for _, value := range in {
-		if length := len(value); length > 0 {
-			total += length
-			count++
-		}
+		size += len(value)
 	}
-	if total == 0 {
+	if size == 0 {
 		return ""
 	}
-	total += (count - 1) * separator
-	result, offset := make([]byte, total), 0
-	for _, value := range in {
-		if length := len(value); length > 0 {
-			if offset > 0 {
-				copy(result[offset:], c.separator)
-				offset += separator
-			}
-			copy(result[offset:], value)
-			offset += length
+	out := make([]byte, 0, size+(len(in)*len(c.separator)))
+	for index, value := range in {
+		out = append(out, value...)
+		if index < length-1 {
+			out = append(out, c.separator...)
 		}
 	}
-	return unsafe.String(unsafe.SliceData(result), total)
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
 func (c *UConfig) Base(path string) string {
-	parts := strings.Split(path, c.separator)
-	return parts[len(parts)-1]
+	if index := strings.LastIndex(path, c.separator); index != -1 {
+		return path[index+1:]
+	}
+	return path
 }
 
-func (c *UConfig) GetPaths(path string) (paths []string) {
-	paths = []string{}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	current, prefix := c.config, ""
+func (c *UConfig) Paths(path string) (paths []string) {
+	current := c.config
 	if c.prefix != "" {
 		if path == "" {
 			path = c.prefix
-		} else {
-			path = c.prefix + c.separator + path
+		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+			path = prefix + path
+		}
+	}
+	if current == nil {
+		return
+	}
+
+	c.mu.RLock()
+	if c.cache[path] != nil {
+		if value, ok := c.cache[path].([]string); ok {
+			c.mu.RUnlock()
+			return value
+		}
+	}
+	c.mu.RUnlock()
+
+	for _, part := range strings.Split(path, c.separator) {
+		if part == "" {
+			continue
+		}
+
+		switch reflect.TypeOf(current).Kind() {
+		case reflect.Slice:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(current.([]any)) {
+				c.mu.Lock()
+				c.cache[path] = paths
+				c.mu.Unlock()
+				return
+			}
+			current = current.([]any)[index]
+
+		case reflect.Map:
+			if current = current.(map[string]any)[part]; current == nil {
+				c.mu.Lock()
+				c.cache[path] = paths
+				c.mu.Unlock()
+				return
+			}
+
+		default:
+			c.mu.Lock()
+			c.cache[path] = paths
+			c.mu.Unlock()
+			return
+		}
+	}
+
+	switch reflect.TypeOf(current).Kind() {
+	case reflect.Slice:
+		for index := 0; index < len(current.([]any)); index++ {
+			paths = append(paths, path+c.separator+strconv.Itoa(index))
+		}
+
+	case reflect.Map:
+		for key := range current.(map[string]any) {
+			paths = append(paths, path+c.separator+key)
+		}
+	}
+
+	c.mu.Lock()
+	c.cache[path] = paths
+	c.mu.Unlock()
+	return
+}
+
+func (c *UConfig) value(path string) (out string, exists bool) {
+	current := c.config
+	if c.prefix != "" {
+		if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+			path = prefix + path
 		}
 	}
 	if current == nil || path == "" {
 		return
 	}
-	c.cacheLock.RLock()
-	if c.cache[path] != nil {
-		if value, ok := c.cache[path].([]string); ok {
-			c.cacheLock.RUnlock()
-			return value
-		}
-	}
-	c.cacheLock.RUnlock()
-	if path != "" {
-		prefix = c.separator
-		for _, part := range strings.Split(path, c.separator) {
-			kind := reflect.TypeOf(current).Kind()
-			index, err := strconv.Atoi(part)
-			if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]any)))) || (kind != reflect.Slice && kind != reflect.Map) {
-				c.cacheLock.Lock()
-				c.cache[path] = paths
-				c.cacheLock.Unlock()
-				return
-			}
-			if kind == reflect.Slice {
-				current = current.([]any)[index]
-			} else {
-				if current = current.(map[string]any)[strings.TrimSpace(part)]; current == nil {
-					c.cacheLock.Lock()
-					c.cache[path] = paths
-					c.cacheLock.Unlock()
-					return
-				}
-			}
-		}
-	}
-	switch reflect.TypeOf(current).Kind() {
-	case reflect.Slice:
-		for index := 0; index < len(current.([]any)); index++ {
-			item := path + prefix + strconv.Itoa(index)
-			if c.prefix != "" {
-				item = strings.TrimPrefix(item, c.prefix+c.separator)
-			}
-			paths = append(paths, item)
-		}
-	case reflect.Map:
-		for key := range current.(map[string]any) {
-			item := path + prefix + key
-			if c.prefix != "" {
-				item = strings.TrimPrefix(item, c.prefix+c.separator)
-			}
-			paths = append(paths, item)
-		}
-	}
-	c.cacheLock.Lock()
-	c.cache[path] = paths
-	c.cacheLock.Unlock()
-	return
-}
 
-func (c *UConfig) value(path string) (string, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	current := c.config
-	if c.prefix != "" {
-		path = c.prefix + c.separator + path
-	}
-	if current == nil || path == "" {
-		return "", errors.New(`uconfig: invalid parameter`)
-	}
-	c.cacheLock.RLock()
 	if c.cache[path] != nil {
 		if current, ok := c.cache[path].(bool); ok && !current {
-			c.cacheLock.RUnlock()
-			return "", errors.New(`uconfig: invalid path`)
+			c.mu.RUnlock()
+			return
 		}
 		if current, ok := c.cache[path].(string); ok {
-			c.cacheLock.RUnlock()
-			return current, nil
+			c.mu.RUnlock()
+			return current, true
 		}
 	}
-	c.cacheLock.RUnlock()
+	c.mu.RUnlock()
+
 	for _, part := range strings.Split(path, c.separator) {
-		kind := reflect.TypeOf(current).Kind()
-		index, err := strconv.Atoi(part)
-		if (kind == reflect.Slice && (err != nil || index < 0 || index >= len(current.([]any)))) || (kind != reflect.Slice && kind != reflect.Map) {
-			c.cacheLock.Lock()
-			c.cache[path] = false
-			c.cacheLock.Unlock()
-			return "", errors.New(`uconfig: invalid path`)
-		}
-		if kind == reflect.Slice {
-			current = current.([]any)[index]
-		} else {
-			if current = current.(map[string]any)[strings.TrimSpace(part)]; current == nil {
-				c.cacheLock.Lock()
+		switch reflect.TypeOf(current).Kind() {
+		case reflect.Slice:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(current.([]any)) {
+				c.mu.Lock()
 				c.cache[path] = false
-				c.cacheLock.Unlock()
-				return "", errors.New(`uconfig: invalid path`)
+				c.mu.Unlock()
+				return
 			}
+			current = current.([]any)[index]
+
+		case reflect.Map:
+			if current = current.(map[string]any)[part]; current == nil {
+				c.mu.Lock()
+				c.cache[path] = false
+				c.mu.Unlock()
+				return
+			}
+
+		default:
+			c.mu.Lock()
+			c.cache[path] = false
+			c.mu.Unlock()
+			return
 		}
 	}
+
 	if reflect.TypeOf(current).Kind() == reflect.String {
-		c.cacheLock.Lock()
+		c.mu.Lock()
 		c.cache[path] = current.(string)
-		c.cacheLock.Unlock()
-		return current.(string), nil
+		c.mu.Unlock()
+		return current.(string), true
 	}
-	c.cacheLock.Lock()
+
+	c.mu.Lock()
 	c.cache[path] = false
-	c.cacheLock.Unlock()
-	return "", errors.New(`uconfig: invalid path`)
+	c.mu.Unlock()
+	return "", false
 }
 
-func (c *UConfig) GetBoolean(path string, fallback ...bool) bool {
-	if value, err := c.value(path); err == nil {
-		if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "yes" || value == "true" {
-			return true
-		}
-		return false
+func (c *UConfig) Boolean(path string, fallback ...bool) bool {
+	if value, exists := c.value(path); exists {
+		return j.Boolean(value)
 	}
 	if len(fallback) > 0 {
 		return fallback[0]
@@ -514,36 +987,8 @@ func (c *UConfig) GetBoolean(path string, fallback ...bool) bool {
 	return false
 }
 
-func (c *UConfig) GetStrings(path string, extra ...bool) []string {
-	multi, list := len(extra) > 0 && extra[0], []string{}
-	if multi {
-		if value := strings.TrimSpace(c.GetString(path)); value != "" {
-			list = append(list, value)
-		}
-	}
-	for _, path := range c.GetPaths(path) {
-		value := c.GetString(path)
-		if multi {
-			if value = strings.TrimSpace(value); value != "" {
-				list = append(list, value)
-			}
-		} else {
-			list = append(list, value)
-		}
-	}
-	return list
-}
-
-func (c *UConfig) GetMap(path string) (out map[string]string) {
-	out = map[string]string{}
-	for _, key := range c.GetPaths(path) {
-		out[c.Base(key)] = c.GetString(key)
-	}
-	return
-}
-
-func (c *UConfig) GetString(path string, fallback ...string) string {
-	if value, err := c.value(path); err == nil {
+func (c *UConfig) String(path string, fallback ...string) string {
+	if value, exists := c.value(path); exists {
 		return value
 	}
 	if len(fallback) > 0 {
@@ -551,12 +996,12 @@ func (c *UConfig) GetString(path string, fallback ...string) string {
 	}
 	return ""
 }
-func (c *UConfig) GetStringMatch(path, fallback, match string) string {
-	return c.GetStringMatchCaptures(path, fallback, match)[0]
+func (c *UConfig) StringMatch(path, fallback, match string) string {
+	return c.StringMatchCaptures(path, fallback, match)[0]
 }
-func (c *UConfig) GetStringMatchCaptures(path, fallback, match string) []string {
-	value, err := c.value(path)
-	if err != nil {
+func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
+	value, exists := c.value(path)
+	if !exists {
 		return []string{fallback}
 	}
 	if match != "" {
@@ -572,17 +1017,40 @@ func (c *UConfig) GetStringMatchCaptures(path, fallback, match string) []string 
 	}
 	return []string{value}
 }
+func (c *UConfig) StringMap(path string) (out map[string]string) {
+	if paths := c.Paths(path); len(paths) != 0 {
+		out = map[string]string{}
+		for _, key := range paths {
+			if value := c.String(key); value != "" {
+				out[c.Base(key)] = value
+			}
+		}
+	}
+	return
+}
+func (c *UConfig) Strings(path string) (out []string) {
+	if value := strings.TrimSpace(c.String(path)); value != "" {
+		out = append(out, value)
+	} else {
+		for _, path := range c.Paths(path) {
+			if value := strings.TrimSpace(c.String(path)); value != "" {
+				out = append(out, value)
+			}
+		}
+	}
+	return
+}
 
-func (c *UConfig) GetInteger(path string, extra ...int64) int64 {
+func (c *UConfig) Integer(path string, extra ...int64) int64 {
 	fallback := int64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
-	return c.GetIntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
+	return c.IntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
-func (c *UConfig) GetIntegerBounds(path string, fallback, lowest, highest int64) int64 {
-	value, err := c.value(path)
-	if err != nil {
+func (c *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) int64 {
+	value, ok := c.value(path)
+	if !ok {
 		return fallback
 	}
 	nvalue, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
@@ -592,16 +1060,16 @@ func (c *UConfig) GetIntegerBounds(path string, fallback, lowest, highest int64)
 	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) GetFloat(path string, extra ...float64) float64 {
+func (c *UConfig) Float(path string, extra ...float64) float64 {
 	fallback := float64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
-	return c.GetFloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
+	return c.FloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
-func (c *UConfig) GetFloatBounds(path string, fallback, lowest, highest float64) float64 {
-	value, err := c.value(path)
-	if err != nil {
+func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) float64 {
+	value, ok := c.value(path)
+	if !ok {
 		return fallback
 	}
 	nvalue, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
@@ -611,30 +1079,28 @@ func (c *UConfig) GetFloatBounds(path string, fallback, lowest, highest float64)
 	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) GetSize(path string, fallback int64, extra ...bool) int64 {
-	return c.GetSizeBounds(path, fallback, 0, math.MaxInt64, extra...)
+func (c *UConfig) Size(path string, fallback int64, extra ...bool) int64 {
+	return c.SizeBounds(path, fallback, 0, math.MaxInt64, extra...)
 }
-func (c *UConfig) GetSizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
-	value, err := c.value(path)
-	if err != nil {
-		return fallback
+func (c *UConfig) SizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
+	if value, ok := c.value(path); ok {
+		return j.SizeBounds(value, fallback, lowest, highest, extra...)
 	}
-	return j.SizeBounds(value, fallback, lowest, highest, extra...)
+	return fallback
 }
 
-func (c *UConfig) GetDuration(path string, extra ...float64) time.Duration {
+func (c *UConfig) Duration(path string, extra ...float64) time.Duration {
 	fallback := float64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
-	return c.GetDurationBounds(path, fallback, 0, math.MaxFloat64)
+	return c.DurationBounds(path, fallback, 0, math.MaxFloat64)
 }
-func (c *UConfig) GetDurationBounds(path string, fallback, lowest, highest float64) time.Duration {
-	value, err := c.value(path)
-	if err != nil {
-		return time.Duration(fallback * float64(time.Second))
+func (c *UConfig) DurationBounds(path string, fallback, lowest, highest float64) time.Duration {
+	if value, ok := c.value(path); ok {
+		return j.DurationBounds(value, fallback, lowest, highest)
 	}
-	return j.DurationBounds(value, fallback, lowest, highest)
+	return time.Duration(fallback * float64(time.Second))
 }
 
 func Seconds(in time.Duration) float64 {

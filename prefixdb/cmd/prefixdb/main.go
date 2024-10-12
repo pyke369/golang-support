@@ -431,7 +431,7 @@ func batch() {
 								} else if rvalue := j.String(value); rvalue != "" {
 									record = append(record, rvalue)
 								} else {
-									if rvalue := j.Bool(value); rvalue {
+									if rvalue := j.Boolean(value); rvalue {
 										record = append(record, "true")
 									} else {
 										record = append(record, "false")

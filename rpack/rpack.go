@@ -134,13 +134,13 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 			compressor.Close()
 			pack.Content = base64.StdEncoding.EncodeToString(compressed.Bytes())
 			entries[rpath] = pack
-			os.Stderr.WriteString("\r" + ustr.String(rpath, -120, 120))
+			os.Stderr.WriteString("\r" + ustr.String(rpath, -120))
 			count++
 			size += info.Size()
 		}
 		return nil
 	})
-	os.Stderr.WriteString("\r" + ustr.String("", -120, 120))
+	os.Stderr.WriteString("\r" + ustr.String("", -120))
 	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ustr.Duration(time.Since(start)) + "\n")
 	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644); err == nil {
 		random := [8]byte{}

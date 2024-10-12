@@ -8,6 +8,8 @@ import (
 	"unsafe"
 )
 
+var hex = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+
 func Wrap(err error, msg string) error {
 	if err == nil {
 		return nil
@@ -22,62 +24,106 @@ func Bool(in bool) (out string) {
 	return "false"
 }
 
-func Int(in int, extra ...int) (out string) {
-	out = strconv.Itoa(in)
-	if in >= 0 && len(extra) > 0 {
-		size := max(0, extra[0])
-		if len(out) < size {
-			pad := "0"
-			if len(extra) > 1 && extra[1] != 0 {
-				pad = " "
-			}
-			out = strings.Repeat(pad, size-len(out)) + out
-		}
-	}
-	return
-}
-
-func String(in string, extra ...int) (out string) {
-	out = in
-	size, left := 0, false
+func Int(in int, extra ...int) string {
+	value, size, pad := strconv.Itoa(in), 0, byte(' ')
 	if len(extra) > 0 {
-		if extra[0] < 0 {
-			left = true
-			size, left = -extra[0], true
-		} else {
-			size = extra[0]
+		size = extra[0]
+		if len(extra) > 1 && size >= 0 {
+			pad = '0'
 		}
 	}
-	if len(out) < size {
-		if left {
-			out += strings.Repeat(" ", size-len(out))
+	length, usize := len(value), size
+	if usize < 0 {
+		usize = -usize
+	}
+	if length >= usize {
+		return value
+	}
+	out := make([]byte, usize)
+	if size > 0 {
+		if in >= 0 || pad == ' ' {
+			for index := 0; index < usize-length; index++ {
+				out[index] = pad
+			}
+			copy(out[usize-length:], value)
 		} else {
-			out = strings.Repeat(" ", size-len(out)) + out
+			out[0] = '-'
+			for index := 1; index <= usize-length; index++ {
+				out[index] = '0'
+			}
+			copy(out[usize-length+1:], value[1:])
+		}
+	} else {
+		copy(out, value)
+		for index := length; index < usize; index++ {
+			out[index] = pad
 		}
 	}
-	if len(extra) > 1 && extra[1] > 0 && len(out) > extra[1] {
-		out = out[:extra[1]]
-	}
-	return
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
-func Hex(in []byte, extra ...string) (out string) {
-	if len(in) != 0 {
-		separator, hex := []byte{}, "0123456789abcdef"
-		if len(extra) != 0 {
-			separator = []byte(extra[0])
-		}
-		length := len(in)
-		buffer := make([]byte, 0, length+(len(separator))*(length-1))
-		for index, value := range in {
-			buffer = append(buffer, hex[value>>4], hex[value&0x0f])
-			if index < length-1 {
-				buffer = append(buffer, separator...)
+func String(in string, extra ...int) string {
+	length, pad := len(in), byte(' ')
+	size := length
+	if len(extra) > 0 {
+		size = extra[0]
+		if len(extra) > 1 {
+			if value := byte(extra[1]); value >= ' ' && value <= '~' {
+				pad = value
 			}
 		}
-		out = unsafe.String(unsafe.SliceData(buffer), len(buffer))
 	}
-	return
+	if size == 0 {
+		return ""
+	}
+	usize := size
+	if size < 0 {
+		usize = -usize
+	}
+	if usize == len(in) {
+		return in
+	}
+	out := make([]byte, usize)
+	if usize < length {
+		copy(out, in)
+	} else {
+		if size < 0 {
+			copy(out, in)
+			for index := length; index < usize; index++ {
+				out[index] = pad
+			}
+		} else {
+			for index := 0; index < usize-length; index++ {
+				out[index] = pad
+			}
+			copy(out[usize-length:], in)
+		}
+	}
+	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func Hex(in []byte, extra ...byte) string {
+	length, pad := len(in), byte(0)
+	if length == 0 {
+		return ""
+	}
+	if len(extra) != 0 {
+		pad = extra[0]
+	}
+	size := length * 2
+	if pad != 0 {
+		size += length - 1
+	}
+	out, offset := make([]byte, size), 0
+	for index := 0; index < length; index++ {
+		out[offset], out[offset+1] = hex[in[index]>>4], hex[in[index]&0x0f]
+		offset += 2
+		if pad != 0 && index < length-1 {
+			out[offset] = pad
+			offset++
+		}
+	}
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
 func Duration(duration time.Duration) string {
@@ -91,7 +137,7 @@ func Duration(duration time.Duration) string {
 }
 
 func Strftime(layout string, base time.Time) string {
-	out, length := make([]byte, 0, 128), len(layout)
+	length, out := len(layout), make([]byte, 0, 128)
 	for index := 0; index < length; index++ {
 		switch layout[index] {
 		case '%':

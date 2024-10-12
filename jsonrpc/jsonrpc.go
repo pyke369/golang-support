@@ -414,7 +414,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 	return out
 }
 
-func Bool(in any) bool {
+func Boolean(in any) bool {
 	if cast, ok := in.(bool); ok {
 		return cast
 	}
@@ -422,8 +422,10 @@ func Bool(in any) bool {
 		return value > 0
 	}
 	if value, ok := in.(string); ok {
-		if value = strings.ToLower(strings.TrimSpace(value)); value == "1" || value == "on" || value == "y" || value == "yes" || value == "true" {
-			return true
+		if value = strings.TrimSpace(value); value != "" {
+			if value == "1" || value == "y" || value == "Y" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes") || strings.EqualFold(value, "on") {
+				return true
+			}
 		}
 		return false
 	}

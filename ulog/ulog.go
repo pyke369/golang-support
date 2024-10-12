@@ -297,12 +297,12 @@ func (l *ULog) Load(target string) *ULog {
 						l.fileTime = TIME_TIMESTAMP
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
 						l.fileTime = TIME_MSTIMESTAMP
-					case !j.Bool(option[2]):
+					case !j.Boolean(option[2]):
 						l.fileTime = TIME_NONE
 					}
 
 				case "severity":
-					l.fileSeverity = j.Bool(option[2])
+					l.fileSeverity = j.Boolean(option[2])
 
 				case "facility":
 					l.fileFacility = facilities[strings.ToLower(option[2])]
@@ -329,15 +329,15 @@ func (l *ULog) Load(target string) *ULog {
 						l.consoleTime = TIME_TIMESTAMP
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
 						l.consoleTime = TIME_MSTIMESTAMP
-					case !j.Bool(option[2]):
+					case !j.Boolean(option[2]):
 						l.consoleTime = TIME_NONE
 					}
 
 				case "severity":
-					l.consoleSeverity = j.Bool(option[2])
+					l.consoleSeverity = j.Boolean(option[2])
 
 				case "colors":
-					l.consoleColors = j.Bool(option[2])
+					l.consoleColors = j.Boolean(option[2])
 				}
 			}
 
@@ -346,7 +346,7 @@ func (l *ULog) Load(target string) *ULog {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
 				case "utc":
-					l.optionUTC = j.Bool(option[2])
+					l.optionUTC = j.Boolean(option[2])
 
 				case "level":
 					l.level = severities[option[2]]

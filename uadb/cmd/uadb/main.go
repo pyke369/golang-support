@@ -127,7 +127,7 @@ func lookup() {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			os.Stdout.WriteString("  " + ustr.String(key, -20, 20) + "  " + lookup[key] + "\n")
+			os.Stdout.WriteString("  " + ustr.String(key, -20) + "  " + lookup[key] + "\n")
 		}
 	}
 }

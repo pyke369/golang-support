@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -31,8 +30,6 @@ type UADB struct {
 	cache    map[uint32]*cache
 	last     time.Time
 	highest  int
-	hit      int64
-	miss     int64
 }
 
 var fields = []string{"ua_family", "ua_name", "ua_company", "ua_type", "ua_version", "os_family", "os_name", "os_company", "device_type"}
@@ -108,14 +105,12 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 			}
 		}
 		cache.last = int(time.Now().Unix())
-		atomic.AddInt64(&(db.hit), 1)
 	}
 	db.lock.RUnlock()
 	if len(out) > 0 {
 		return
 	}
 
-	atomic.AddInt64(&(db.miss), 1)
 	for _, field := range fields {
 		out[field] = "unknown"
 		if wantcode {
@@ -243,10 +238,4 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 		}
 	}
 	db.lock.Unlock()
-}
-
-func (db *UADB) Stats() (size int, hit, miss int64) {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
-	return len(db.cache), atomic.LoadInt64(&(db.hit)), atomic.LoadInt64(&(db.miss))
 }

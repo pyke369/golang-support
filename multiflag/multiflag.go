@@ -1,23 +1,19 @@
 package multiflag
 
-import (
-	"strings"
-)
+import "strings"
 
 type Multiflag [][2]string
 
-func (m *Multiflag) String() string {
-	return ""
-}
-
 func (m *Multiflag) Set(value string) error {
-	parts := strings.Split(value, ":")
-	if len(parts) >= 2 {
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(strings.Join(parts[1:], ":"))
+	if parts := strings.SplitN(value, ":", 2); len(parts) == 2 {
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		if key != "" && value != "" {
 			*m = append(*m, [2]string{key, value})
 		}
 	}
 	return nil
+}
+
+func (m *Multiflag) String() string {
+	return ""
 }

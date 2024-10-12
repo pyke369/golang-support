@@ -2,13 +2,15 @@ package uuid
 
 import (
 	"crypto/rand"
-	"strings"
-
-	"github.com/pyke369/golang-support/rcache"
-	"github.com/pyke369/golang-support/ustr"
+	"unsafe"
 )
 
 type UUID [16]byte
+
+var (
+	parts = []int{0, 9, 14, 19, 24, 37}
+	hex   = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+)
 
 func New() (uuid UUID) {
 	rand.Read(uuid[:])
@@ -27,9 +29,38 @@ func From(source []byte) (uuid UUID) {
 }
 
 func Check(in string) bool {
-	return rcache.Get(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(strings.ToLower(in))
+	if len(in) != 36 || in[8] != '-' || in[13] != '-' || in[18] != '-' || in[23] != '-' {
+		return false
+	}
+
+	for part := 0; part < len(parts)-1; part++ {
+		for offset := parts[part]; offset < parts[part+1]-1; offset++ {
+			char := in[offset]
+			if (char < '0' || char > 'f') || (char > '9' && char < 'A') || (char > 'F' && char < 'a') {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (u UUID) String() string {
-	return ustr.Hex(u[0:4]) + "-" + ustr.Hex(u[4:6]) + "-" + ustr.Hex(u[6:8]) + "-" + ustr.Hex(u[8:10]) + "-" + ustr.Hex(u[10:16])
+	out := make([]byte, 36)
+	out[8], out[13], out[18], out[23] = '-', '-', '-', '-'
+
+	for part := 0; part < len(parts)-1; part++ {
+		high := true
+		for offset := parts[part]; offset < parts[part+1]-1; offset++ {
+			index := (offset - part) / 2
+			if high {
+				out[offset] = hex[u[index]>>4]
+			} else {
+				out[offset] = hex[u[index]&0x0f]
+			}
+			high = !high
+		}
+	}
+
+	return unsafe.String(unsafe.SliceData(out), len(out))
 }
