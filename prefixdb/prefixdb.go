@@ -130,6 +130,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					} else {
 						pair |= uint64(0x50000000)
 					}
+
 				} else if tvalue, ok := value.(float64); ok {
 					index = 0
 					if _, exists := d.numbers[tvalue]; !exists {
@@ -140,12 +141,14 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 						d.numbers[tvalue][0]++
 					}
 					pair |= uint64((uint32(index) & 0x0fffffff) | 0x20000000)
+
 				} else if tvalue, ok := value.(bool); ok {
 					if tvalue {
 						pair |= uint64(0x30000000)
 					} else {
 						pair |= uint64(0x40000000)
 					}
+
 				} else {
 					pair |= uint64(0x50000000)
 				}
@@ -182,10 +185,10 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 	d.mu.Unlock()
 }
 
-func wbytes(bytes, value int, data []byte) {
-	if len(data) >= bytes {
-		for index := bytes - 1; index >= 0; index-- {
-			data[bytes-index-1] = byte(value >> (uint(index * 8)))
+func wbytes(in, value int, data []byte) {
+	if len(data) >= in {
+		for index := in - 1; index >= 0; index-- {
+			data[in-index-1] = byte(value >> (uint(index * 8)))
 		}
 	}
 }
@@ -193,9 +196,9 @@ func wpbits(prefix byte, value int) []byte {
 	if value <= 7 {
 		return []byte{prefix | (byte(value) & 0x07)}
 	}
-	bytes := int(math.Ceil(math.Ceil(math.Log2(float64(value+1))) / 8))
-	data := []byte{prefix | 0x08 | byte(bytes)}
-	for nibble := bytes - 1; nibble >= 0; nibble-- {
+	size := int(math.Ceil(math.Ceil(math.Log2(float64(value+1))) / 8))
+	data := []byte{prefix | 0x08 | byte(size)}
+	for nibble := size - 1; nibble >= 0; nibble-- {
 		data = append(data, byte(value>>(uint(nibble*8))))
 	}
 	return data
@@ -379,13 +382,16 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	d.Maps[1] = 1
 	d.Maps[0] = 2
 	for {
-		if pnode.down[0] != nil && !pnode.explored[0] {
+		switch {
+		case pnode.down[0] != nil && !pnode.explored[0]:
 			pnode.explored[0] = true
 			pnode = pnode.down[0]
-		} else if pnode.down[1] != nil && !pnode.explored[1] {
+
+		case pnode.down[1] != nil && !pnode.explored[1]:
 			pnode.explored[1] = true
 			pnode = pnode.down[1]
-		} else if pnode.up != nil {
+
+		case pnode.up != nil:
 			pnode = pnode.up
 		}
 		if pnode.up == nil {
@@ -424,6 +430,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 				d.Maps[0] += len(data)
 				d.Maps[1]++
 			}
+
 		} else if pnode.id == 0 {
 			pnode.id = d.Nodes[1]
 			d.Nodes[1]++
@@ -455,13 +462,16 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 			}
 			wnbits(d.Nodes[3], next[0], next[1], d.data[d.Nodes[2]+(pnode.id*((2*d.Nodes[3])/8)):])
 		}
-		if pnode.down[0] != nil && !pnode.explored[2] {
+		switch {
+		case pnode.down[0] != nil && !pnode.explored[2]:
 			pnode.explored[2] = true
 			pnode = pnode.down[0]
-		} else if pnode.down[1] != nil && !pnode.explored[3] {
+
+		case pnode.down[1] != nil && !pnode.explored[3]:
 			pnode.explored[3] = true
 			pnode = pnode.down[1]
-		} else if pnode.up != nil {
+
+		case pnode.up != nil:
 			pnode = pnode.up
 		}
 		if pnode.up == nil {

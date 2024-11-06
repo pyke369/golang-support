@@ -340,7 +340,8 @@ func rlookup(remote, value string, out map[string]any) {
 func lookup() {
 	databases, remote := []*prefixdb.PrefixDB{}, ""
 	for index := 2; index < len(os.Args); index++ {
-		if strings.HasSuffix(os.Args[index], `.pfdb`) {
+		switch {
+		case strings.HasSuffix(os.Args[index], `.pfdb`):
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
@@ -350,7 +351,8 @@ func lookup() {
 			} else {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
-		} else if strings.HasPrefix(os.Args[index], `http`) {
+
+		case strings.HasPrefix(os.Args[index], `http`):
 			lookup := map[string]any{}
 			rlookup(os.Args[index], "8.8.8.8", lookup)
 			if len(lookup) != 0 {
@@ -359,14 +361,15 @@ func lookup() {
 			} else {
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
-		} else {
+
+		default:
 			os.Stderr.WriteString("lookup   [" + os.Args[index] + "] ")
-			lookup := map[string]any{}
+			lookup, search := map[string]any{}, strings.Split(os.Args[index], "/")[0]
 			for _, database := range databases {
-				database.Lookup(os.Args[index], lookup)
+				database.Lookup(search, lookup)
 			}
 			if remote != "" {
-				rlookup(remote, os.Args[index], lookup)
+				rlookup(remote, search, lookup)
 			}
 			data, _ := json.Marshal(lookup)
 			os.Stdout.Write(data)
@@ -377,8 +380,10 @@ func lookup() {
 
 func batch() {
 	databases, remote := []*prefixdb.PrefixDB{}, ""
+done:
 	for index := 2; index < len(os.Args); index++ {
-		if strings.HasSuffix(os.Args[index], `.pfdb`) {
+		switch {
+		case strings.HasSuffix(os.Args[index], `.pfdb`):
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
@@ -387,7 +392,8 @@ func batch() {
 			} else {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
-		} else if strings.HasPrefix(os.Args[index], `http`) {
+
+		case strings.HasPrefix(os.Args[index], `http`):
 			lookup := map[string]any{}
 			rlookup(os.Args[index], "8.8.8.8", lookup)
 			if len(lookup) != 0 {
@@ -396,7 +402,8 @@ func batch() {
 			} else {
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
-		} else {
+
+		default:
 			in, column, parts := os.Stdin, 1, strings.Split(os.Args[index], "@")
 			if parts[0] == "" {
 				usage(1)
@@ -408,21 +415,22 @@ func batch() {
 				in, _ = os.Open(parts[0])
 			}
 			reader, writer, cache := csv.NewReader(in), csv.NewWriter(os.Stdout), map[string]map[string]any{}
+			reader.Comment = '#'
 			if records, err := reader.ReadAll(); err == nil {
 				column = max(1, min(reader.FieldsPerRecord, column)) - 1
 				for done, record := range records {
 					if len(record) > column {
-						lookup := map[string]any{}
-						if _, exists := cache[record[column]]; exists {
-							lookup = cache[record[column]]
+						lookup, search := map[string]any{}, strings.Split(record[column], "/")[0]
+						if _, exists := cache[search]; exists {
+							lookup = cache[search]
 						} else {
 							for _, database := range databases {
-								database.Lookup(record[column], lookup)
+								database.Lookup(search, lookup)
 							}
 							if remote != "" {
-								rlookup(remote, record[column], lookup)
+								rlookup(remote, search, lookup)
 							}
-							cache[record[column]] = lookup
+							cache[search] = lookup
 						}
 						for field := index + 1; field < len(os.Args); field++ {
 							if value := lookup[os.Args[field]]; value != nil {
@@ -450,7 +458,7 @@ func batch() {
 			} else {
 				os.Stderr.WriteString("csv      [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
-			break
+			break done
 		}
 	}
 }
@@ -481,6 +489,7 @@ func server() {
 		if value := parameters.Get("remote"); value != "" {
 			remote = value
 		}
+		remote = strings.Split(remote, "/")[0]
 		lookup := map[string]any{"ip": remote}
 		for _, database := range databases {
 			database.Lookup(remote, lookup)
