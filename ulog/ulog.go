@@ -479,7 +479,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	}
 	l.mu.RUnlock()
 
-	structured, content := false, bslab.Get(1<<8, nil)
+	structured, content := false, bslab.Get(1<<10, nil)
 	defer bslab.Put(content)
 
 	templates := map[string]any{
@@ -496,7 +496,6 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				structure[key] = value
 			}
 		}
-
 		for key, value := range structure {
 			key = strings.TrimSpace(key)
 			if strings.HasPrefix(key, "{{") && strings.HasSuffix(key, "}}") {
@@ -518,33 +517,39 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			}
 		}
 
-		buffer := bytes.NewBuffer([]byte{'{'})
-		if len(structure) != 0 {
-			encoder := json.NewEncoder(buffer)
-			encoder.SetEscapeHTML(false)
-			for _, key := range l.order {
-				if _, exists := structure[key]; exists {
-					buffer.WriteString(`"` + key + `":`)
-					encoder.Encode(structure[key])
-					buffer.Truncate(buffer.Len() - 1)
-					buffer.WriteByte(',')
+		if value, ok := templates["payload"].(string); ok {
+			content = append(content, value...)
+
+		} else {
+			buffer := bytes.NewBuffer([]byte{'{'})
+			if len(structure) != 0 {
+				encoder := json.NewEncoder(buffer)
+				encoder.SetEscapeHTML(false)
+				for _, key := range l.order {
+					if _, exists := structure[key]; exists {
+						buffer.WriteString(`"` + key + `":`)
+						encoder.Encode(structure[key])
+						buffer.Truncate(buffer.Len() - 1)
+						buffer.WriteByte(',')
+					}
 				}
-			}
-			for _, key := range j.MapKeys(structure) {
-				if !slices.Contains(l.order, key) {
-					buffer.WriteString(`"` + key + `":`)
-					encoder.Encode(structure[key])
-					buffer.Truncate(buffer.Len() - 1)
-					buffer.WriteByte(',')
+				for _, key := range j.MapKeys(structure) {
+					if !slices.Contains(l.order, key) {
+						buffer.WriteString(`"` + key + `":`)
+						encoder.Encode(structure[key])
+						buffer.Truncate(buffer.Len() - 1)
+						buffer.WriteByte(',')
+					}
 				}
+				buffer.Truncate(buffer.Len() - 1)
 			}
-			buffer.Truncate(buffer.Len() - 1)
+			buffer.WriteByte('}')
+			content = append(content, buffer.Bytes()...)
 		}
 		l.mu.RUnlock()
-		buffer.WriteByte('}')
-		content = append(content, buffer.Bytes()...)
+	}
 
-	} else if layout, ok := in.(string); ok {
+	if layout, ok := in.(string); ok {
 		content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
 	}
 

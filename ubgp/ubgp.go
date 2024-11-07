@@ -1013,13 +1013,14 @@ func (p *Peer) LocalMultipath(family Family, direction int) (ok bool) {
 	}
 	if capability, ok := p.LocalCapability("add-path"); ok && capability.Valid() {
 		for offset := 0; offset < len(capability.Value); offset += 4 {
-			if family[0] == int(binary.BigEndian.Uint16(capability.Value[offset:])) && family[1] == int(capability.Value[offset+2]) {
-				p.mu.Lock()
-				value := int(capability.Value[offset+3])
-				p.multipath[family] = value
-				p.mu.Unlock()
-				return direction&value == direction
+			if family[0] != int(binary.BigEndian.Uint16(capability.Value[offset:])) || family[1] != int(capability.Value[offset+2]) {
+				continue
 			}
+			p.mu.Lock()
+			value := int(capability.Value[offset+3])
+			p.multipath[family] = value
+			p.mu.Unlock()
+			return direction&value == direction
 		}
 	}
 	return
@@ -1036,13 +1037,14 @@ func (p *Peer) PeerMultipath(family Family, direction int) (ok bool) {
 	}
 	if capability, ok := p.PeerCapability("add-path"); ok && capability.Valid() {
 		for offset := 0; offset < len(capability.Value); offset += 4 {
-			if family[0] == int(binary.BigEndian.Uint16(capability.Value[offset:])) && family[1] == int(capability.Value[offset+2]) {
-				p.mu.Lock()
-				value := int(capability.Value[offset+3])
-				p.peerMultipath[family] = value
-				p.mu.Unlock()
-				return direction&value == direction
+			if family[0] != int(binary.BigEndian.Uint16(capability.Value[offset:])) || family[1] != int(capability.Value[offset+2]) {
+				continue
 			}
+			p.mu.Lock()
+			value := int(capability.Value[offset+3])
+			p.peerMultipath[family] = value
+			p.mu.Unlock()
+			return direction&value == direction
 		}
 	}
 	return
@@ -1142,20 +1144,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 				out = binary.BigEndian.AppendUint32(out, uint32(value))
 			}
 
-		case "community":
-			// if length%4 != 0 {
-			// 	return out, 5
-			// }
-			// if !optional || !transitive {
-			// 	return out, 4
-			// }
-			// community := ""
-			// for index := 0; index < length/4; index++ {
-			// 	value := int(binary.BigEndian.Uint32(in[offset+header+(index*4):]))
-			// 	community += " " + strconv.Itoa(value>>16) + ":" + strconv.Itoa(value&0xffff)
-			// }
-			// out[attribute] = strings.TrimSpace(community)
-
+		// TODO case "community":
 		// TODO case "extended-community":
 		// TODO case "large-community":
 		// TODO case "attributes-set":

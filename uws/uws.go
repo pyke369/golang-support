@@ -114,8 +114,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
 	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
-	if url, err := url.Parse(endpoint); err == nil {
-		proxy, _ := config.Proxy(url)
+	if eurl, err := url.Parse(endpoint); err == nil {
+		proxy, _ := config.Proxy(eurl)
 		if request, err := http.NewRequest("GET", endpoint, http.NoBody); err == nil {
 			nonce := uuid.New().String()
 			request.Header.Add("User-Agent", "uws")
@@ -133,7 +133,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				request.Header.Add(name, value)
 			}
 
-			start, scheme, address := time.Now(), url.Scheme, url.Host
+			start, scheme, address := time.Now(), eurl.Scheme, eurl.Host
 			if proxy != nil {
 				scheme, address = proxy.Scheme, proxy.Host
 			}
@@ -150,7 +150,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				}
 				if scheme == "https" {
 					if config.TLSConfig == nil {
-						config.TLSConfig = &tls.Config{}
+						config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 					}
 					config.TLSConfig.ServerName = address
 					if value, _, err := net.SplitHostPort(address); err == nil {
@@ -163,12 +163,12 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					}
 				}
 				if proxy != nil {
-					host, port := url.Host, "0"
+					host, port := eurl.Host, "0"
 					if value1, value2, err := net.SplitHostPort(host); err == nil {
 						host, port = value1, value2
 					}
 					if port == "0" {
-						if url.Scheme == "https" {
+						if eurl.Scheme == "https" {
 							port = "443"
 						} else {
 							port = "80"
@@ -198,9 +198,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						return nil, ustr.Wrap(err, "uws")
 					}
 
-					if url.Scheme == "https" {
+					if eurl.Scheme == "https" {
 						if config.TLSConfig == nil {
-							config.TLSConfig = &tls.Config{}
+							config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 						}
 						config.TLSConfig.ServerName = host
 						conn = tls.Client(conn, config.TLSConfig)
@@ -219,7 +219,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
 					skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
-					ckey, path := sha1.Sum([]byte(nonce+UWS_UUID)), url.Path
+					ckey, path := sha1.Sum([]byte(nonce+UWS_UUID)), eurl.Path
 					if path == "" {
 						path = "/"
 					}
@@ -380,13 +380,16 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 				mode = 0
 			}
 			payload := net.Buffers{[]byte{fin | mode, 0}}
-			if size < 126 {
+			switch {
+			case size < 126:
 				payload[0][1] |= byte(size)
-			} else if size < 65536 {
+
+			case size < 65536:
 				payload[0][1] |= 126
 				payload = append(payload, []byte{0, 0})
 				binary.BigEndian.PutUint16(payload[1], uint16(size))
-			} else {
+
+			default:
 				payload[0][1] |= 127
 				payload = append(payload, []byte{0, 0, 0, 0, 0, 0, 0, 0})
 				binary.BigEndian.PutUint64(payload[1], uint64(size))
@@ -515,7 +518,8 @@ close:
 						if dmode != 0 && fin == 1 {
 							dlast = true
 						}
-						if size == 126 {
+						switch {
+						case size == 126:
 							if woffset-roffset < 4+smask {
 								size = -1
 								break
@@ -525,7 +529,8 @@ close:
 								copy(mask, buffer[roffset+4:])
 							}
 							roffset += 4 + smask
-						} else if size == 127 {
+
+						case size == 127:
 							if woffset-roffset < 10+smask {
 								size = -1
 								break
@@ -535,7 +540,8 @@ close:
 								copy(mask, buffer[roffset+10:])
 							}
 							roffset += 10 + smask
-						} else {
+
+						default:
 							if !s.client {
 								copy(mask, buffer[roffset+2:])
 							}

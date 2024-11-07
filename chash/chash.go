@@ -1,7 +1,8 @@
 package chash
 
 import (
-	"math/rand"
+	"crypto/rand"
+	"encoding/binary"
 	"os"
 	"sort"
 	"strconv"
@@ -35,8 +36,7 @@ func (a ByHash) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByHash) Less(i, j int) bool { return a[i].hash < a[j].hash }
 
 func murmur2(key []byte, keySize int) uint32 {
-	var magic, hash, current, value uint32 = 0x5bd1e995, uint32(0x4d4d4832 ^ keySize), 0, 0
-
+	magic, hash, current, value := uint32(0x5bd1e995), uint32(0x4d4d4832^keySize), uint32(0), uint32(0)
 	if keySize < 0 {
 		keySize = len(key)
 	}
@@ -67,6 +67,16 @@ func murmur2(key []byte, keySize int) uint32 {
 	hash *= magic
 	hash ^= hash >> 15
 	return hash
+}
+
+func randn(in int) (out int) {
+	if in > 0 {
+		value := make([]byte, 8)
+		rand.Read(value)
+		value[0] &= 0x7f
+		out = int(binary.BigEndian.Uint64(value)) % in
+	}
+	return
 }
 
 func (c *CHash) freeze() {
@@ -325,7 +335,7 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 func (c *CHash) LookupBalance(candidate string, count int) string {
 	result := c.Lookup(candidate, count)
 	if len(result) > 0 {
-		return result[rand.Intn(len(result))]
+		return result[randn(len(result))]
 	}
 	return ""
 }

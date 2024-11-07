@@ -225,7 +225,7 @@ func Strftime(layout string, base time.Time) string {
 					if day == 0 {
 						day = 6
 					} else {
-						day -= 1
+						day--
 					}
 					out = append(out, Int((base.YearDay()+6-day)/7, 2)...)
 				case 'x':

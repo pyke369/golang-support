@@ -165,7 +165,7 @@ func mkcity() {
 			if line, err := reader.ReadString('\n'); err != nil {
 				break
 			} else {
-				if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), -1); len(fields) == 14 {
+				if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 14); len(fields) == 14 {
 					for index := 0; index < len(fields); index++ {
 						fields[index][1] = strings.Trim(fields[index][1], `"`)
 					}
@@ -277,7 +277,7 @@ func mkasn() {
 				if line, err := reader.ReadString('\n'); err != nil {
 					break
 				} else {
-					if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), -1); len(fields) == 3 {
+					if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 3); len(fields) == 3 {
 						for index := 0; index < len(fields); index++ {
 							fields[index][1] = strings.Trim(fields[index][1], `"`)
 						}
@@ -323,13 +323,15 @@ func rlookup(remote, value string, out map[string]any) {
 		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+value, http.NoBody); err == nil {
 			request.Header.Add("X-Forwarded-For", value)
 			if response, err := client.Do(request); err == nil {
-				body, _ := io.ReadAll(response.Body)
+				body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 				response.Body.Close()
-				data := map[string]any{}
-				json.Unmarshal(body, &data)
-				for key, value := range data {
-					if _, exists := out[key]; !exists {
-						out[key] = value
+				if err == nil && len(body) < 4<<10 {
+					data := map[string]any{}
+					json.Unmarshal(body, &data)
+					for key, value := range data {
+						if _, exists := out[key]; !exists {
+							out[key] = value
+						}
 					}
 				}
 			}
@@ -495,6 +497,7 @@ func server() {
 			database.Lookup(remote, lookup)
 		}
 		data, _ := json.Marshal(lookup)
+		response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		response.Write(data)
 		os.Stderr.WriteString("lookup   [" + remote + "] " + string(data) + "\n")
 	})

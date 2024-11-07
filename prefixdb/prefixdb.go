@@ -118,7 +118,6 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				pair := uint64((uint32(index)&0x0fffffff)|0x10000000) << 32
 				if tvalue, ok := value.(string); ok {
 					if len(tvalue) <= 255 {
-						index = 0
 						if _, exists := d.strings[tvalue]; !exists {
 							index = len(d.strings)
 							d.strings[tvalue] = &[3]int{1, index}
@@ -132,7 +131,6 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					}
 
 				} else if tvalue, ok := value.(float64); ok {
-					index = 0
 					if _, exists := d.numbers[tvalue]; !exists {
 						index = len(d.numbers)
 						d.numbers[tvalue] = &[3]int{1, index}
@@ -266,9 +264,9 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	}
 	binary.BigEndian.PutUint32(d.data[d.Strings[2]-8:], uint32(d.Strings[0]))
 	binary.BigEndian.PutUint32(d.data[d.Strings[2]-4:], uint32(d.Strings[1]))
-	strings := make([]*fame, d.Strings[1])
+	fstrings := make([]*fame, d.Strings[1])
 	for key, values := range d.strings {
-		strings[values[1]] = &fame{values[0], key}
+		fstrings[values[1]] = &fame{values[0], key}
 	}
 
 	// layout numbers dictionary (ordered by fame)
@@ -288,9 +286,9 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	}
 	binary.BigEndian.PutUint32(d.data[d.Numbers[2]-8:], uint32(d.Numbers[0]))
 	binary.BigEndian.PutUint32(d.data[d.Numbers[2]-4:], uint32(d.Numbers[1]))
-	numbers := make([]*fame, d.Numbers[1])
+	fnumbers := make([]*fame, d.Numbers[1])
 	for key, values := range d.numbers {
-		numbers[values[1]] = &fame{values[0], key}
+		fnumbers[values[1]] = &fame{values[0], key}
 	}
 
 	// layout pairs dictionary (ordered by fame)
@@ -315,12 +313,12 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		if item.fame <= 1 {
 			break
 		}
-		pair := 0x1000000000000000 | (uint64(d.strings[strings[(item.value.(uint64)>>32)&0x0fffffff].value.(string)][2]) << 32)
+		pair := 0x1000000000000000 | (uint64(d.strings[fstrings[(item.value.(uint64)>>32)&0x0fffffff].value.(string)][2]) << 32)
 		switch (item.value.(uint64) & 0xf0000000) >> 28 {
 		case 1:
-			pair |= 0x10000000 | uint64(d.strings[strings[item.value.(uint64)&0x0fffffff].value.(string)][2])
+			pair |= 0x10000000 | uint64(d.strings[fstrings[item.value.(uint64)&0x0fffffff].value.(string)][2])
 		case 2:
-			pair |= 0x20000000 | uint64(d.numbers[numbers[item.value.(uint64)&0x0fffffff].value.(float64)][2])
+			pair |= 0x20000000 | uint64(d.numbers[fnumbers[item.value.(uint64)&0x0fffffff].value.(float64)][2])
 		default:
 			pair |= item.value.(uint64) & 0xf0000000
 		}
@@ -336,12 +334,12 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 			if _, exists := d.pairs[pair]; exists {
 				cluster.data = append(cluster.data, wpbits(0x60, d.pairs[pair][2])...)
 			} else {
-				cluster.data = append(cluster.data, wpbits(0x10, d.strings[strings[(pair>>32)&0x0fffffff].value.(string)][2])...)
+				cluster.data = append(cluster.data, wpbits(0x10, d.strings[fstrings[(pair>>32)&0x0fffffff].value.(string)][2])...)
 				switch (pair & 0xf0000000) >> 28 {
 				case 1:
-					cluster.data = append(cluster.data, wpbits(0x10, d.strings[strings[pair&0x0fffffff].value.(string)][2])...)
+					cluster.data = append(cluster.data, wpbits(0x10, d.strings[fstrings[pair&0x0fffffff].value.(string)][2])...)
 				case 2:
-					cluster.data = append(cluster.data, wpbits(0x20, d.numbers[numbers[pair&0x0fffffff].value.(float64)][2])...)
+					cluster.data = append(cluster.data, wpbits(0x20, d.numbers[fnumbers[pair&0x0fffffff].value.(float64)][2])...)
 				default:
 					cluster.data = append(cluster.data, byte((pair&0xf0000000)>>24))
 				}
@@ -369,9 +367,9 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	}
 	binary.BigEndian.PutUint32(d.data[d.Clusters[2]-8:], uint32(d.Clusters[0]))
 	binary.BigEndian.PutUint32(d.data[d.Clusters[2]-4:], uint32(d.Clusters[1]))
-	clusters := make([]*fame, d.Clusters[1])
+	fclusters := make([]*fame, d.Clusters[1])
 	for key, cluster := range d.clusters {
-		clusters[cluster.values[1]] = &fame{cluster.values[0], key}
+		fclusters[cluster.values[1]] = &fame{cluster.values[0], key}
 	}
 
 	// layout maps dictionary (reduced for strings, numbers, pairs and clusters)
@@ -408,17 +406,17 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 						last = 0x80
 					}
 					if ((pnode.data[index]>>32)&0xf0000000)>>28 == 7 {
-						data = append(data, wpbits(last|0x70, d.clusters[clusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
+						data = append(data, wpbits(last|0x70, d.clusters[fclusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
 					} else {
 						if _, exists := d.pairs[pnode.data[index]]; exists {
 							data = append(data, wpbits(last|0x60, d.pairs[pnode.data[index]][2])...)
 						} else {
-							data = append(data, wpbits(0x10, d.strings[strings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
+							data = append(data, wpbits(0x10, d.strings[fstrings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
 							switch (pnode.data[index] & 0xf0000000) >> 28 {
 							case 1:
-								data = append(data, wpbits(last|0x10, d.strings[strings[pnode.data[index]&0x0fffffff].value.(string)][2])...)
+								data = append(data, wpbits(last|0x10, d.strings[fstrings[pnode.data[index]&0x0fffffff].value.(string)][2])...)
 							case 2:
-								data = append(data, wpbits(last|0x20, d.numbers[numbers[pnode.data[index]&0x0fffffff].value.(float64)][2])...)
+								data = append(data, wpbits(last|0x20, d.numbers[fnumbers[pnode.data[index]&0x0fffffff].value.(float64)][2])...)
 							default:
 								data = append(data, last|byte((pnode.data[index]&0xf0000000)>>24))
 							}

@@ -215,6 +215,7 @@ func server() {
 		} else {
 			response.Header().Set("Content-Type", "application/json")
 			data, _ := json.Marshal(lookup)
+			response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			response.Write(data)
 		}
 	})

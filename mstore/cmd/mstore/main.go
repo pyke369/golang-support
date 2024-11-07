@@ -111,27 +111,29 @@ func main() {
 			`  "values": [`,
 		}
 		for dindex, value := range data {
-			if values := j.Slice(value); len(values) == len(columns)+1 {
-				at := time.Unix(int64(j.Number(values[0])), 0).UTC()
-				line := `    ["` + at.Format(time.DateTime) + `",`
-				for vindex, value := range values[1:] {
-					switch j.String(j.Map(columns[vindex])["mode"]) {
-					case "gauge", "counter", "increment":
-						line += strconv.FormatInt(int64(j.Number(value)), 10)
-					case "text", "binary":
-						line += `"` + j.String(value) + `"`
-					}
-					if vindex < len(values)-2 {
-						line += ","
-					}
-				}
-				if dindex < len(data)-1 {
-					line += "],"
-				} else {
-					line += "]"
-				}
-				lines = append(lines, line)
+			values := j.Slice(value)
+			if len(values) != len(columns)+1 {
+				continue
 			}
+			at := time.Unix(int64(j.Number(values[0])), 0).UTC()
+			line := `    ["` + at.Format(time.DateTime) + `",`
+			for vindex, value := range values[1:] {
+				switch j.String(j.Map(columns[vindex])["mode"]) {
+				case "gauge", "counter", "increment":
+					line += strconv.FormatInt(int64(j.Number(value)), 10)
+				case "text", "binary":
+					line += `"` + j.String(value) + `"`
+				}
+				if vindex < len(values)-2 {
+					line += ","
+				}
+			}
+			if dindex < len(data)-1 {
+				line += "],"
+			} else {
+				line += "]"
+			}
+			lines = append(lines, line)
 		}
 		lines = append(lines, "  ]", "}")
 		os.Stdout.WriteString(strings.Join(lines, "\n"))

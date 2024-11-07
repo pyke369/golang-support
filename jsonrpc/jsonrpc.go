@@ -274,22 +274,26 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 					}
 					if len(filters) != 0 {
 						authorized := false
+					done:
 						for _, filter := range filters {
 							if filter = strings.TrimSpace(filter); filter != "" {
-								if filter[0] == '~' {
+								switch filter[0] {
+								case '~':
 									if matcher := rcache.Get(strings.TrimSpace(filter[1:])); matcher != nil && matcher.MatchString(request.Method) {
 										authorized = true
-										break
+										break done
 									}
-								} else if filter[0] == '=' {
+
+								case '=':
 									if request.Method == strings.TrimSpace(filter[1:]) {
 										authorized = true
-										break
+										break done
 									}
-								} else {
+
+								default:
 									if strings.Contains(request.Method, filter) {
 										authorized = true
-										break
+										break done
 									}
 								}
 							}
@@ -324,7 +328,8 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 								err := errors.New("unknown")
 								if value, ok := r.(error); ok {
 									err = value
-								} else if value, ok := r.(string); ok {
+								}
+								if value, ok := r.(string); ok {
 									err = errors.New(value)
 								}
 								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ustr.Wrap(err, "jsonrpc").Error()}}
@@ -373,11 +378,12 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 	index := 0
 	for id, response := range responses {
 		out = append(out, `{"jsonrpc":"2.0","id":`...)
-		if _, ok := id.(float64); ok {
-			out = strconv.AppendInt(out, int64(id.(float64)), 10)
-		} else if _, ok := id.(string); ok {
+		if value, ok := id.(float64); ok {
+			out = strconv.AppendInt(out, int64(value), 10)
+		}
+		if value, ok := id.(string); ok {
 			out = append(out, '"')
-			out = append(out, id.(string)...)
+			out = append(out, value...)
 			out = append(out, '"')
 		}
 		out = append(out, ',')

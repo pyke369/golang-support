@@ -137,36 +137,39 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 		if crawler[4] != "" {
 			out["device_type"] = crawler[4]
 		}
+
 	} else {
-		for _, agent := range db.Agents {
-			if matcher := rcache.Get(agent[0]); matcher != nil && matcher.MatchString(ua) {
-				if agent[1] != "" {
-					out["ua_family"], out["ua_name"] = agent[1], agent[1]
-					if matches := matcher.FindStringSubmatch(ua); len(matches) > 1 {
-						out["ua_version"] = matches[1]
-						out["ua_name"] += " " + matches[1]
-					}
-				}
-				if agent[2] != "" {
-					out["ua_company"] = agent[2]
-				}
-				if agent[3] != "" {
-					out["ua_type"] = agent[3]
-				}
-				if agent[4] != "" {
-					out["device_type"] = agent[4]
-				}
-				if agent[5] != "" {
-					out["os_family"] = agent[5]
-				}
-				if agent[6] != "" {
-					out["os_name"] = agent[6]
-				}
-				if agent[7] != "" {
-					out["os_company"] = agent[7]
-				}
-				break
+		for index := 0; index < len(db.Agents); index++ {
+			matcher := rcache.Get(db.Agents[index][0])
+			if matcher == nil || !matcher.MatchString(ua) {
+				continue
 			}
+			if db.Agents[index][1] != "" {
+				out["ua_family"], out["ua_name"] = db.Agents[index][1], db.Agents[index][1]
+				if matches := matcher.FindStringSubmatch(ua); len(matches) > 1 {
+					out["ua_version"] = matches[1]
+					out["ua_name"] += " " + matches[1]
+				}
+			}
+			if db.Agents[index][2] != "" {
+				out["ua_company"] = db.Agents[index][2]
+			}
+			if db.Agents[index][3] != "" {
+				out["ua_type"] = db.Agents[index][3]
+			}
+			if db.Agents[index][4] != "" {
+				out["device_type"] = db.Agents[index][4]
+			}
+			if db.Agents[index][5] != "" {
+				out["os_family"] = db.Agents[index][5]
+			}
+			if db.Agents[index][6] != "" {
+				out["os_name"] = db.Agents[index][6]
+			}
+			if db.Agents[index][7] != "" {
+				out["os_company"] = db.Agents[index][7]
+			}
+			break
 		}
 
 		if out["ua_family"] != "unknown" {
@@ -181,11 +184,14 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 				}
 				if out["device_type"] == "unknown" {
 					ua_type := tocode(out["ua_type"])
-					if ua_type == "mobile_browser" || ua_type == "wap_browser" {
+					switch ua_type {
+					case "mobile_browser", "wap_browser":
 						out["device_type"] = "Smartphone"
-					} else if ua_type == "library" || ua_type == "validator" || ua_type == "unrecognized" || ua_type == "useragent_anonymizer" {
+
+					case "library", "validator", "unrecognized", "useragent_anonymizer":
 						out["device_type"] = "Other"
-					} else {
+
+					default:
 						out["device_type"] = "Personal computer"
 					}
 				}

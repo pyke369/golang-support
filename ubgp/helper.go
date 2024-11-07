@@ -48,8 +48,8 @@ var (
 	emptySliceMap    = map[string][]string{}
 	emptySliceMapMap = map[string]map[string][]string{}
 	ipv4Unicast      = NewFamily("ipv4 unicast")
-	ipv6Unicast      = NewFamily("ipv6 unicast")
-	messageNames     = map[int]string{
+	// ipv6Unicast      = NewFamily("ipv6 unicast")
+	messageNames = map[int]string{
 		1: "open",
 		2: "update",
 		3: "notification",
