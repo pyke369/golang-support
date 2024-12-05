@@ -103,7 +103,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	config.ReadSize = cval(config.ReadSize, 16<<10, 4<<10, 256<<10)
 	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
 	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
-	config.ConnectTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
@@ -318,7 +318,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			config.ReadSize = cval(config.ReadSize, 16<<10, 4<<10, 256<<10)
 			config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
 			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
-			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			if config.ReadBufferSize != 0 {
@@ -498,64 +498,67 @@ close:
 		if read > 0 {
 			seen = atomic.LoadInt64(&gnow)
 			woffset += read
+		needmore:
 			for {
 				if size < 0 {
-					if woffset-roffset >= 2 {
-						fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
-						if (s.client && (buffer[roffset+1]&UWS_MASK) != 0) || (!s.client && (buffer[roffset+1]&UWS_MASK) == 0) ||
-							(fin == 0 && opcode >= UWS_OPCODE_CLOSE && opcode <= UWS_OPCODE_PONG) ||
-							(opcode != 0 && opcode != UWS_OPCODE_TEXT && opcode != UWS_OPCODE_BLOB && (opcode < UWS_OPCODE_CLOSE || opcode > UWS_OPCODE_PONG)) {
-							code = UWS_ERROR_PROTOCOL
-							break close
-						}
-						if !s.client && woffset-roffset < 2+smask {
-							size = -1
-							break
-						}
-						if opcode == UWS_OPCODE_TEXT || opcode == UWS_OPCODE_BLOB {
-							dmode = opcode
-						}
-						if dmode != 0 && fin == 1 {
-							dlast = true
-						}
-						switch {
-						case size == 126:
-							if woffset-roffset < 4+smask {
-								size = -1
-								break
-							}
-							size = int(binary.BigEndian.Uint16(buffer[roffset+2:]))
-							if !s.client {
-								copy(mask, buffer[roffset+4:])
-							}
-							roffset += 4 + smask
+					if woffset-roffset < 2 {
+						break needmore
+					}
 
-						case size == 127:
-							if woffset-roffset < 10+smask {
-								size = -1
-								break
-							}
-							size = int(binary.BigEndian.Uint64(buffer[roffset+2:]))
-							if !s.client {
-								copy(mask, buffer[roffset+10:])
-							}
-							roffset += 10 + smask
-
-						default:
-							if !s.client {
-								copy(mask, buffer[roffset+2:])
-							}
-							roffset += 2 + smask
-						}
-						if (opcode <= UWS_OPCODE_BLOB && size == 0) || (opcode > UWS_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
-							code = UWS_ERROR_OVERSIZED
-							break close
-						}
-						if dmode != 0 {
-							dsize += size
-						}
-					} else {
+					fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
+					if (s.client && (buffer[roffset+1]&UWS_MASK) != 0) || (!s.client && (buffer[roffset+1]&UWS_MASK) == 0) ||
+						(fin == 0 && opcode >= UWS_OPCODE_CLOSE && opcode <= UWS_OPCODE_PONG) ||
+						(opcode != 0 && opcode != UWS_OPCODE_TEXT && opcode != UWS_OPCODE_BLOB && (opcode < UWS_OPCODE_CLOSE || opcode > UWS_OPCODE_PONG)) ||
+						((opcode == UWS_OPCODE_PING || opcode == UWS_OPCODE_PONG) && size > 125) {
+						code = UWS_ERROR_PROTOCOL
+						break close
+					}
+					if !s.client && woffset-roffset < 2+smask {
+						size = -1
 						break
+					}
+					if opcode == UWS_OPCODE_TEXT || opcode == UWS_OPCODE_BLOB {
+						dmode = opcode
+					}
+					if dmode != 0 && fin == 1 {
+						dlast = true
+					}
+
+					switch {
+					case size == 126:
+						if woffset-roffset < 4+smask {
+							size = -1
+							break needmore
+						}
+						size = int(binary.BigEndian.Uint16(buffer[roffset+2:]))
+						if !s.client {
+							copy(mask, buffer[roffset+4:])
+						}
+						roffset += 4 + smask
+
+					case size == 127:
+						if woffset-roffset < 10+smask {
+							size = -1
+							break needmore
+						}
+						size = int(binary.BigEndian.Uint64(buffer[roffset+2:]))
+						if !s.client {
+							copy(mask, buffer[roffset+10:])
+						}
+						roffset += 10 + smask
+
+					default:
+						if !s.client {
+							copy(mask, buffer[roffset+2:])
+						}
+						roffset += 2 + smask
+					}
+					if (opcode <= UWS_OPCODE_BLOB && size == 0) || (opcode > UWS_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
+						code = UWS_ERROR_OVERSIZED
+						break close
+					}
+					if dmode != 0 {
+						dsize += size
 					}
 				}
 
@@ -611,6 +614,7 @@ close:
 									code = int(binary.BigEndian.Uint16(control))
 								}
 								break close
+
 							case UWS_OPCODE_PING:
 								payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_PONG, byte(len(control))}}
 								if s.client {
@@ -618,7 +622,9 @@ close:
 									payload = append(payload, rmask())
 									xor(payload[1], control)
 								}
-								payload = append(payload, control)
+								if len(control) > 0 {
+									payload = append(payload, control)
+								}
 								if err := s.send(payload); err != nil {
 									break close
 								}
