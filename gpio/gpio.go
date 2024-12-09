@@ -132,6 +132,7 @@ func (g *GPIO) Lines() (lines []*GPIO_LINE) {
 							}
 						}
 					}
+
 				case 3:
 					debounce = uint32(info.attrs[attribute].value >> 32)
 				}

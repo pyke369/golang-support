@@ -100,6 +100,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				if backend.Penalty != 0 && len(cbackends) > 1 {
 					select {
 					case <-time.After(backend.Penalty):
+
 					case <-ctx.Done():
 						sink <- lookup
 						return
@@ -187,6 +188,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 						}
 					}
 				}
+
 			case <-time.After(timeout):
 				for index, cancel := range cancels {
 					if cancels[index] != nil {

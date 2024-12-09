@@ -302,8 +302,10 @@ func (c Capability) String() (out string) {
 				switch flag {
 				case 1:
 					out += "receive "
+
 				case 2:
 					out += "send "
+
 				case 3:
 					out += "receive/send "
 				}

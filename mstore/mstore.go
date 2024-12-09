@@ -407,14 +407,17 @@ func (m *metric) put(value, size int64, data []byte) {
 		if length >= 1 {
 			data[0] = byte(value)
 		}
+
 	case 2:
 		if length >= 2 {
 			binary.BigEndian.PutUint16(data, uint16(value))
 		}
+
 	case 4:
 		if length >= 4 {
 			binary.BigEndian.PutUint32(data, uint32(value))
 		}
+
 	case 8:
 		if length >= 8 {
 			binary.BigEndian.PutUint64(data, uint64(value))
@@ -428,14 +431,17 @@ func (m *metric) get(size int64, data []byte) (value int64) {
 		if length >= 1 {
 			value = int64(int8(data[0]))
 		}
+
 	case 2:
 		if length >= 2 {
 			value = int64(int16(binary.BigEndian.Uint16(data)))
 		}
+
 	case 4:
 		if length >= 4 {
 			value = int64(int32(binary.BigEndian.Uint32(data)))
 		}
+
 	case 8:
 		if length >= 8 {
 			value = int64(binary.BigEndian.Uint64(data))
@@ -799,6 +805,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 								switch item[1] {
 								case ModeGauge, ModeCounter, ModeIncrement:
 									values = append(values, int64(math.MinInt64))
+
 								case ModeText, ModeBinary:
 									values = append(values, []byte{})
 								}
@@ -836,20 +843,24 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 									if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
 										values[index] = value
 									}
+
 								case AggregateMaximum:
 									if value > values[index].(int64) {
 										values[index] = value
 									}
+
 								case AggregateAverage, AggregateSum:
 									if values[index].(int64) == math.MinInt64 {
 										values[index] = value
 									} else {
 										values[index] = values[index].(int64) + value
 									}
+
 								case AggregateFirst:
 									if values[index].(int64) == math.MinInt64 {
 										values[index] = value
 									}
+
 								case AggregateLast, AggregateRaw:
 									values[index] = value
 								}
@@ -906,20 +917,24 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 										if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
 											values[index] = value
 										}
+
 									case AggregateMaximum:
 										if value > values[index].(int64) {
 											values[index] = value
 										}
+
 									case AggregateAverage, AggregateSum:
 										if values[index].(int64) == math.MinInt64 {
 											values[index] = value
 										} else {
 											values[index] = values[index].(int64) + value
 										}
+
 									case AggregateFirst:
 										if values[index].(int64) == math.MinInt64 {
 											values[index] = value
 										}
+
 									case AggregateLast:
 										values[index] = value
 									}
@@ -943,16 +958,20 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 												if length == 0 || len(entry.value) < length {
 													values[index] = entry.value
 												}
+
 											case AggregateMaximum:
 												if len(entry.value) > length {
 													values[index] = entry.value
 												}
+
 											case AggregateSum:
 												values[index] = append(values[index].([]byte), entry.value...)
+
 											case AggregateFirst:
 												if length == 0 {
 													values[index] = entry.value
 												}
+
 											case AggregateAverage, AggregateLast, AggregateRaw:
 												values[index] = entry.value
 											}

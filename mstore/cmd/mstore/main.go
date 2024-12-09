@@ -44,8 +44,10 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 		switch captures[1] {
 		case "now":
 			out = time.Now()
+
 		case "start":
 			out = start
+
 		case "end":
 			out = end
 		}
@@ -57,14 +59,19 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 			switch {
 			case len(captures[4]) >= 2 && captures[4][:2] == "mo":
 				out = out.AddDate(0, direction*amount, 0)
+
 			case captures[4][0] == 's':
 				out = out.Add(time.Duration(direction*amount) * time.Second)
+
 			case captures[4][0] == 'm':
 				out = out.Add(time.Duration(direction*amount) * time.Minute)
+
 			case captures[4][0] == 'h':
 				out = out.Add(time.Duration(direction*amount) * time.Hour)
+
 			case captures[4][0] == 'd':
 				out = out.AddDate(0, 0, direction*amount)
+
 			case captures[4][0] == 'w':
 				out = out.AddDate(0, 0, direction*amount*7)
 			}
@@ -121,6 +128,7 @@ func main() {
 				switch j.String(j.Map(columns[vindex])["mode"]) {
 				case "gauge", "counter", "increment":
 					line += strconv.FormatInt(int64(j.Number(value)), 10)
+
 				case "text", "binary":
 					line += `"` + j.String(value) + `"`
 				}

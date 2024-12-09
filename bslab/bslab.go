@@ -141,6 +141,7 @@ func Get(size int, extra ...[]byte) (out []byte) {
 		select {
 		case item := <-slab.queue:
 			out = item[:0]
+
 		default:
 			atomic.AddUint32(&(slab.alloc), 1)
 			out = make([]byte, 0, size)
@@ -183,6 +184,7 @@ func Put(in []byte) {
 			atomic.AddUint32(&(slab.put), 1)
 			select {
 			case slab.queue <- in:
+
 			default:
 				atomic.AddUint32(&(slab.lost), 1)
 			}

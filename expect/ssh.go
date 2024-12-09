@@ -124,6 +124,7 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		if options.Mode == XML && options.Filter == "" {
 			options.Filter = `^([^<]|$)`
 		}
+
 	case "netconf":
 		options.Mode = XML
 		if options.Marker == "" {
@@ -331,6 +332,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			if !strings.Contains(command, "display json") {
 				command += "|display json|no-more"
 			}
+
 		case XML:
 			if !strings.Contains(command, "display xml") {
 				command += "|display xml|no-more"
@@ -369,6 +371,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			}
 			result = parseXML(strings.Join(value, ""))
 		}
+
 	case <-time.After(timeout - time.Since(start)):
 		err = errors.New("ssh: execution timeout")
 		conn.Reset()

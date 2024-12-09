@@ -248,26 +248,31 @@ func main() {
 	switch os.Args[1] {
 	case "help":
 		usage(0)
+
 	case "build":
 		if len(os.Args) < 4 {
 			usage(1)
 		}
 		build()
+
 	case "lookup":
 		if len(os.Args) < 4 {
 			usage(1)
 		}
 		lookup()
+
 	case "bench":
 		if len(os.Args) < 4 {
 			usage(1)
 		}
 		bench()
+
 	case "server":
 		if len(os.Args) < 4 {
 			usage(1)
 		}
 		server()
+
 	default:
 		usage(2)
 	}

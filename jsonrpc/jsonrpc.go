@@ -448,10 +448,13 @@ func Number(in any, fallback ...float64) float64 {
 		switch reflect.TypeOf(in).Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			return float64(reflect.ValueOf(in).Int())
+
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			return float64(reflect.ValueOf(in).Uint())
+
 		case reflect.Float32, reflect.Float64:
 			return reflect.ValueOf(in).Float()
+
 		case reflect.String:
 			if value, err := strconv.ParseFloat(reflect.ValueOf(in).String(), 64); err == nil {
 				return value
@@ -677,20 +680,28 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 				switch captures[index][2] {
 				case "Y":
 					value += uvalue * 86400 * 365.256
+
 				case "MO":
 					value += uvalue * 86400 * 365.256 / 12
+
 				case "D":
 					value += uvalue * 86400
+
 				case "H":
 					value += uvalue * 3600
+
 				case "MN":
 					value += uvalue * 60
+
 				case "S":
 					value += uvalue
+
 				case "":
 					value += uvalue
+
 				case "MS":
 					value += uvalue / 1000
+
 				case "US":
 					value += uvalue / 1000000
 				}

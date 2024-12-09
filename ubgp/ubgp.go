@@ -390,8 +390,10 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 								case peer.group.messages <- msg:
 									select {
 									case messages <- msg:
+
 									default:
 									}
+
 								default:
 								}
 								return
@@ -1064,6 +1066,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 				switch strings.ToLower(value) {
 				case "egp":
 					origin = 1
+
 				case "incomplete":
 					origin = 2
 				}
@@ -1255,10 +1258,13 @@ func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 				switch in[offset+header] {
 				case 0:
 					out[attribute] = "igp"
+
 				case 1:
 					out[attribute] = "egp"
+
 				case 2:
 					out[attribute] = "incomplete"
+
 				default:
 					return out, 6
 				}
@@ -1382,10 +1388,13 @@ func (p *Peer) dispatch(event string, payload map[string]any) {
 			case p.group.messages <- msg:
 				select {
 				case messages <- msg:
+
 				default:
 				}
+
 			default:
 			}
+
 		default:
 		}
 	}

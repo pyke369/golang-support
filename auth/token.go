@@ -149,6 +149,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 									sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 									pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
 								}
+
 							case *ecdsa.PublicKey:
 								if header["alg"] == "ES256" && len(decoded) == 64 {
 									sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))

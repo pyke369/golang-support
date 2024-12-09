@@ -291,12 +291,16 @@ func (l *ULog) Load(target string) *ULog {
 					switch {
 					case option[2] == "datetime":
 						l.fileTime = TIME_DATETIME
+
 					case option[2] == "msdatetime":
 						l.fileTime = TIME_MSDATETIME
+
 					case option[2] == "stamp" || option[2] == "timestamp":
 						l.fileTime = TIME_TIMESTAMP
+
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
 						l.fileTime = TIME_MSTIMESTAMP
+
 					case !j.Boolean(option[2]):
 						l.fileTime = TIME_NONE
 					}
@@ -323,12 +327,16 @@ func (l *ULog) Load(target string) *ULog {
 					switch {
 					case option[2] == "datetime":
 						l.consoleTime = TIME_DATETIME
+
 					case option[2] == "msdatetime":
 						l.consoleTime = TIME_MSDATETIME
+
 					case option[2] == "stamp" || option[2] == "timestamp":
 						l.consoleTime = TIME_TIMESTAMP
+
 					case option[2] == "msstamp" || option[2] == "mstimestamp":
 						l.consoleTime = TIME_MSTIMESTAMP
+
 					case !j.Boolean(option[2]):
 						l.consoleTime = TIME_NONE
 					}
@@ -570,10 +578,13 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			switch severity {
 			case LOG_ERR:
 				l.syslogHandle.Err(string(content))
+
 			case LOG_WARNING:
 				l.syslogHandle.Warning(string(content))
+
 			case LOG_INFO:
 				l.syslogHandle.Info(string(content))
+
 			case LOG_DEBUG:
 				l.syslogHandle.Debug(string(content))
 			}
@@ -631,10 +642,13 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					switch l.fileTime {
 					case TIME_DATETIME:
 						prefix = append(prefix, now.Format(time.DateTime)...)
+
 					case TIME_MSDATETIME:
 						prefix = append(prefix, now.Format(time.DateTime+".000")...)
+
 					case TIME_TIMESTAMP:
 						prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+
 					case TIME_MSTIMESTAMP:
 						prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
 					}
@@ -671,10 +685,13 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			switch l.consoleTime {
 			case TIME_DATETIME:
 				prefix = append(prefix, now.Format(time.DateTime)...)
+
 			case TIME_MSDATETIME:
 				prefix = append(prefix, now.Format(time.DateTime+".000")...)
+
 			case TIME_TIMESTAMP:
 				prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+
 			case TIME_MSTIMESTAMP:
 				prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
 			}

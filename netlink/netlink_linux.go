@@ -151,6 +151,7 @@ func exec(request *request, trace ...bool) (err error) {
 			switch msg.Header.Type {
 			case syscall.NLMSG_DONE:
 				return err
+
 			case syscall.NLMSG_ERROR:
 				if msg.Header.Len >= 4 {
 					if errno := -int32(binary.LittleEndian.Uint32(msg.Data)); errno != 0 {
@@ -172,6 +173,7 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 				switch msg.Header.Type {
 				case syscall.NLMSG_DONE:
 					break outer1
+
 				case syscall.RTM_NEWLINK:
 					imsg, flags := (*syscall.IfInfomsg)(unsafe.Pointer(&msg.Data[0])), []string{}
 					for key, value := range map[int]string{
@@ -196,14 +198,19 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 					switch imsg.Type {
 					case syscall.ARPHRD_LOOPBACK:
 						itf["type"] = "loopback"
+
 					case syscall.ARPHRD_ETHER, syscall.ARPHRD_EETHER:
 						itf["type"] = "ethernet"
+
 					case syscall.ARPHRD_IEEE80211, syscall.ARPHRD_IEEE80211_PRISM, syscall.ARPHRD_IEEE80211_RADIOTAP:
 						itf["type"] = "wifi"
+
 					case syscall.ARPHRD_TUNNEL, syscall.ARPHRD_TUNNEL6:
 						itf["type"] = "tunnel"
+
 					case syscall.ARPHRD_NONE, syscall.ARPHRD_VOID:
 						itf["type"] = "none"
+
 					default:
 						itf["type"] = "other"
 					}
@@ -214,20 +221,27 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 								if hwaddr := ustr.Hex(attr.Value, ':'); hwaddr != "00:00:00:00:00:00" {
 									itf["hwaddr"] = hwaddr
 								}
+
 							case syscall.IFLA_IFNAME:
 								itf["name"] = string(attr.Value[:len(attr.Value)-1])
+
 							case syscall.IFLA_MTU:
 								itf["mtu"] = int(binary.LittleEndian.Uint32(attr.Value))
+
 							case syscall.IFLA_LINK:
 								itf["link"] = int(binary.LittleEndian.Uint16(attr.Value))
+
 							case syscall.IFLA_MASTER:
 								itf["master"] = int(binary.LittleEndian.Uint16(attr.Value))
+
 							case syscall.IFLA_TXQLEN:
 								itf["qlen"] = int(binary.LittleEndian.Uint32(attr.Value))
+
 							case syscall.IFLA_OPERSTATE:
 								if state := int(attr.Value[0]); state >= 1 && state <= 6 {
 									itf["state"] = []string{"", "NOTPRESENT", "DOWN", "LOWERLAYERDOWN", "TESTING", "DORMANT", "UP"}[state]
 								}
+
 							case 0x21: // IFLA_CARRIER
 								if attr.Value[0] == 0 {
 									flags = append(flags, "NO-CARRIER")
@@ -288,6 +302,7 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 				switch msg.Header.Type {
 				case syscall.NLMSG_DONE:
 					break outer2
+
 				case syscall.RTM_NEWADDR:
 					amsg := (*syscall.IfAddrmsg)(unsafe.Pointer(&msg.Data[0]))
 					for _, itf := range itfs {
@@ -299,6 +314,7 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 										case syscall.AF_INET:
 											address := net.IPv4(attr.Value[0], attr.Value[1], attr.Value[2], attr.Value[3])
 											itf["addrs"] = append(j.StringSlice(itf["addrs"]), address.String()+"/"+strconv.Itoa(int(amsg.Prefixlen)))
+
 										case syscall.AF_INET6:
 											address := make(net.IP, net.IPv6len)
 											copy(address, attr.Value)
@@ -632,6 +648,7 @@ func Routes(filter ...string) (routes []map[string]any) {
 				switch msg.Header.Type {
 				case syscall.NLMSG_DONE:
 					return
+
 				case syscall.RTM_NEWROUTE:
 					rmsg := (*syscall.RtMsg)(unsafe.Pointer(&msg.Data[0]))
 					fmt.Printf("family:%d Dst_len:%d Src_len:%d Table:%d\n", rmsg.Family, rmsg.Dst_len, rmsg.Src_len, rmsg.Table)

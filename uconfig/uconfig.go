@@ -100,18 +100,25 @@ func mode(char byte) int {
 	switch char {
 	case ' ':
 		return space
+
 	case '{':
 		return ostart
+
 	case '}':
 		return oend
+
 	case '[':
 		return astart
+
 	case ']':
 		return aend
+
 	case ':':
 		return kvsep
+
 	case ',':
 		return vsep
+
 	default:
 		return value
 	}

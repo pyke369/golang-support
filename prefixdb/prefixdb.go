@@ -206,22 +206,28 @@ func wnbits(bits, value0, value1 int, data []byte) {
 		switch bits {
 		case 8:
 			data[0], data[1] = byte(value0), byte(value1)
+
 		case 12:
 			data[0], data[1], data[2] = byte(value0>>4), byte(value0<<4)|(byte(value1>>8)&0x0f), byte(value1)
+
 		case 16:
 			binary.BigEndian.PutUint16(data[0:], uint16(value0))
 			binary.BigEndian.PutUint16(data[2:], uint16(value1))
+
 		case 20:
 			data[0], data[1] = byte(value0>>12), byte(value0>>4)
 			data[2] = byte(value0<<4) | (byte(value1>>16) & 0x0f)
 			data[3], data[4] = byte(value1>>8), byte(value1)
+
 		case 24:
 			data[0], data[1], data[2] = byte(value0>>16), byte(value0>>8), byte(value0)
 			data[3], data[4], data[5] = byte(value1>>16), byte(value1>>8), byte(value1)
+
 		case 28:
 			data[0], data[1], data[2] = byte(value0>>20), byte(value0>>12), byte(value0>>4)
 			data[3] = byte(value0<<4) | (byte(value1>>24) & 0x0f)
 			data[4], data[5], data[6] = byte(value1>>16), byte(value1>>8), byte(value1)
+
 		case 32:
 			binary.BigEndian.PutUint32(data[0:], uint32(value0))
 			binary.BigEndian.PutUint32(data[4:], uint32(value1))
@@ -317,8 +323,10 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		switch (item.value.(uint64) & 0xf0000000) >> 28 {
 		case 1:
 			pair |= 0x10000000 | uint64(d.strings[fstrings[item.value.(uint64)&0x0fffffff].value.(string)][2])
+
 		case 2:
 			pair |= 0x20000000 | uint64(d.numbers[fnumbers[item.value.(uint64)&0x0fffffff].value.(float64)][2])
+
 		default:
 			pair |= item.value.(uint64) & 0xf0000000
 		}
@@ -338,8 +346,10 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 				switch (pair & 0xf0000000) >> 28 {
 				case 1:
 					cluster.data = append(cluster.data, wpbits(0x10, d.strings[fstrings[pair&0x0fffffff].value.(string)][2])...)
+
 				case 2:
 					cluster.data = append(cluster.data, wpbits(0x20, d.numbers[fnumbers[pair&0x0fffffff].value.(float64)][2])...)
+
 				default:
 					cluster.data = append(cluster.data, byte((pair&0xf0000000)>>24))
 				}
@@ -415,8 +425,10 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 							switch (pnode.data[index] & 0xf0000000) >> 28 {
 							case 1:
 								data = append(data, wpbits(last|0x10, d.strings[fstrings[pnode.data[index]&0x0fffffff].value.(string)][2])...)
+
 							case 2:
 								data = append(data, wpbits(last|0x20, d.numbers[fnumbers[pnode.data[index]&0x0fffffff].value.(float64)][2])...)
+
 							default:
 								data = append(data, last|byte((pnode.data[index]&0xf0000000)>>24))
 							}
@@ -616,32 +628,38 @@ func rnbits(bits, index, down int, data []byte) int {
 		switch bits {
 		case 8:
 			return int(data[offset+down])
+
 		case 12:
 			if down == 0 {
 				return (int(data[offset]) << 4) | ((int(data[offset+1]) >> 4) & 0x0f)
 			} else {
 				return ((int(data[offset+1]) & 0x0f) << 8) | int(data[offset+2])
 			}
+
 		case 16:
 			return int(binary.BigEndian.Uint16(data[offset+(down*2):]))
+
 		case 20:
 			if down == 0 {
 				return (int(data[offset]) << 12) | (int(data[offset+1]) << 4) | ((int(data[offset+2]) >> 4) & 0x0f)
 			} else {
 				return ((int(data[offset+2]) & 0x0f) << 16) | (int(data[offset+3]) << 8) | int(data[offset+4])
 			}
+
 		case 24:
 			if down == 0 {
 				return (int(data[offset]) << 16) | (int(data[offset+1]) << 8) | int(data[offset+2])
 			} else {
 				return (int(data[offset+3]) << 16) | (int(data[offset+4]) << 8) | int(data[offset+5])
 			}
+
 		case 28:
 			if down == 0 {
 				return (int(data[offset]) << 20) | (int(data[offset+1]) << 12) | (int(data[offset+2]) << 4) | ((int(data[offset+3]) >> 4) & 0x0f)
 			} else {
 				return ((int(data[offset+3]) & 0x0f) << 24) | (int(data[offset+4]) << 16) | (int(data[offset+5]) << 8) | int(data[offset+6])
 			}
+
 		case 32:
 			return int(binary.BigEndian.Uint32(data[offset+(down*4):]))
 		}
@@ -680,10 +698,13 @@ func (d *PrefixDB) rpair(index int, pairs map[string]any) {
 			switch (pair & 0xf0000000) >> 28 {
 			case 1:
 				pairs[key] = d.rstring(int(pair & 0x0fffffff))
+
 			case 2:
 				pairs[key] = d.rnumber(int(pair & 0x0fffffff))
+
 			case 3:
 				pairs[key] = true
+
 			case 4:
 				pairs[key] = false
 			}
@@ -712,11 +733,13 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 				} else {
 					key = d.rstring(index)
 				}
+
 			case 2:
 				if key != "" {
 					pairs[key] = d.rnumber(index)
 					key = ""
 				}
+
 			case 3:
 				if key != "" {
 					pairs[key] = true
@@ -727,11 +750,13 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 					pairs[key] = false
 					key = ""
 				}
+
 			case 5:
 				if key != "" {
 					pairs[key] = nil
 					key = ""
 				}
+
 			case 6:
 				d.rpair(index, pairs)
 			}
@@ -774,28 +799,34 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 						} else {
 							key = d.rstring(index)
 						}
+
 					case 2:
 						if key != "" {
 							out[key] = d.rnumber(index)
 							key = ""
 						}
+
 					case 3:
 						if key != "" {
 							out[key] = true
 							key = ""
 						}
+
 					case 4:
 						if key != "" {
 							out[key] = false
 							key = ""
 						}
+
 					case 5:
 						if key != "" {
 							out[key] = nil
 							key = ""
 						}
+
 					case 6:
 						d.rpair(index, out)
+
 					case 7:
 						d.rcluster(index, out)
 					}

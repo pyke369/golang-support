@@ -498,11 +498,11 @@ close:
 		if read > 0 {
 			seen = atomic.LoadInt64(&gnow)
 			woffset += read
-		needmore:
+		readmore:
 			for {
 				if size < 0 {
 					if woffset-roffset < 2 {
-						break needmore
+						break
 					}
 
 					fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
@@ -528,7 +528,7 @@ close:
 					case size == 126:
 						if woffset-roffset < 4+smask {
 							size = -1
-							break needmore
+							break readmore
 						}
 						size = int(binary.BigEndian.Uint16(buffer[roffset+2:]))
 						if !s.client {
@@ -539,7 +539,7 @@ close:
 					case size == 127:
 						if woffset-roffset < 10+smask {
 							size = -1
-							break needmore
+							break readmore
 						}
 						size = int(binary.BigEndian.Uint64(buffer[roffset+2:]))
 						if !s.client {
