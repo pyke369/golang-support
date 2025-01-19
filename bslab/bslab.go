@@ -10,39 +10,47 @@ import (
 )
 
 type slab struct {
+	max   uint32
 	queue chan []byte
 	get   uint32
 	put   uint32
 	alloc uint32
 	lost  uint32
 }
+
 type Arena struct {
 	name  string
 	slabs map[int]*slab
 }
+
 type Info struct {
 	Name   string
-	Values map[int][5]uint32
+	Values map[int][6]uint32
 }
 
 var base Arena
 
 func init() {
-	base = New("base")
+	base = New(map[string]any{"name": "base"})
 }
 
-func New(extra ...string) Arena {
-	name := ""
-	if len(extra) != 0 {
-		name = extra[0]
-	}
-	a := Arena{
-		name:  name,
-		slabs: map[int]*slab{},
-	}
+func New(extra ...map[string]any) Arena {
+	a := Arena{slabs: map[int]*slab{}}
 	a.slabs[0] = &slab{}
 	for size := uint(8); size <= 26; size++ {
 		a.slabs[1<<size] = &slab{queue: make(chan []byte, 64<<10)}
+	}
+	if len(extra) > 0 {
+		if value, ok := extra[0]["name"].(string); ok {
+			a.name = value
+		}
+		if value1, ok := extra[0]["max"].(map[int]int); ok {
+			for size := range a.slabs {
+				if value2, ok := value1[size]; ok && value2 > 0 {
+					a.slabs[size].max = uint32(value2)
+				}
+			}
+		}
 	}
 	return a
 }
@@ -76,13 +84,18 @@ func (a Arena) Get(size int, extra ...[]byte) (out []byte) {
 	size = 1 << (bits - power)
 	if slab, exists := a.slabs[size]; exists {
 		atomic.AddUint32(&(slab.get), 1)
-		select {
-		case item := <-slab.queue:
-			out = item[:0]
+		if slab.max == 0 || atomic.LoadUint32(&(slab.alloc)) < slab.max {
+			select {
+			case item := <-slab.queue:
+				out = item[:0]
 
-		default:
-			atomic.AddUint32(&(slab.alloc), 1)
-			out = make([]byte, 0, size)
+			default:
+				atomic.AddUint32(&(slab.alloc), 1)
+				out = make([]byte, 0, size)
+			}
+		} else {
+			item := <-slab.queue
+			out = item[:0]
 		}
 	}
 	if out == nil {
@@ -152,10 +165,11 @@ func hsize(in uint32) string {
 func (a Arena) Stat() Info {
 	info := Info{
 		Name:   a.name,
-		Values: map[int][5]uint32{},
+		Values: map[int][6]uint32{},
 	}
 	for size, slab := range a.slabs {
-		info.Values[size] = [5]uint32{
+		info.Values[size] = [6]uint32{
+			slab.max,
 			atomic.LoadUint32(&(slab.alloc)),
 			uint32(len(slab.queue)),
 			atomic.LoadUint32(&(slab.lost)),
@@ -176,34 +190,36 @@ func (i Info) String() string {
 	sort.Ints(sizes)
 
 	out, alloc, lost := make([]byte, 0, (len(sizes)+6)*80), uint32(0), uint32(0)
-	out = append(out, "---------------------------------------------------------------------\n"...)
-	out = append(out, "    size    alloc   active    avail       lost        get        put\n"...)
-	out = append(out, "---------------------------------------------------------------------\n"...)
+	out = append(out, "------------------------------------------------------------------------------\n"...)
+	out = append(out, "    size      max    alloc   active    avail       lost        get        put\n"...)
+	out = append(out, "------------------------------------------------------------------------------\n"...)
 	for _, size := range sizes {
-		if i.Values[size][0] == 0 {
+		if i.Values[size][1] == 0 {
 			continue
 		}
-		alloc += i.Values[size][0] * uint32(size)
-		lost += i.Values[size][2]
+		alloc += i.Values[size][1] * uint32(size)
+		lost += i.Values[size][3]
 		out = append(out, ustr.String(hsize(uint32(size)), 8)...)
 		out = append(out, ' ')
 		out = append(out, ustr.String(hcount(i.Values[size][0]), 8)...)
 		out = append(out, ' ')
-		out = append(out, ustr.String(hcount(i.Values[size][0]-i.Values[size][1]), 8)...)
-		out = append(out, ' ')
 		out = append(out, ustr.String(hcount(i.Values[size][1]), 8)...)
 		out = append(out, ' ')
-		out = append(out, ustr.String(hsize(i.Values[size][2]), 10)...)
+		out = append(out, ustr.String(hcount(i.Values[size][1]-i.Values[size][2]), 8)...)
 		out = append(out, ' ')
-		out = append(out, ustr.String(hcount(i.Values[size][3]), 10)...)
+		out = append(out, ustr.String(hcount(i.Values[size][2]), 8)...)
+		out = append(out, ' ')
+		out = append(out, ustr.String(hsize(i.Values[size][3]), 10)...)
 		out = append(out, ' ')
 		out = append(out, ustr.String(hcount(i.Values[size][4]), 10)...)
+		out = append(out, ' ')
+		out = append(out, ustr.String(hcount(i.Values[size][5]), 10)...)
 		out = append(out, '\n')
 	}
-	out = append(out, "---------------------------------------------------------------------\n"...)
-	out = append(out, ustr.String(hsize(alloc), 17)...)
+	out = append(out, "------------------------------------------------------------------------------\n"...)
+	out = append(out, ustr.String(hsize(alloc), 26)...)
 	out = append(out, ustr.String(hsize(lost), 29)...)
 	out = append(out, '\n')
-	out = append(out, "---------------------------------------------------------------------\n"...)
+	out = append(out, "------------------------------------------------------------------------------\n"...)
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
