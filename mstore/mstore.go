@@ -499,8 +499,9 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 		return nil, err
 	}
 	columns, names, first, last := []map[string]any{}, []string{}, int64(-1), int64(-1)
-	for _, column := range m.columns {
+	for index, column := range m.columns {
 		columns = append(columns, map[string]any{
+			"index":       index,
 			"mode":        ModeNames[column.Mode],
 			"size":        column.Size,
 			"description": column.Description,
