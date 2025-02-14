@@ -19,6 +19,8 @@ func usage(status int) {
 		"  show this help screen\n\n" +
 		"metadata <store> <metric>\n" +
 		"  display metric metadata\n\n" +
+		"values <store> <metric>\n" +
+		"  display values in CSV format\n\n" +
 		"export <store> <metric>\n" +
 		"  export metric metadata and values\n\n" +
 		"import <store> <metric> <data>\n" +
@@ -101,6 +103,63 @@ func main() {
 		bail(err, 5)
 		os.Stdout.Write(out)
 		os.Stdout.WriteString("\n")
+
+	case "values":
+		if len(os.Args) < 4 {
+			usage(1)
+		}
+		metrics, err := mstore.NewStore(os.Args[2], true)
+		bail(err, 3)
+		export, err := metrics.Metric(os.Args[3]).Export()
+		bail(err, 4)
+		columns, data, names := j.Slice(j.Map(export["metadata"])["columns"]), j.Slice(export["values"]), []string{"date"}
+		for index, column := range columns {
+			column := j.Map(column)
+			if description := j.String(column["description"]); description != "" && !strings.HasSuffix(description, "...") {
+				hide := true
+			done:
+				for _, line := range data {
+					value := j.Slice(line)[index+1]
+					switch j.String(column["mode"]) {
+					case "gauge", "counter", "increment":
+						if j.Number(value) != 0 {
+							hide = false
+							break done
+						}
+					case "text", "binary":
+						if j.String(value) != "" {
+							hide = false
+							break done
+						}
+					}
+				}
+				if hide {
+					columns[index].(map[string]any)["description"] = ""
+				} else {
+					names = append(names, description)
+				}
+			}
+		}
+		os.Stdout.WriteString(strings.Join(names, ",") + "\n")
+		for _, line := range j.Slice(export["values"]) {
+			values := []string{}
+			for index, value := range j.Slice(line) {
+				if index == 0 {
+					values = append(values, time.Unix(int64(j.Number(value)), 0).UTC().Format(time.DateTime))
+				} else if index <= len(columns) {
+					column := j.Map(columns[index-1])
+					if description := j.String(column["description"]); description != "" {
+						switch j.String(column["mode"]) {
+						case "gauge", "counter", "increment":
+							values = append(values, strconv.FormatInt(int64(j.Number(value)), 10))
+						case "text", "binary":
+							values = append(values, `"`+j.String(value)+`"`)
+						}
+					}
+				}
+			}
+			os.Stdout.WriteString(strings.Join(values, ",") + "\n")
+		}
 
 	case "export":
 		if len(os.Args) < 4 {
