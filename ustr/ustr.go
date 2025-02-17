@@ -2,6 +2,7 @@ package ustr
 
 import (
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -124,6 +125,35 @@ func Hex(in []byte, extra ...byte) string {
 		}
 	}
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func Range(in string) (out []int) {
+	list := map[int]struct{}{}
+	for _, part := range strings.Split(in, ",") {
+		bounds, start, end := strings.Split(strings.TrimSpace(part), "-"), -1, -1
+		if value, err := strconv.Atoi(strings.TrimSpace(bounds[0])); err == nil && value >= 0 {
+			start = value
+		}
+		if start >= 0 && len(bounds) > 1 {
+			if value, err := strconv.Atoi(strings.TrimSpace(bounds[1])); err == nil && value >= 0 && value >= start {
+				end = value
+			}
+		}
+		if start >= 0 {
+			if end < 0 {
+				list[start] = struct{}{}
+			} else {
+				for index := start; index <= end; index++ {
+					list[index] = struct{}{}
+				}
+			}
+		}
+	}
+	for value := range list {
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	return
 }
 
 func Duration(duration time.Duration) string {
