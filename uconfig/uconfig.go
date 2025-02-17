@@ -1042,6 +1042,10 @@ func (c *UConfig) Strings(path string) (out []string) {
 		for _, path := range c.Paths(path) {
 			if value := strings.TrimSpace(c.String(path)); value != "" {
 				out = append(out, value)
+			} else {
+				if value := strings.Join(c.Strings(path), " "); value != "" {
+					out = append(out, value)
+				}
 			}
 		}
 	}
