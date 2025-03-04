@@ -12,37 +12,49 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
-type certificate struct {
-	predicate   string
-	public      string
-	private     string
-	certificate *tls.Certificate
-	modified    time.Time
+type cert struct {
+	match    string
+	public   string
+	private  string
+	cert     *tls.Certificate
+	modified time.Time
 }
 
 type DYNACERT struct {
-	certificates []*certificate
-	last         time.Time
-	mu           sync.RWMutex
+	certs []*cert
+	last  time.Time
+	mu    sync.RWMutex
 }
 
-func (d *DYNACERT) Add(predicate, public, private string) {
+func (d *DYNACERT) Add(match, public, private string) {
 	d.mu.Lock()
-	d.certificates = append(d.certificates, &certificate{predicate: strings.TrimSpace(predicate), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
+	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	d.last = time.Now().Add(-time.Minute)
 	d.mu.Unlock()
 }
 
 func (d *DYNACERT) Clear() {
 	d.mu.Lock()
-	d.certificates = nil
+	d.certs = nil
 	d.mu.Unlock()
 }
 
 func (d *DYNACERT) Count() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return len(d.certificates)
+	return len(d.certs)
+}
+
+func (d *DYNACERT) Get(match string) (public, private string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, cert := range d.certs {
+		if cert.match == match {
+			public, private = cert.public, cert.private
+			break
+		}
+	}
+	return
 }
 
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
@@ -52,11 +64,11 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 			var info os.FileInfo
 
 			d.last = time.Now()
-			for _, certificate := range d.certificates {
-				if info, err = os.Stat(certificate.public); err == nil {
-					if info.ModTime().Sub(certificate.modified) != 0 {
-						if value, err := tls.LoadX509KeyPair(certificate.public, certificate.private); err == nil {
-							certificate.certificate, certificate.modified = &value, info.ModTime()
+			for _, cert := range d.certs {
+				if info, err = os.Stat(cert.public); err == nil {
+					if info.ModTime().Sub(cert.modified) != 0 {
+						if value, err := tls.LoadX509KeyPair(cert.public, cert.private); err == nil {
+							cert.cert, cert.modified = &value, info.ModTime()
 						}
 					}
 				}
@@ -66,7 +78,7 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if len(d.certificates) == 0 {
+	if len(d.certs) == 0 {
 		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
 	if hello != nil && hello.ServerName != "" {
@@ -74,17 +86,17 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 		if value, _, err := net.SplitHostPort(name); err == nil {
 			name = value
 		}
-		for _, certificate := range d.certificates {
-			if certificate.predicate != "" && certificate.predicate != "*" && certificate.certificate != nil {
-				if matcher := rcache.Get(certificate.predicate); matcher != nil && matcher.MatchString(name) {
-					return certificate.certificate, nil
+		for _, cert := range d.certs {
+			if cert.match != "" && cert.match != "*" && cert.cert != nil {
+				if matcher := rcache.Get(cert.match); matcher != nil && matcher.MatchString(name) {
+					return cert.cert, nil
 				}
 			}
 		}
 	}
-	for _, certificate := range d.certificates {
-		if (certificate.predicate == "" || certificate.predicate == "*") && certificate.certificate != nil {
-			return certificate.certificate, nil
+	for _, cert := range d.certs {
+		if (cert.match == "" || cert.match == "*") && cert.cert != nil {
+			return cert.cert, nil
 		}
 	}
 	return nil, errors.New(`dynacert: no matching certificate`)
