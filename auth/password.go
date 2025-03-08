@@ -127,7 +127,7 @@ func crypt512(key, salt string, rounds int) (out string) {
 	return out + string(C[:86])
 }
 
-func Password(in string, values []string, fallback bool) (match bool, index int) {
+func Password(in string, values []string, fallback bool) (match bool, entry string) {
 	if len(values) > 0 {
 		login, password := "", strings.TrimSpace(in)
 		if parts := strings.Split(in, ":"); len(parts) >= 2 {
@@ -136,17 +136,23 @@ func Password(in string, values []string, fallback bool) (match bool, index int)
 		for _, value := range values {
 			check := strings.TrimSpace(value)
 			if len(check) > 1 && check[0] == '@' {
-				if match, _ := PasswordFile(in, strings.TrimSpace(check[1:]), fallback); match {
-					return true, index
+				if match, value := PasswordFile(in, strings.TrimSpace(check[1:]), fallback); match {
+					return true, value
 				}
+
 			} else {
 				if login != "" {
-					if parts := strings.Split(value, ":"); len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
+					if parts := strings.Split(check, ":"); len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
 						continue
+
 					} else {
 						check = strings.TrimSpace(parts[1])
 					}
 				}
+				if len(check) != 0 && (check[0] == '!' || check[0] == '*') {
+					continue
+				}
+
 				if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[1] == "6" && parts[2] != "" && parts[3] != "" {
 					rounds, salt := 5000, parts[2]
 					if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
@@ -154,22 +160,26 @@ func Password(in string, values []string, fallback bool) (match bool, index int)
 						salt = parts[3]
 					}
 					if crypt512(password, salt, rounds) == check {
-						return true, index
+						return true, value
 					}
+
+					// TODO add yescrypt support
+
 				} else if password == check {
-					return true, index
+					return true, value
 				}
 			}
-			index++
 		}
-		return false, -1
+		return false, ""
 	}
-	return fallback, -1
+	return fallback, ""
 }
-func PasswordConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
+
+func PasswordConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, entry string) {
 	return Password(in, config.Strings(path), fallback)
 }
-func PasswordFile(in, path string, fallback bool) (match bool, index int) {
+
+func PasswordFile(in, path string, fallback bool) (match bool, entry string) {
 	lines := []string{}
 	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
