@@ -832,9 +832,11 @@ func (c *UConfig) Path(in ...string) string {
 	}
 	out := make([]byte, 0, size+(len(in)*len(c.separator)))
 	for index, value := range in {
-		out = append(out, value...)
-		if index < length-1 {
-			out = append(out, c.separator...)
+		if value != "" {
+			out = append(out, value...)
+			if index < length-1 {
+				out = append(out, c.separator...)
+			}
 		}
 	}
 	return unsafe.String(unsafe.SliceData(out), len(out))
