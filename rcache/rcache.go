@@ -2,15 +2,18 @@ package rcache
 
 import (
 	"regexp"
+	"strings"
 	"sync"
 )
 
 var (
-	mu    sync.RWMutex
-	cache map[string]*regexp.Regexp = map[string]*regexp.Regexp{}
+	nomatch = regexp.MustCompile(`^\x00{256}$`)
+	mu      sync.RWMutex
+	cache   map[string]*regexp.Regexp = map[string]*regexp.Regexp{}
 )
 
 func Get(expression string) *regexp.Regexp {
+	expression = strings.TrimSpace(expression)
 	mu.RLock()
 	if cache[expression] != nil {
 		defer mu.RUnlock()
@@ -23,5 +26,5 @@ func Get(expression string) *regexp.Regexp {
 		cache[expression] = regex
 		return cache[expression]
 	}
-	return nil
+	return nomatch
 }
