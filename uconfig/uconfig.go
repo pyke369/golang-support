@@ -429,9 +429,10 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							paths, err := filepath.Glob(arg)
 							if err == nil {
 								for _, path := range paths {
-									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() >= 2 {
-										sizes[path] = int(info.Size())
-										size += int(info.Size()) + 5*(int(info.Size())/2)
+									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+										lsize := max(256, int(info.Size()))
+										sizes[path] = lsize
+										size += lsize + 5*(lsize/2)
 									}
 								}
 							}
@@ -444,7 +445,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 								}
 								lines := bslab.Get(sizes[path])
 								lines = lines[:sizes[path]]
-								if read, err := handle.Read(lines); err == nil && read == sizes[path] {
+								if _, err := handle.Read(lines); err == nil {
 									start := 0
 									for index, char := range lines {
 										if char == '\n' {
@@ -468,6 +469,11 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 												if start <= end && lines[start] != '#' {
 													insert = append(insert, '"')
 													offset := len(insert)
+													for index := start; index < end+1; index++ {
+														if lines[index] == '\t' {
+															lines[index] = ' '
+														}
+													}
 													insert = append(insert, lines[start:end+1]...)
 													insert = escape(insert, offset)
 													insert = append(insert, '"', ',', ' ')
