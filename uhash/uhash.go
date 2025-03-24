@@ -1,5 +1,20 @@
 package uhash
 
+import (
+	"crypto/rand"
+	"encoding/binary"
+)
+
+func Rand(in int) (out int) {
+	if in > 0 {
+		value := make([]byte, 8)
+		rand.Read(value)
+		value[0] &= 0x7f
+		out = int(binary.BigEndian.Uint64(value)) % in
+	}
+	return
+}
+
 func CRC16(inputs ...[]byte) uint16 {
 	csum, size := uint64(0), 0
 	if length := len(inputs); length > 0 {
