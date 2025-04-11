@@ -149,7 +149,7 @@ func Password(in string, values []string, fallback bool) (match bool, entry stri
 						check = strings.TrimSpace(parts[1])
 					}
 				}
-				if len(check) != 0 && (check[0] == '!' || check[0] == '*') {
+				if check != "" && (check[0] == '!' || check[0] == '*') {
 					continue
 				}
 

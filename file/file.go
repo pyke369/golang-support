@@ -80,6 +80,11 @@ func Exists(path string) bool {
 	return err == nil
 }
 
+func IsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 func Link(path string) (base string) {
 	if value, err := os.Readlink(path); err == nil {
 		base = filepath.Base(value)
