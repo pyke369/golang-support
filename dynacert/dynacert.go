@@ -13,6 +13,7 @@ import (
 )
 
 type cert struct {
+	inline   bool
 	match    string
 	public   string
 	private  string
@@ -28,15 +29,23 @@ type DYNACERT struct {
 
 func (d *DYNACERT) Add(match, public, private string) {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	d.last = time.Now().Add(-time.Minute)
-	d.mu.Unlock()
+}
+
+func (d *DYNACERT) Inline(match string, public, private []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if value, err := tls.X509KeyPair(public, private); err == nil {
+		d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), inline: true, cert: &value})
+	}
 }
 
 func (d *DYNACERT) Clear() {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.certs = nil
-	d.mu.Unlock()
 }
 
 func (d *DYNACERT) Count() int {
@@ -65,6 +74,9 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 
 			d.last = time.Now()
 			for _, cert := range d.certs {
+				if cert.inline {
+					continue
+				}
 				if info, err = os.Stat(cert.public); err == nil {
 					if info.ModTime().Sub(cert.modified) != 0 {
 						if value, err := tls.LoadX509KeyPair(cert.public, cert.private); err == nil {
@@ -76,11 +88,13 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 		}
 		d.mu.Unlock()
 	}
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if len(d.certs) == 0 {
 		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
+
 	if hello != nil && hello.ServerName != "" {
 		name := hello.ServerName
 		if value, _, err := net.SplitHostPort(name); err == nil {
@@ -94,11 +108,13 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 			}
 		}
 	}
+
 	for _, cert := range d.certs {
 		if (cert.match == "" || cert.match == "*") && cert.cert != nil {
 			return cert.cert, nil
 		}
 	}
+
 	return nil, errors.New(`dynacert: no matching certificate`)
 }
 
