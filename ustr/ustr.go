@@ -9,7 +9,16 @@ import (
 	"unsafe"
 )
 
-var hex = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+var (
+	bools = [][2]string{
+		[2]string{"false", "true"},
+		[2]string{"no", "yes"},
+		[2]string{"off", "on"},
+		[2]string{"failure", "success"},
+		[2]string{"0", "1"},
+	}
+	hex = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+)
 
 func Wrap(err error, msg string) error {
 	if err == nil {
@@ -18,11 +27,15 @@ func Wrap(err error, msg string) error {
 	return errors.New(msg + ": " + err.Error())
 }
 
-func Bool(in bool) (out string) {
-	if in {
-		return "true"
+func Bool(in bool, extra ...int) (out string) {
+	mode := 0
+	if len(extra) != 0 {
+		mode = min(len(bools)-1, max(0, extra[0]))
 	}
-	return "false"
+	if in {
+		return bools[mode][1]
+	}
+	return bools[mode][0]
 }
 
 func Int(in int, extra ...int) string {
