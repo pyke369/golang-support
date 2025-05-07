@@ -1021,15 +1021,10 @@ func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
 		return []string{fallback}
 	}
 	if match != "" {
-		if matcher := rcache.Get(match); matcher != nil {
-			if matches := matcher.FindStringSubmatch(value); matches != nil {
-				return matches
-			} else {
-				return []string{fallback}
-			}
-		} else {
-			return []string{fallback}
+		if captures := rcache.Get(match).FindStringSubmatch(value); captures != nil {
+			return captures
 		}
+		return []string{fallback}
 	}
 	return []string{value}
 }

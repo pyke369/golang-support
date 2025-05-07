@@ -279,7 +279,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 							if filter = strings.TrimSpace(filter); filter != "" {
 								switch filter[0] {
 								case '~':
-									if matcher := rcache.Get(strings.TrimSpace(filter[1:])); matcher != nil && matcher.MatchString(request.Method) {
+									if rcache.Get(strings.TrimSpace(filter[1:])).MatchString(request.Method) {
 										authorized = true
 										break done
 									}

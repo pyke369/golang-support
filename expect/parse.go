@@ -260,33 +260,31 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 			} else {
 				if next, ok := current.(map[string]any); ok {
 					if part[0] == '~' {
-						if matcher := rcache.Get(strings.TrimSpace(part[1:])); matcher != nil {
-							indexes := []string{}
-							for index := range next {
-								if matcher.MatchString(index) {
-									indexes = append(indexes, index)
-								}
+						matcher, indexes := rcache.Get(strings.TrimSpace(part[1:])), []string{}
+						for index := range next {
+							if matcher.MatchString(index) {
+								indexes = append(indexes, index)
 							}
-							if len(indexes) > 1 {
-								out[key] = []any{}
-							}
-							for _, index := range indexes {
-								if depth == last {
-									if len(indexes) > 1 {
-										out[key] = append(out[key].([]any), next[index])
-									} else {
-										out[key] = next[index]
-									}
+						}
+						if len(indexes) > 1 {
+							out[key] = []any{}
+						}
+						for _, index := range indexes {
+							if depth == last {
+								if len(indexes) > 1 {
+									out[key] = append(out[key].([]any), next[index])
 								} else {
-									if len(indexes) > 1 {
-										out[key] = append(out[key].([]any), Mapper(
-											matcher, next[index],
-											map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
-									} else {
-										out[key] = Mapper(
-											matcher, next[index],
-											map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"]
-									}
+									out[key] = next[index]
+								}
+							} else {
+								if len(indexes) > 1 {
+									out[key] = append(out[key].([]any), Mapper(
+										matcher, next[index],
+										map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
+								} else {
+									out[key] = Mapper(
+										matcher, next[index],
+										map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"]
 								}
 							}
 						}

@@ -40,6 +40,7 @@ var (
 )
 
 // 🔔 SHAME! 🔔 (stolen from https://github.com/madler/zlib/blob/master/crc32.c)
+
 func init() {
 	p := uint32(1 << 30)
 	x2ntable[0] = p

@@ -101,10 +101,8 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 			name = value
 		}
 		for _, cert := range d.certs {
-			if cert.match != "" && cert.match != "*" && cert.cert != nil {
-				if matcher := rcache.Get(cert.match); matcher != nil && matcher.MatchString(name) {
-					return cert.cert, nil
-				}
+			if cert.match != "" && cert.match != "*" && cert.cert != nil && rcache.Get(cert.match).MatchString(name) {
+				return cert.cert, nil
 			}
 		}
 	}

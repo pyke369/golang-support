@@ -282,7 +282,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 							copy(data, line)
 						}
 						sline := strings.TrimSpace(line)
-						if mmatcher != nil && mmatcher.MatchString(sline) {
+						if mmatcher.MatchString(sline) {
 							conn.mu.Lock()
 							if conn.result == nil {
 								conn.result = make(chan []string)
@@ -295,7 +295,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 							continue
 						}
 						if complete {
-							if fmatcher != nil && fmatcher.MatchString(sline) {
+							if fmatcher.MatchString(sline) {
 								continue
 							}
 							lines = append(lines, line)

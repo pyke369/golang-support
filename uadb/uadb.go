@@ -141,14 +141,14 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 	} else {
 		for index := 0; index < len(db.Agents); index++ {
 			matcher := rcache.Get(db.Agents[index][0])
-			if matcher == nil || !matcher.MatchString(ua) {
+			if !matcher.MatchString(ua) {
 				continue
 			}
 			if db.Agents[index][1] != "" {
 				out["ua_family"], out["ua_name"] = db.Agents[index][1], db.Agents[index][1]
-				if matches := matcher.FindStringSubmatch(ua); len(matches) > 1 {
-					out["ua_version"] = matches[1]
-					out["ua_name"] += " " + matches[1]
+				if captures := matcher.FindStringSubmatch(ua); len(captures) > 1 {
+					out["ua_version"] = captures[1]
+					out["ua_name"] += " " + captures[1]
 				}
 			}
 			if db.Agents[index][2] != "" {
@@ -175,7 +175,7 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 		if out["ua_family"] != "unknown" {
 			if out["device_type"] == "unknown" {
 				for _, device := range db.Devices {
-					if matcher := rcache.Get(device[0]); matcher != nil && matcher.MatchString(ua) {
+					if rcache.Get(device[0]).MatchString(ua) {
 						if device[1] != "" {
 							out["device_type"] = device[1]
 						}
@@ -199,7 +199,7 @@ func (db *UADB) Lookup(ua string, out map[string]string, withcode ...bool) {
 
 			if out["os_family"] == "unknown" {
 				for _, system := range db.Systems {
-					if matcher := rcache.Get(system[0]); matcher != nil && matcher.MatchString(ua) {
+					if rcache.Get(system[0]).MatchString(ua) {
 						if system[1] != "" {
 							out["os_family"] = system[1]
 						}

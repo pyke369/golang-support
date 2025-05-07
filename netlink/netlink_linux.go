@@ -337,11 +337,10 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 		} else {
 			expression = "^" + expression + "$"
 		}
-		if matcher := rcache.Get(expression); matcher != nil {
-			for _, itf := range itfs {
-				if matcher.MatchString(j.String(itf["name"])) {
-					itfs2 = append(itfs2, itf)
-				}
+		matcher := rcache.Get(expression)
+		for _, itf := range itfs {
+			if matcher.MatchString(j.String(itf["name"])) {
+				itfs2 = append(itfs2, itf)
 			}
 		}
 		itfs = itfs2
