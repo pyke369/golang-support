@@ -445,7 +445,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 								}
 								lines := bslab.Get(sizes[path])
 								lines = lines[:sizes[path]]
-								if _, err := handle.Read(lines); err == nil {
+								if read, err := handle.Read(lines); err == nil {
+									lines = lines[:read]
 									start := 0
 									for index, char := range lines {
 										if char == '\n' {
