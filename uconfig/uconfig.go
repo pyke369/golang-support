@@ -281,6 +281,9 @@ func (c *UConfig) SetSeparator(separator string) {
 func (c *UConfig) SetPrefix(prefix string) {
 	c.prefix = prefix
 }
+func (c *UConfig) GetPrefix() string {
+	return c.prefix
+}
 
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
