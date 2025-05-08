@@ -75,9 +75,11 @@ func Write(path string, lines []string, extra ...string) {
 	}
 }
 
-func Exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+func Exists(path string) string {
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
 }
 
 func IsDir(path string) bool {
