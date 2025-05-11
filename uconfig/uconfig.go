@@ -57,7 +57,7 @@ var (
 func init() {
 done:
 	for aindex, arg := range os.Args {
-		if aindex == 0 || arg == "-" || arg[0] != '-' {
+		if aindex == 0 || arg == "-" || (arg != "" && arg[0] != '-') {
 			continue
 		}
 		if arg == "--" {
@@ -80,7 +80,7 @@ done:
 			sparts := strings.Split(parts[index], "=")
 			name := strings.ToLower(sparts[0])
 			if len(sparts) == 1 {
-				if !negate && aindex < len(os.Args)-1 && os.Args[aindex+1][0] != '-' {
+				if !negate && aindex < len(os.Args)-1 && (os.Args[aindex+1] == "" || os.Args[aindex+1][0] != '-') {
 					options[name] = os.Args[aindex+1]
 				} else {
 					if negate {
@@ -1133,8 +1133,8 @@ func Args() (args []string) {
 	for index := 1; index < len(os.Args); index++ {
 		option := os.Args[index]
 		if args == nil {
-			if option[0] == '-' {
-				if option != "-" && option != "--" && !strings.Contains(option, "=") && index < len(os.Args)-1 && os.Args[index+1][0] != '-' {
+			if option != "" && option[0] == '-' {
+				if option != "-" && option != "--" && !strings.Contains(option, "=") && index < len(os.Args)-1 && (os.Args[index+1] == "" || os.Args[index+1][0] != '-') {
 					index++
 				}
 			} else {
