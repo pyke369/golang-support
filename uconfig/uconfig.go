@@ -30,6 +30,7 @@ type UConfig struct {
 	separator string
 	hash      uint32
 	prefix    string
+	name      string
 	top       string
 	config    any
 	mu        sync.RWMutex
@@ -287,18 +288,18 @@ func (c *UConfig) GetPrefix() string {
 
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
-	payload, top := bslab.Get(max(c.size, 3+len(base)+3+len(in))), ""
+	payload, name, top := bslab.Get(max(c.size, 3+len(base)+3+len(in))), "", ""
 	payload = append(payload, '<', '<', '%')
 	payload = append(payload, base...)
 	payload = append(payload, '>', '>', ' ')
 	if len(inline) > 0 && inline[0] {
 		payload = append(payload, in...)
 	} else {
-		if filepath.IsAbs(in) {
-			top = filepath.Dir(in)
-		} else {
-			top = filepath.Dir(filepath.Join(base, in))
+
+		if !filepath.IsAbs(in) {
+			in = filepath.Join(base, in)
 		}
+		name, top = in, filepath.Dir(in)
 		payload = append(payload, '<', '<', '~')
 		payload = append(payload, in...)
 		payload = append(payload, '>', '>')
@@ -801,7 +802,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		}
 		return errors.New("uconfig: " + err.Error())
 	}
-	c.config, c.top, c.hash, c.cache = config, top, hasher.Sum32(), map[string]any{}
+	c.config, c.name, c.top, c.hash, c.cache = config, name, top, hasher.Sum32(), map[string]any{}
 
 	return nil
 }
@@ -812,6 +813,9 @@ func (c *UConfig) Reload(inline ...bool) error {
 
 func (c *UConfig) Loaded() bool {
 	return c.config != nil
+}
+func (c *UConfig) Name() string {
+	return c.name
 }
 func (c *UConfig) Top() string {
 	return c.top
