@@ -259,9 +259,6 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 
 		go func() {
 			begin, data, lines, mmatcher, fmatcher := 0, make([]byte, 64<<10), make([]string, 0, 4<<10), rcache.Get(t.options.Marker), rcache.Get(t.options.Filter)
-			if t.options.Filter == "" {
-				fmatcher = nil
-			}
 			for {
 				if conn.output == nil {
 					break
@@ -295,7 +292,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 							continue
 						}
 						if complete {
-							if fmatcher.MatchString(sline) {
+							if t.options.Filter != "" && fmatcher.MatchString(sline) {
 								continue
 							}
 							lines = append(lines, line)
