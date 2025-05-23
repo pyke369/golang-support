@@ -152,9 +152,11 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					if config.TLSConfig == nil {
 						config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 					}
-					config.TLSConfig.ServerName = address
-					if value, _, err := net.SplitHostPort(address); err == nil {
-						config.TLSConfig.ServerName = value
+					if config.TLSConfig.ServerName == "" {
+						config.TLSConfig.ServerName = address
+						if value, _, err := net.SplitHostPort(address); err == nil {
+							config.TLSConfig.ServerName = value
+						}
 					}
 					conn = tls.Client(conn, config.TLSConfig)
 					if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
