@@ -26,24 +26,26 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
-
 	"golang.org/x/net/http/httpproxy"
 )
 
 const (
-	UWS_UUID            = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	UWS_VERSION         = "13"
-	UWS_FIN             = 0x80
-	UWS_MASK            = 0x80
-	UWS_OPCODE_TEXT     = 1
-	UWS_OPCODE_BLOB     = 2
-	UWS_OPCODE_CLOSE    = 8
-	UWS_OPCODE_PING     = 9
-	UWS_OPCODE_PONG     = 10
-	UWS_ERROR_PROTOCOL  = 1002
-	UWS_ERROR_ABNORMAL  = 1006
-	UWS_ERROR_INVALID   = 1007
-	UWS_ERROR_OVERSIZED = 1009
+	UWS_UUID              = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	UWS_VERSION           = "13"
+	UWS_FIN               = 0x80
+	UWS_MASK              = 0x80
+	UWS_OPCODE_TEXT       = 1
+	UWS_OPCODE_BLOB       = 2
+	UWS_OPCODE_CLOSE      = 8
+	UWS_OPCODE_PING       = 9
+	UWS_OPCODE_PONG       = 10
+	UWS_ERROR_NORMAL      = 1000
+	UWS_ERROR_AWAY        = 1001
+	UWS_ERROR_PROTOCOL    = 1002
+	UWS_ERROR_UNSUPPORTED = 1003
+	UWS_ERROR_ABNORMAL    = 1006
+	UWS_ERROR_INVALID     = 1007
+	UWS_ERROR_OVERSIZED   = 1009
 )
 
 type Config struct {
@@ -265,6 +267,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	} else {
 		return nil, ustr.Wrap(err, "uws")
 	}
+
 	return
 }
 
@@ -654,14 +657,19 @@ close:
 				if err := s.send(payload); err != nil {
 					break close
 				}
+
 			} else {
+				code = UWS_ERROR_ABNORMAL
 				break close
 			}
+
 		} else if read == 0 {
+			code = UWS_ERROR_ABNORMAL
 			break close
 		}
 
 		if atomic.LoadInt64(&gnow)-seen >= int64(s.config.InactiveTimeout) {
+			code = UWS_ERROR_PROTOCOL
 			break close
 		}
 	}
