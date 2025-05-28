@@ -459,7 +459,7 @@ func (l *ULog) ClearFields() {
 
 func (l *ULog) SetOrder(names []string) {
 	l.mu.Lock()
-	l.order = names
+	l.order = slices.Clone(names)
 	l.mu.Unlock()
 }
 func (l *ULog) ClearOrder() {
@@ -504,14 +504,23 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				structure[key] = value
 			}
 		}
-		for key, value := range structure {
-			key = strings.TrimSpace(key)
+
+		order := slices.Clone(l.order)
+		for okey, value := range structure {
+			key := strings.TrimSpace(okey)
 			if strings.HasPrefix(key, "{{") && strings.HasSuffix(key, "}}") {
-				delete(structure, key)
+				delete(structure, okey)
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
-				templates[key] = value
+				if key == "order" {
+					if value, ok := value.(string); ok {
+						order = append(order, strings.Fields(value)...)
+					}
+				} else {
+					templates[key] = value
+				}
 			}
 		}
+
 		for key, value := range structure {
 			if value, ok := value.(string); ok {
 				if strings.HasPrefix(value, "{{") && strings.HasSuffix(value, "}}") {
@@ -533,7 +542,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			if len(structure) != 0 {
 				encoder := json.NewEncoder(buffer)
 				encoder.SetEscapeHTML(false)
-				for _, key := range l.order {
+				for _, key := range order {
 					if _, exists := structure[key]; exists {
 						buffer.WriteString(`"` + key + `":`)
 						encoder.Encode(structure[key])
@@ -542,7 +551,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					}
 				}
 				for _, key := range j.MapKeys(structure) {
-					if !slices.Contains(l.order, key) {
+					if !slices.Contains(order, key) {
 						buffer.WriteString(`"` + key + `":`)
 						encoder.Encode(structure[key])
 						buffer.Truncate(buffer.Len() - 1)
