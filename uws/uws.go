@@ -36,6 +36,7 @@ const (
 	UWS_MASK              = 0x80
 	UWS_OPCODE_TEXT       = 1
 	UWS_OPCODE_BLOB       = 2
+	UWS_OPCODE_BINARY     = 2
 	UWS_OPCODE_CLOSE      = 8
 	UWS_OPCODE_PING       = 9
 	UWS_OPCODE_PONG       = 10

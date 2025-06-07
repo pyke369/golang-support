@@ -75,7 +75,7 @@ type ERROR struct {
 }
 type ROUTE struct {
 	Handler HANDLER
-	Opaque  any
+	Context any
 }
 type HANDLER func(map[string]any, any) (any, *ERROR)
 
@@ -237,7 +237,7 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 	return Response(out, calls)
 }
 
-func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...any) (out []byte) {
+func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, extra ...any) (out []byte) {
 	in = bytes.TrimSpace(in)
 	out = []byte{}
 	batch := true
@@ -272,45 +272,27 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 						}
 						continue
 					}
-					if len(filters) != 0 {
-						authorized := false
-					done:
-						for _, filter := range filters {
-							if filter = strings.TrimSpace(filter); filter != "" {
-								switch filter[0] {
-								case '~':
-									if rcache.Get(strings.TrimSpace(filter[1:])).MatchString(request.Method) {
-										authorized = true
-										break done
-									}
 
-								case '=':
-									if request.Method == strings.TrimSpace(filter[1:]) {
-										authorized = true
-										break done
-									}
-
-								default:
-									if strings.Contains(request.Method, filter) {
-										authorized = true
-										break done
-									}
-								}
-							}
+					if filter != nil {
+						ctx := routes[request.Method].Context
+						if ctx == nil && len(extra) > 0 {
+							ctx = extra[0]
 						}
-						if !authorized {
+						if filter(request.Method, ctx) {
 							if request.Id != nil {
 								responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: METHOD_NOT_AUTHORIZED_CODE, Message: METHOD_NOT_AUTHORIZED_MESSAGE}}
 							}
 							continue
 						}
 					}
+
 					if request.Params != nil {
 						if kind := reflect.TypeOf(request.Params).Kind(); kind != reflect.Slice && kind != reflect.Map {
 							if request.Id != nil {
 								responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 							}
 							continue
+
 						} else if kind == reflect.Slice {
 							params := map[string]any{}
 							for index, value := range request.Params.([]any) {
@@ -318,9 +300,11 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 							}
 							request.Params = params
 						}
+
 					} else {
 						request.Params = map[string]any{}
 					}
+
 					running++
 					go func(request REQUEST) {
 						defer func() {
@@ -335,17 +319,19 @@ func Handle(in []byte, routes map[string]*ROUTE, filters []string, options ...an
 								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ustr.Wrap(err, "jsonrpc").Error()}}
 							}
 						}()
-						opaque := routes[request.Method].Opaque
-						if opaque == nil && len(options) > 0 {
-							opaque = options[0]
+
+						ctx := routes[request.Method].Context
+						if ctx == nil && len(extra) > 0 {
+							ctx = extra[0]
 						}
-						if result, err := routes[request.Method].Handler(request.Params.(map[string]any), opaque); err != nil {
+						if result, err := routes[request.Method].Handler(request.Params.(map[string]any), ctx); err != nil {
 							sink <- &RESPONSE{Id: request.Id, Error: err}
 						} else {
 							sink <- &RESPONSE{Id: request.Id, Result: result}
 						}
 					}(request)
 				}
+
 				for running > 0 {
 					response := <-sink
 					if response.Id != nil {
