@@ -1,6 +1,7 @@
 package ustr
 
 import (
+	h "encoding/hex"
 	"errors"
 	"sort"
 	"strconv"
@@ -138,6 +139,13 @@ func Hex(in []byte, extra ...byte) string {
 		}
 	}
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func Binarize(dst []byte, src string) (i int, err error) {
+	if len(src)%2 != 0 || len(dst) < len(src)/2 {
+		return 0, h.ErrLength
+	}
+	return h.Decode(dst, []byte(src))
 }
 
 func Range(in string) (out []int) {
