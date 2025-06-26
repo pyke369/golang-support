@@ -215,6 +215,7 @@ func New(target string) *ULog {
 									}
 									if ok {
 										os.Remove(path)
+
 									} else {
 										os.Remove(path + ".gz")
 									}
@@ -513,8 +514,15 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
 				if key == "order" {
 					if value, ok := value.(string); ok {
-						order = append(order, strings.Fields(value)...)
+						norder := strings.Fields(value)
+						for _, field := range norder {
+							if index := slices.Index(order, field); index >= 0 {
+								order = slices.Delete(order, index, index+1)
+							}
+						}
+						order = append(order, norder...)
 					}
+
 				} else {
 					templates[key] = value
 				}
@@ -527,6 +535,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					value = strings.ToLower(strings.TrimSpace(value[2 : len(value)-2]))
 					if value, ok := templates[value]; ok {
 						structure[key] = value
+
 					} else {
 						delete(structure, key)
 					}
@@ -610,6 +619,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	content = append(content, '\n')
 	if l.optionUTC {
 		now = now.UTC()
+
 	} else {
 		now = now.Local()
 	}
@@ -647,6 +657,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					prefix = append(prefix, '[')
 					prefix = append(prefix, strconv.Itoa(os.Getpid())...)
 					prefix = append(prefix, []byte{']', ':', ' '}...)
+
 				} else {
 					switch l.fileTime {
 					case TIME_DATETIME:
