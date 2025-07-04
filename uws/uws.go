@@ -30,23 +30,23 @@ import (
 )
 
 const (
-	UWS_UUID              = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	UWS_VERSION           = "13"
-	UWS_FIN               = 0x80
-	UWS_MASK              = 0x80
-	UWS_OPCODE_TEXT       = 1
-	UWS_OPCODE_BLOB       = 2
-	UWS_OPCODE_BINARY     = 2
-	UWS_OPCODE_CLOSE      = 8
-	UWS_OPCODE_PING       = 9
-	UWS_OPCODE_PONG       = 10
-	UWS_ERROR_NORMAL      = 1000
-	UWS_ERROR_AWAY        = 1001
-	UWS_ERROR_PROTOCOL    = 1002
-	UWS_ERROR_UNSUPPORTED = 1003
-	UWS_ERROR_ABNORMAL    = 1006
-	UWS_ERROR_INVALID     = 1007
-	UWS_ERROR_OVERSIZED   = 1009
+	UUID              = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	VERSION           = "13"
+	FIN               = 0x80
+	MASK              = 0x80
+	OPCODE_TEXT       = 1
+	OPCODE_BLOB       = 2
+	OPCODE_BINARY     = 2
+	OPCODE_CLOSE      = 8
+	OPCODE_PING       = 9
+	OPCODE_PONG       = 10
+	ERROR_NORMAL      = 1000
+	ERROR_AWAY        = 1001
+	ERROR_PROTOCOL    = 1002
+	ERROR_UNSUPPORTED = 1003
+	ERROR_ABNORMAL    = 1006
+	ERROR_INVALID     = 1007
+	ERROR_OVERSIZED   = 1009
 )
 
 type Config struct {
@@ -68,6 +68,7 @@ type Config struct {
 	CloseHandler    func(*Socket, int)
 	MessageHandler  func(*Socket, int, []byte) bool
 	Context         any
+	Arena           *bslab.Arena
 }
 
 type Socket struct {
@@ -116,6 +117,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	if config.WriteBufferSize != 0 {
 		config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
 	}
+	if config.Arena == nil {
+		config.Arena = bslab.Default
+	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if eurl, err := url.Parse(endpoint); err == nil {
 		proxy, _ := config.Proxy(eurl)
@@ -124,7 +128,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
 			request.Header.Add("Upgrade", "websocket")
-			request.Header.Add("Sec-WebSocket-Version", UWS_VERSION)
+			request.Header.Add("Sec-WebSocket-Version", VERSION)
 			request.Header.Add("Sec-WebSocket-Key", nonce)
 			if len(config.Protocols) > 0 {
 				request.Header.Add("Sec-WebSocket-Protocol", strings.Join(config.Protocols, ", "))
@@ -224,7 +228,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 				conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout))
 				if response, err := http.ReadResponse(bufio.NewReader(conn), request); err == nil {
 					skey, _ := base64.StdEncoding.DecodeString(response.Header.Get("Sec-WebSocket-Accept"))
-					ckey, path := sha1.Sum([]byte(nonce+UWS_UUID)), eurl.Path
+					ckey, path := sha1.Sum([]byte(nonce+UUID)), eurl.Path
 					if path == "" {
 						path = "/"
 					}
@@ -280,8 +284,8 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			return
 		}
 		ckey := request.Header.Get("Sec-WebSocket-Key")
-		if request.Header.Get("Sec-WebSocket-Version") != UWS_VERSION || ckey == "" {
-			response.Header().Set("Sec-WebSocket-Version", UWS_VERSION)
+		if request.Header.Get("Sec-WebSocket-Version") != VERSION || ckey == "" {
+			response.Header().Set("Sec-WebSocket-Version", VERSION)
 			response.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -311,7 +315,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				return
 			}
 		}
-		skey := sha1.Sum([]byte(ckey + UWS_UUID))
+		skey := sha1.Sum([]byte(ckey + UUID))
 		response.Header().Set("Connection", "Upgrade")
 		response.Header().Set("Upgrade", "websocket")
 		response.Header().Set("Sec-WebSocket-Accept", base64.StdEncoding.EncodeToString(skey[:]))
@@ -332,6 +336,9 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			}
 			if config.WriteBufferSize != 0 {
 				config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
+			}
+			if config.Arena == nil {
+				config.Arena = bslab.Default
 			}
 			if tconn, ok := conn.(*net.TCPConn); ok {
 				if config.ReadBufferSize != 0 {
@@ -370,7 +377,7 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 	var mask []byte
 
 	length := len(data)
-	if (mode == UWS_OPCODE_TEXT || mode == UWS_OPCODE_BLOB) && length > 0 {
+	if (mode == OPCODE_TEXT || mode == OPCODE_BLOB) && length > 0 {
 		s.wlock.Lock()
 		defer s.wlock.Unlock()
 		frames := length / s.config.FragmentSize
@@ -380,7 +387,7 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 		for frame := 1; frame <= frames; frame++ {
 			fin, offset, size := byte(0), (frame-1)*s.config.FragmentSize, s.config.FragmentSize
 			if frame == frames {
-				fin, size = UWS_FIN, length-offset
+				fin, size = FIN, length-offset
 			}
 			if frame > 1 {
 				mode = 0
@@ -401,7 +408,7 @@ func (s *Socket) Write(mode byte, data []byte) (err error) {
 				binary.BigEndian.PutUint64(payload[1], uint64(size))
 			}
 			if s.client {
-				payload[0][1] |= UWS_MASK
+				payload[0][1] |= MASK
 				mask = rmask()
 				payload = append(payload, mask)
 				xor(mask, data[offset:offset+size])
@@ -428,9 +435,9 @@ func (s *Socket) Close(code int) {
 			s.config.CloseHandler(s, code)
 		}
 		if !s.errored {
-			payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_CLOSE, 0}}
+			payload := net.Buffers{[]byte{FIN | OPCODE_CLOSE, 0}}
 			if s.client {
-				payload[0][1] |= UWS_MASK
+				payload[0][1] |= MASK
 				payload = append(payload, rmask())
 			}
 			if code != 0 {
@@ -463,20 +470,20 @@ func (s *Socket) send(payload net.Buffers) (err error) {
 	}
 	if _, err = payload.WriteTo(s.conn); err != nil {
 		s.errored = true
-		s.Close(UWS_ERROR_ABNORMAL)
+		s.Close(ERROR_ABNORMAL)
 	}
 	return
 }
 
 func (s *Socket) receive(buffered io.Reader) {
 	var (
-		data, control []byte
-		err           error
+		data, control, buffer []byte
+		err                   error
 	)
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
 	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
-	buffer, roffset, woffset, read := bslab.Get(s.config.ReadSize, nil), 0, 0, 0
+	roffset, woffset, read, buffer := 0, 0, 0, s.config.Arena.Get(s.config.ReadSize, nil)
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
 		smask += 4
@@ -512,18 +519,18 @@ close:
 					}
 
 					fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
-					if (s.client && (buffer[roffset+1]&UWS_MASK) != 0) || (!s.client && (buffer[roffset+1]&UWS_MASK) == 0) ||
-						(fin == 0 && opcode >= UWS_OPCODE_CLOSE && opcode <= UWS_OPCODE_PONG) ||
-						(opcode != 0 && opcode != UWS_OPCODE_TEXT && opcode != UWS_OPCODE_BLOB && (opcode < UWS_OPCODE_CLOSE || opcode > UWS_OPCODE_PONG)) ||
-						((opcode == UWS_OPCODE_PING || opcode == UWS_OPCODE_PONG) && size > 125) {
-						code = UWS_ERROR_PROTOCOL
+					if (s.client && (buffer[roffset+1]&MASK) != 0) || (!s.client && (buffer[roffset+1]&MASK) == 0) ||
+						(fin == 0 && opcode >= OPCODE_CLOSE && opcode <= OPCODE_PONG) ||
+						(opcode != 0 && opcode != OPCODE_TEXT && opcode != OPCODE_BLOB && (opcode < OPCODE_CLOSE || opcode > OPCODE_PONG)) ||
+						((opcode == OPCODE_PING || opcode == OPCODE_PONG) && size > 125) {
+						code = ERROR_PROTOCOL
 						break close
 					}
 					if !s.client && woffset-roffset < 2+smask {
 						size = -1
 						break
 					}
-					if opcode == UWS_OPCODE_TEXT || opcode == UWS_OPCODE_BLOB {
+					if opcode == OPCODE_TEXT || opcode == OPCODE_BLOB {
 						dmode = opcode
 					}
 					if dmode != 0 && fin == 1 {
@@ -559,8 +566,8 @@ close:
 						}
 						roffset += 2 + smask
 					}
-					if (opcode <= UWS_OPCODE_BLOB && size == 0) || (opcode > UWS_OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
-						code = UWS_ERROR_OVERSIZED
+					if (opcode <= OPCODE_BLOB && size == 0) || (opcode > OPCODE_BLOB && size > 125) || (fin == 1 && size > s.config.MessageSize) {
+						code = ERROR_OVERSIZED
 						break close
 					}
 					if dmode != 0 {
@@ -571,11 +578,11 @@ close:
 				if size >= 0 {
 					if dmode != 0 {
 						if data == nil {
-							data = bslab.Get(dsize, nil)
+							data = s.config.Arena.Get(dsize, nil)
 						}
 						highest := min(woffset-roffset, size)
 						if len(data)+highest > s.config.MessageSize {
-							code = UWS_ERROR_OVERSIZED
+							code = ERROR_OVERSIZED
 							break close
 						}
 						data = append(data, buffer[roffset:roffset+highest]...)
@@ -587,8 +594,8 @@ close:
 							}
 							doffset = dsize
 							if dlast {
-								if dmode == UWS_OPCODE_TEXT && !utf8.Valid(data) {
-									code = UWS_ERROR_INVALID
+								if dmode == OPCODE_TEXT && !utf8.Valid(data) {
+									code = ERROR_INVALID
 									break close
 								}
 								keep := false
@@ -596,7 +603,7 @@ close:
 									keep = s.config.MessageHandler(s, int(dmode), data)
 								}
 								if !keep {
-									bslab.Put(data)
+									s.config.Arena.Put(data)
 								}
 								dmode, dsize, doffset, dlast, data = 0, 0, 0, false, nil
 							}
@@ -604,7 +611,7 @@ close:
 						}
 					} else {
 						if control == nil {
-							control = bslab.Get(132, nil)
+							control = s.config.Arena.Get(132, nil)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)
@@ -615,16 +622,16 @@ close:
 								xor(mask, control)
 							}
 							switch opcode {
-							case UWS_OPCODE_CLOSE:
+							case OPCODE_CLOSE:
 								if len(control) >= 2 {
 									code = int(binary.BigEndian.Uint16(control))
 								}
 								break close
 
-							case UWS_OPCODE_PING:
-								payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_PONG, byte(len(control))}}
+							case OPCODE_PING:
+								payload := net.Buffers{[]byte{FIN | OPCODE_PONG, byte(len(control))}}
 								if s.client {
-									payload[0][1] |= UWS_MASK
+									payload[0][1] |= MASK
 									payload = append(payload, rmask())
 									xor(payload[1], control)
 								}
@@ -635,7 +642,7 @@ close:
 									break close
 								}
 							}
-							bslab.Put(control)
+							s.config.Arena.Put(control)
 							size, control = -1, nil
 						}
 					}
@@ -650,9 +657,9 @@ close:
 
 		if err != nil {
 			if err, ok := err.(net.Error); ok && err.Timeout() {
-				payload := net.Buffers{[]byte{UWS_FIN | UWS_OPCODE_PING, 0}}
+				payload := net.Buffers{[]byte{FIN | OPCODE_PING, 0}}
 				if s.client {
-					payload[0][1] |= UWS_MASK
+					payload[0][1] |= MASK
 					payload = append(payload, rmask())
 				}
 				if err := s.send(payload); err != nil {
@@ -660,23 +667,23 @@ close:
 				}
 
 			} else {
-				code = UWS_ERROR_ABNORMAL
+				code = ERROR_ABNORMAL
 				break close
 			}
 
 		} else if read == 0 {
-			code = UWS_ERROR_ABNORMAL
+			code = ERROR_ABNORMAL
 			break close
 		}
 
 		if atomic.LoadInt64(&gnow)-seen >= int64(s.config.InactiveTimeout) {
-			code = UWS_ERROR_PROTOCOL
+			code = ERROR_PROTOCOL
 			break close
 		}
 	}
-	bslab.Put(buffer)
-	bslab.Put(control)
-	bslab.Put(data)
+	s.config.Arena.Put(buffer)
+	s.config.Arena.Put(control)
+	s.config.Arena.Put(data)
 	s.Close(code)
 }
 

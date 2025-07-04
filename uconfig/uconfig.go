@@ -35,6 +35,7 @@ type UConfig struct {
 	config    any
 	mu        sync.RWMutex
 	cache     map[string]any
+	arena     *bslab.Arena
 }
 
 const (
@@ -125,12 +126,12 @@ func mode(char byte) int {
 	}
 }
 
-func grow(in []byte, extra int) (out []byte) {
+func grow(in []byte, extra int, arena *bslab.Arena) (out []byte) {
 	out = in
 	if len(in)+extra > cap(in) {
-		out = bslab.Get(len(in) + extra)
+		out = arena.Get(len(in) + extra)
 		out = append(out, in...)
-		bslab.Put(in)
+		arena.Put(in)
 	}
 	return
 }
@@ -269,9 +270,18 @@ func expand(in []byte, extra ...int) (out []byte) {
 	return
 }
 
-func New(in string, inline ...bool) (config *UConfig, err error) {
-	config = &UConfig{size: 64 << 10, input: in, separator: "."}
-	err = config.Load(in, inline...)
+func New(in string, extra ...map[string]any) (config *UConfig, err error) {
+	inline, arena := false, bslab.Default
+	if len(extra) != 0 && extra[0] != nil {
+		if value, ok := extra[0]["inline"].(bool); ok {
+			inline = value
+		}
+		if value, ok := extra[0]["arena"].(*bslab.Arena); ok {
+			arena = value
+		}
+	}
+	config = &UConfig{size: 64 << 10, input: in, separator: ".", arena: arena}
+	err = config.Load(in, inline)
 	return config, err
 }
 
@@ -288,14 +298,14 @@ func (c *UConfig) GetPrefix() string {
 
 func (c *UConfig) Load(in string, inline ...bool) error {
 	base, _ := os.Getwd()
-	payload, name, top := bslab.Get(max(c.size, 3+len(base)+3+len(in))), "", ""
+	payload, name, top := c.arena.Get(max(c.size, 3+len(base)+3+len(in))), "", ""
 	payload = append(payload, '<', '<', '%')
 	payload = append(payload, base...)
 	payload = append(payload, '>', '>', ' ')
 	if len(inline) > 0 && inline[0] {
 		payload = append(payload, in...)
-	} else {
 
+	} else {
 		if !filepath.IsAbs(in) {
 			in = filepath.Join(base, in)
 		}
@@ -383,7 +393,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 								}
 							}
 							if size != 0 {
-								insert = bslab.Get(size)
+								insert = c.arena.Get(size)
 								for _, path := range paths {
 									nbase, parts := filepath.Dir(path), []string{}
 									insert = append(insert, ' ', '<', '<', '%')
@@ -440,14 +450,14 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 									}
 								}
 							}
-							insert = bslab.Get(4 + size + 2)
+							insert = c.arena.Get(4 + size + 2)
 							insert = append(insert, ' ', ' ', '[', ' ')
 							for _, path := range paths {
 								handle, err := os.Open(path)
 								if err != nil {
 									continue
 								}
-								lines := bslab.Get(sizes[path])
+								lines := c.arena.Get(sizes[path])
 								lines = lines[:sizes[path]]
 								if read, err := handle.Read(lines); err == nil {
 									lines = lines[:read]
@@ -489,7 +499,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 										}
 									}
 								}
-								bslab.Put(lines)
+								c.arena.Put(lines)
 								handle.Close()
 							}
 							if !empty {
@@ -502,7 +512,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 							if value, err := exec.CommandContext(ctx, args[0], strings.Join(args[1:], " ")).Output(); err == nil {
 								if len(value) > 0 {
-									insert = bslab.Get(3 * len(value))
+									insert = c.arena.Get(3 * len(value))
 									insert = append(insert, value...)
 									insert = expand(insert)
 								}
@@ -515,7 +525,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							if response, err := client.Get(arg); err == nil {
 								if response.StatusCode/100 == 2 {
 									if size := min(256<<10, int(response.ContentLength)); size > 0 {
-										insert = bslab.Get(3 * size)
+										insert = c.arena.Get(3 * size)
 										offset := 0
 										for {
 											read, err := response.Body.Read(insert[offset:size])
@@ -534,7 +544,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 
 						case '&': // environment value
 							value := strings.TrimSpace(os.Getenv(arg))
-							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)
 							insert = escape(insert, 3)
@@ -542,7 +552,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 
 						case '!': // argument value
 							value := options[strings.ToLower(arg)]
-							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)
 							insert = escape(insert, 3)
@@ -553,7 +563,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							if index := strings.Index(os.Args[0], "-"); index >= 0 {
 								value = os.Args[0][index+1:]
 							}
-							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)
 							insert = escape(insert, 3)
@@ -570,7 +580,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 									size += 1 + 2*len(path) + 1
 								}
 							}
-							insert = bslab.Get(4 + size + len(paths)*3 + 2)
+							insert = c.arena.Get(4 + size + len(paths)*3 + 2)
 							insert = append(insert, ' ', ' ', '[', ' ')
 							if len(paths) != 0 {
 								for _, path := range paths {
@@ -595,21 +605,21 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							if len(inline) == 0 || !inline[0] {
 								value = filepath.Base(in)
 							}
-							insert = bslab.Get(3 + 2*len(value) + 2)
+							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)
 							insert = escape(insert, 3)
 							insert = append(insert, '"', ' ')
 						}
 
-						payload = grow(payload, len(insert)-(cindex+1-mstart))
+						payload = grow(payload, len(insert)-(cindex+1-mstart), c.arena)
 						payload = slices.Replace(payload, mstart, cindex+1, insert...)
 
 						cindex = mstart
 						if !btrack {
 							cindex += len(insert)
 						}
-						bslab.Put(insert)
+						c.arena.Put(insert)
 						length, mstart = len(payload), -1
 						continue
 					}
@@ -689,7 +699,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					payload[offset] = '"'
 					tokens[index-1][1]--
 				} else {
-					payload = grow(payload, 1)
+					payload = grow(payload, 1, c.arena)
 					payload = slices.Insert(payload, offset, '"')
 				}
 				tokens[index][1]++
@@ -700,7 +710,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					payload[offset+length] = '"'
 					tokens[index+1][1]--
 				} else {
-					payload = grow(payload, 1)
+					payload = grow(payload, 1, c.arena)
 					payload = slices.Insert(payload, offset+length, '"')
 				}
 				tokens[index][1]++
@@ -743,7 +753,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				payload[offset] = ':'
 				tokens[index-1][1]--
 			} else {
-				payload = grow(payload, 1)
+				payload = grow(payload, 1, c.arena)
 				payload = slices.Insert(payload, offset, ':')
 			}
 			tokens[index][1]++
@@ -760,7 +770,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		if char != ' ' {
 			if char != '{' {
 				payload[0] = '{'
-				payload = grow(payload, 1)
+				payload = grow(payload, 1, c.arena)
 				payload = append(payload, '}')
 			}
 			break
@@ -771,8 +781,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	}
 
 	// compute hash
-	defer bslab.Put(payload)
-	source, hasher := bslab.Get(1<<10), crc32.NewIEEE()
+	defer c.arena.Put(payload)
+	source, hasher := c.arena.Get(1<<10), crc32.NewIEEE()
 	for _, char := range payload {
 		if char != ' ' {
 			if len(source) < cap(source) {
@@ -787,7 +797,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	if len(source) != 0 {
 		hasher.Write(source)
 	}
-	bslab.Put(source)
+	c.arena.Put(source)
 	if hasher.Sum32() == c.hash {
 		return nil
 	}

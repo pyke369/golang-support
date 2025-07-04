@@ -96,6 +96,7 @@ type ULog struct {
 	fields                map[string]any
 	order                 []string
 	external              func(string, []byte)
+	arena                 *bslab.Arena
 	mu                    sync.RWMutex
 }
 type fileOutput struct {
@@ -159,8 +160,14 @@ var (
 	templateParser = regexp.MustCompile(`\{\{\s*[^\s\}]+\s*\}\}`)
 )
 
-func New(target string) *ULog {
+func New(target string, arena ...*bslab.Arena) *ULog {
 	l := &ULog{fileOutputs: map[string]*fileOutput{}, level: LOG_INFO}
+	if len(arena) != 0 {
+		l.arena = arena[0]
+	}
+	if l.arena == nil {
+		l.arena = bslab.Default
+	}
 
 	go func(l *ULog) {
 		time.Sleep(time.Second)
@@ -488,8 +495,8 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	}
 	l.mu.RUnlock()
 
-	structured, content := false, bslab.Get(1<<10, nil)
-	defer bslab.Put(content)
+	structured, content := false, l.arena.Get(1<<10, nil)
+	defer l.arena.Put(content)
 
 	templates := map[string]any{
 		"datetime":    now.Format(time.DateTime),
