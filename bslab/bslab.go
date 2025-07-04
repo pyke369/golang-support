@@ -28,14 +28,14 @@ type Info struct {
 	Values map[int][6]uint32
 }
 
-var base Arena
+var Default *Arena
 
 func init() {
-	base = New(map[string]any{"name": "base"})
+	Default = New(map[string]any{"name": "default"})
 }
 
-func New(extra ...map[string]any) Arena {
-	a := Arena{slabs: map[int]*slab{}}
+func New(extra ...map[string]any) *Arena {
+	a := &Arena{slabs: map[int]*slab{}}
 	a.slabs[0] = &slab{}
 	for size := uint(8); size <= 26; size++ {
 		a.slabs[1<<size] = &slab{queue: make(chan []byte, 64<<10)}
@@ -55,7 +55,7 @@ func New(extra ...map[string]any) Arena {
 	return a
 }
 
-func (a Arena) Get(size int, extra ...[]byte) (out []byte) {
+func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	var item []byte
 
 	if len(extra) != 0 {
@@ -106,10 +106,10 @@ func (a Arena) Get(size int, extra ...[]byte) (out []byte) {
 	return
 }
 func Get(size int, extra ...[]byte) (out []byte) {
-	return base.Get(size, extra...)
+	return Default.Get(size, extra...)
 }
 
-func (a Arena) Put(in []byte) {
+func (a *Arena) Put(in []byte) {
 	if in == nil || cap(in) <= 0 {
 		return
 	}
@@ -138,7 +138,7 @@ func (a Arena) Put(in []byte) {
 	}
 }
 func Put(in []byte) {
-	base.Put(in)
+	Default.Put(in)
 }
 
 func hcount(in uint32) string {
@@ -162,8 +162,8 @@ func hsize(in uint32) string {
 	}
 	return strconv.Itoa(int(in/(1<<30))) + " GB"
 }
-func (a Arena) Stat() Info {
-	info := Info{
+func (a *Arena) Stat() *Info {
+	info := &Info{
 		Name:   a.name,
 		Values: map[int][6]uint32{},
 	}
@@ -179,10 +179,10 @@ func (a Arena) Stat() Info {
 	}
 	return info
 }
-func Stat() Info {
-	return base.Stat()
+func Stat() *Info {
+	return Default.Stat()
 }
-func (i Info) String() string {
+func (i *Info) String() string {
 	sizes := make([]int, 0, len(i.Values))
 	for size := range i.Values {
 		sizes = append(sizes, size)

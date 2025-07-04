@@ -68,6 +68,7 @@ type Config struct {
 	CloseHandler    func(*Socket, int)
 	MessageHandler  func(*Socket, int, []byte) bool
 	Context         any
+	Arena           *bslab.Arena
 }
 
 type Socket struct {
@@ -115,6 +116,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	}
 	if config.WriteBufferSize != 0 {
 		config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
+	}
+	if config.Arena == nil {
+		config.Arena = bslab.Default
 	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if eurl, err := url.Parse(endpoint); err == nil {
@@ -333,6 +337,9 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			if config.WriteBufferSize != 0 {
 				config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
 			}
+			if config.Arena == nil {
+				config.Arena = bslab.Default
+			}
 			if tconn, ok := conn.(*net.TCPConn); ok {
 				if config.ReadBufferSize != 0 {
 					tconn.SetReadBuffer(config.ReadBufferSize)
@@ -470,13 +477,13 @@ func (s *Socket) send(payload net.Buffers) (err error) {
 
 func (s *Socket) receive(buffered io.Reader) {
 	var (
-		data, control []byte
-		err           error
+		data, control, buffer []byte
+		err                   error
 	)
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
 	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
-	buffer, roffset, woffset, read := bslab.Get(s.config.ReadSize, nil), 0, 0, 0
+	roffset, woffset, read, buffer := 0, 0, 0, s.config.Arena.Get(s.config.ReadSize, nil)
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
 		smask += 4
@@ -571,7 +578,7 @@ close:
 				if size >= 0 {
 					if dmode != 0 {
 						if data == nil {
-							data = bslab.Get(dsize, nil)
+							data = s.config.Arena.Get(dsize, nil)
 						}
 						highest := min(woffset-roffset, size)
 						if len(data)+highest > s.config.MessageSize {
@@ -596,7 +603,7 @@ close:
 									keep = s.config.MessageHandler(s, int(dmode), data)
 								}
 								if !keep {
-									bslab.Put(data)
+									s.config.Arena.Put(data)
 								}
 								dmode, dsize, doffset, dlast, data = 0, 0, 0, false, nil
 							}
@@ -604,7 +611,7 @@ close:
 						}
 					} else {
 						if control == nil {
-							control = bslab.Get(132, nil)
+							control = s.config.Arena.Get(132, nil)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)
@@ -635,7 +642,7 @@ close:
 									break close
 								}
 							}
-							bslab.Put(control)
+							s.config.Arena.Put(control)
 							size, control = -1, nil
 						}
 					}
@@ -674,9 +681,9 @@ close:
 			break close
 		}
 	}
-	bslab.Put(buffer)
-	bslab.Put(control)
-	bslab.Put(data)
+	s.config.Arena.Put(buffer)
+	s.config.Arena.Put(control)
+	s.config.Arena.Put(data)
 	s.Close(code)
 }
 
