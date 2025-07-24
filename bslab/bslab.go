@@ -1,11 +1,16 @@
 package bslab
 
 import (
+	"bytes"
+	"os"
+	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -19,8 +24,10 @@ type slab struct {
 }
 
 type Arena struct {
-	name  string
-	slabs map[int]*slab
+	name    string
+	tracer  *os.File
+	matcher *regexp.Regexp
+	slabs   map[int]*slab
 }
 
 type Info struct {
@@ -28,7 +35,13 @@ type Info struct {
 	Values map[int][6]uint32
 }
 
-var Default *Arena
+var (
+	Default *Arena
+	eol     = []byte{'\n'}
+	id      = []byte("bslab")
+	tab     = []byte{'\t'}
+	space   = []byte{' '}
+)
 
 func init() {
 	Default = New(map[string]any{"name": "default"})
@@ -55,6 +68,27 @@ func New(extra ...map[string]any) *Arena {
 	return a
 }
 
+func (a *Arena) Trace(tracer *os.File, extra ...string) {
+	a.tracer = tracer
+	if len(extra) > 0 {
+		a.matcher = rcache.Get(extra[0])
+	} else {
+		a.matcher = nil
+	}
+}
+func Trace(tracer *os.File, extra ...string) {
+	Default.Trace(tracer, extra...)
+}
+
+func caller(in []byte) (out string) {
+	for _, line := range bytes.Split(in, eol) {
+		if bytes.HasPrefix(line, tab) && !bytes.Contains(line, id) {
+			return string(bytes.Split(bytes.TrimSpace(line), space)[0])
+		}
+	}
+	return
+}
+
 func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	var item []byte
 
@@ -69,40 +103,59 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	}
 	if item != nil {
 		if cap(item) >= size {
-			return item[:0]
-		}
-		Put(item)
-	}
-	bits, power := uint(0), uint(0)
-	if size&(size-1) == 0 {
-		power = 1
-	}
-	for size != 0 {
-		size >>= 1
-		bits++
-	}
-	size = 1 << (bits - power)
-	if slab, exists := a.slabs[size]; exists {
-		atomic.AddUint32(&(slab.get), 1)
-		if slab.max == 0 || atomic.LoadUint32(&(slab.alloc)) < slab.max {
-			select {
-			case item := <-slab.queue:
-				out = item[:0]
-
-			default:
-				atomic.AddUint32(&(slab.alloc), 1)
-				out = make([]byte, 0, size)
-			}
-		} else {
-			item := <-slab.queue
 			out = item[:0]
+		}
+		if out == nil {
+			Put(item)
 		}
 	}
 	if out == nil {
-		atomic.AddUint32(&(a.slabs[0].get), 1)
-		atomic.AddUint32(&(a.slabs[0].alloc), uint32(size))
-		out = make([]byte, 0, size)
+		bits, power := uint(0), uint(0)
+		if size&(size-1) == 0 {
+			power = 1
+		}
+		for size != 0 {
+			size >>= 1
+			bits++
+		}
+		size = 1 << (bits - power)
+		if slab, exists := a.slabs[size]; exists {
+			atomic.AddUint32(&(slab.get), 1)
+			if slab.max == 0 || atomic.LoadUint32(&(slab.alloc)) < slab.max {
+				select {
+				case item := <-slab.queue:
+					out = item[:0]
+
+				default:
+					atomic.AddUint32(&(slab.alloc), 1)
+					out = make([]byte, 0, size)
+				}
+
+			} else {
+				item := <-slab.queue
+				out = item[:0]
+			}
+		}
+		if out == nil {
+			atomic.AddUint32(&(a.slabs[0].get), 1)
+			atomic.AddUint32(&(a.slabs[0].alloc), uint32(size))
+			out = make([]byte, 0, size)
+		}
 	}
+
+	if a.tracer != nil {
+		stack := make([]byte, 1<<10)
+		length := runtime.Stack(stack, false)
+		c := caller(stack[:length])
+		if a.matcher == nil || a.matcher.MatchString(c) {
+			name := a.name
+			if name == "" {
+				name = "<anon>"
+			}
+			a.tracer.WriteString(name + ".Get(" + strconv.Itoa(size) + " / " + ustr.Pointer(out) + ") " + c + "\n")
+		}
+	}
+
 	return
 }
 func Get(size int, extra ...[]byte) (out []byte) {
@@ -112,6 +165,18 @@ func Get(size int, extra ...[]byte) (out []byte) {
 func (a *Arena) Put(in []byte) {
 	if in == nil || cap(in) <= 0 {
 		return
+	}
+	if a.tracer != nil {
+		stack := make([]byte, 1<<10)
+		length := runtime.Stack(stack, false)
+		c := caller(stack[:length])
+		if a.matcher == nil || a.matcher.MatchString(c) {
+			name := a.name
+			if name == "" {
+				name = "<anon>"
+			}
+			a.tracer.WriteString(name + ".Put(" + ustr.Pointer(in) + " / " + strconv.Itoa(cap(in)) + ") " + c + "\n")
+		}
 	}
 	size, bits := cap(in), uint(0)
 	for size != 0 {

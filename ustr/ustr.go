@@ -1,8 +1,9 @@
 package ustr
 
 import (
-	h "encoding/hex"
+	"encoding/hex"
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ var (
 		[2]string{"failure", "success"},
 		[2]string{"0", "1"},
 	}
-	hex = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+	htable = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
 )
 
 func Wrap(err error, msg string) error {
@@ -131,7 +132,7 @@ func Hex(in []byte, extra ...byte) string {
 	}
 	out, offset := make([]byte, size), 0
 	for index := 0; index < length; index++ {
-		out[offset], out[offset+1] = hex[in[index]>>4], hex[in[index]&0x0f]
+		out[offset], out[offset+1] = htable[in[index]>>4], htable[in[index]&0x0f]
 		offset += 2
 		if pad != 0 && index < length-1 {
 			out[offset] = pad
@@ -141,11 +142,23 @@ func Hex(in []byte, extra ...byte) string {
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
+func Pointer(in any) string {
+	address := uint64(uintptr(reflect.ValueOf(in).UnsafePointer()))
+	out := make([]byte, 0, 18)
+	out = append(out, '0', 'x')
+	for shift := 56; shift >= 0; shift -= 8 {
+		if value := byte(address >> shift); value != 0 || shift <= 24 {
+			out = append(out, htable[value>>4], htable[value&0x0f])
+		}
+	}
+	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
 func Binarize(dst []byte, src string) (i int, err error) {
 	if len(src)%2 != 0 || len(dst) < len(src)/2 {
-		return 0, h.ErrLength
+		return 0, hex.ErrLength
 	}
-	return h.Decode(dst, []byte(src))
+	return hex.Decode(dst, []byte(src))
 }
 
 func Range(in string) (out []int) {
