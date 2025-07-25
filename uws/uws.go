@@ -104,18 +104,18 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	if config.Proxy == nil {
 		config.Proxy = proxy
 	}
-	config.ReadSize = cval(config.ReadSize, 16<<10, 4<<10, 256<<10)
+	config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
 	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-	config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
+	config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 16<<20)
 	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 	if config.ReadBufferSize != 0 {
-		config.ReadBufferSize = cval(config.ReadBufferSize, 16<<10, 4<<10, 32<<20)
+		config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 16<<20)
 	}
 	if config.WriteBufferSize != 0 {
-		config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
+		config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 16<<20)
 	}
 	if config.Arena == nil {
 		config.Arena = bslab.Default
@@ -325,17 +325,17 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			if config == nil {
 				config = &Config{}
 			}
-			config.ReadSize = cval(config.ReadSize, 16<<10, 4<<10, 256<<10)
+			config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
 			config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-			config.MessageSize = cval(config.MessageSize, 4<<20, 4<<10, 64<<20)
+			config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 16<<20)
 			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
 			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
 			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
 			if config.ReadBufferSize != 0 {
-				config.ReadBufferSize = cval(config.ReadBufferSize, 16<<10, 4<<10, 32<<20)
+				config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 16<<20)
 			}
 			if config.WriteBufferSize != 0 {
-				config.WriteBufferSize = cval(config.WriteBufferSize, 16<<10, 4<<10, 32<<20)
+				config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 16<<20)
 			}
 			if config.Arena == nil {
 				config.Arena = bslab.Default
@@ -609,6 +609,7 @@ close:
 							}
 							size = -1
 						}
+
 					} else {
 						if control == nil {
 							control = s.config.Arena.Get(132)
@@ -682,8 +683,12 @@ close:
 		}
 	}
 	s.config.Arena.Put(buffer)
-	s.config.Arena.Put(control)
-	s.config.Arena.Put(data)
+	if control != nil {
+		s.config.Arena.Put(control)
+	}
+	if data != nil {
+		s.config.Arena.Put(data)
+	}
 	s.Close(code)
 }
 
