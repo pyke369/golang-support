@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/ustr"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -163,11 +162,7 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if raw, err := conn.SyscallConn(); err == nil {
-		raw.Control(func(handle uintptr) {
-			setOptions(int(handle))
-		})
-	}
+	conn.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3})
 	if l.options != nil {
 		if l.options.ReadBuffer > 0 {
 			conn.SetReadBuffer(l.options.ReadBuffer)
@@ -194,14 +189,7 @@ func NewTCPListener(network, address string, options *TCPOptions) (listener *TCP
 	config := net.ListenConfig{
 		Control: func(network, address string, conn syscall.RawConn) error {
 			conn.Control(func(handle uintptr) {
-				if err := syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
-					return
-				}
-				if options != nil && options.ReusePort {
-					if err := syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
-						return
-					}
-				}
+				reuse(handle, options != nil && options.ReusePort)
 			})
 			return nil
 		}}
