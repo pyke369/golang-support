@@ -161,12 +161,9 @@ var (
 )
 
 func New(target string, arena ...*bslab.Arena) *ULog {
-	l := &ULog{fileOutputs: map[string]*fileOutput{}, level: LOG_INFO}
+	l := &ULog{fileOutputs: map[string]*fileOutput{}, level: LOG_INFO, arena: bslab.Default}
 	if len(arena) != 0 {
 		l.arena = arena[0]
-	}
-	if l.arena == nil {
-		l.arena = bslab.Default
 	}
 
 	go func(l *ULog) {

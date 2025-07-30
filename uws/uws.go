@@ -483,7 +483,7 @@ func (s *Socket) receive(buffered io.Reader) {
 
 	fin, opcode, size, mask, smask := byte(0), byte(0), -1, make([]byte, 4), 0
 	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
-	roffset, woffset, read, buffer := 0, 0, 0, s.config.Arena.Get(s.config.ReadSize)
+	roffset, woffset, read, buffer := 0, 0, 0, bslab.Get(s.config.ReadSize)
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
 		smask += 4
@@ -612,7 +612,7 @@ close:
 
 					} else {
 						if control == nil {
-							control = s.config.Arena.Get(132)
+							control = bslab.Get(132)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)
@@ -643,7 +643,7 @@ close:
 									break close
 								}
 							}
-							s.config.Arena.Put(control)
+							bslab.Put(control)
 							size, control = -1, nil
 						}
 					}
@@ -682,9 +682,9 @@ close:
 			break close
 		}
 	}
-	s.config.Arena.Put(buffer)
+	bslab.Put(buffer)
 	if control != nil {
-		s.config.Arena.Put(control)
+		bslab.Put(control)
 	}
 	if data != nil {
 		s.config.Arena.Put(data)
