@@ -99,7 +99,6 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 	if exclude != "" {
 		matcher, _ = regexp.Compile(exclude)
 	}
-	funcname = strings.ToUpper(funcname[:1]) + funcname[1:]
 	entries := map[string]*RPACK{}
 	compressor, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
 	count, size, start := 0, int64(0), time.Now()
@@ -194,7 +193,7 @@ func main() {
 }
 
 func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte, ctype string, modified int64, err error) {
-	if rpath == "." && pack != nil {
+	if rpath == "" && pack != nil {
 		for name, entry := range pack {
 			if entry.Default {
 				rpath = name
@@ -232,13 +231,14 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 			response.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
 			response.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
-		prefix, resources, content, ctype, modified, check, size, uncompress := path.Dir(request.URL.Path), strings.Split(request.URL.Path, "+"), []byte{}, "", int64(0), uint32(0), uint32(0), true
+		prefix, resources := strings.TrimPrefix(path.Dir(request.URL.Path), "/"), strings.Split(strings.TrimPrefix(path.Base(request.URL.Path), "/"), "+")
+		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
 		if strings.Contains(request.Header.Get("Accept-Encoding"), "gzip") && request.Header.Get("Range") == "" {
 			response.Header().Set("Content-Encoding", "gzip")
 			uncompress = false
 		}
 		for index, resource := range resources {
-			rpath := path.Join(prefix, path.Base(resource))
+			rpath := path.Join(prefix, resource)
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
 				if len(resources) > 1 && !uncompress {
 					ucheck, usize := binary.LittleEndian.Uint32(pcontent[len(pcontent)-8:]), binary.LittleEndian.Uint32(pcontent[len(pcontent)-4:])
