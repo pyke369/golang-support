@@ -415,7 +415,8 @@ func Boolean(in any) bool {
 	}
 	if value, ok := in.(string); ok {
 		if value = strings.TrimSpace(value); value != "" {
-			if value == "1" || value == "y" || value == "Y" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes") || strings.EqualFold(value, "on") {
+			asn, _ := strconv.Atoi(value)
+			if asn > 0 || strings.EqualFold(value, "true") || strings.EqualFold(value, "y") || strings.EqualFold(value, "yes") || strings.EqualFold(value, "on") {
 				return true
 			}
 		}

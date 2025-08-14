@@ -1,4 +1,4 @@
-package gpio
+package uio
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 	"unsafe"
 )
 
-// GPIO API
 const (
 	_GPIO_GET_CHIPINFO         = 0x8044b401
 	_GPIO_GET_LINEINFO         = 0xc100b405
@@ -73,14 +72,14 @@ type GPIO_LINE struct {
 	Debounce uint32
 }
 
-func NumGPIO() int {
+func GPIOCount() int {
 	if entries, err := filepath.Glob("/dev/gpiochip*"); err == nil {
 		return len(entries)
 	}
 	return 0
 }
 
-func NewGPIO(index ...int) (gpio *GPIO, err error) {
+func GPIONew(index ...int) (gpio *GPIO, err error) {
 	chip := 0
 	if len(index) > 0 {
 		chip = index[0]
@@ -147,11 +146,3 @@ func (g *GPIO) Lines() (lines []*GPIO_LINE) {
 	}
 	return
 }
-
-// PWM API
-
-// I2C API
-
-// SPI API
-
-// UART API
