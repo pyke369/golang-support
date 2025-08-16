@@ -817,8 +817,12 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	return nil
 }
 
-func (c *UConfig) Reload(inline ...bool) error {
-	return c.Load(c.input, inline...)
+func (c *UConfig) Reload() (changed bool, err error) {
+	hash := c.hash
+	if err = c.Load(c.input); err != nil {
+		return
+	}
+	return hash != c.hash, nil
 }
 
 func (c *UConfig) Loaded() bool {
