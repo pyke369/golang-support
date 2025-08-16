@@ -10,8 +10,8 @@ import (
 
 type uart struct{}
 
-func UARTProbe(path string) bool {
-	return false
+func UARTProbe(path string) (active bool, err error) {
+	return false, errors.ErrUnsupported
 }
 
 func UARTDial(path string, speed int, parity, stop byte, timeout time.Duration) (conn *uart, err error) {
