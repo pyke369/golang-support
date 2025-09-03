@@ -35,6 +35,7 @@ func flatten(in []any) (out any) {
 
 				if dok && !aok {
 					value = data
+
 				} else {
 					value = map[string]any{}
 					if aok {
@@ -44,6 +45,7 @@ func flatten(in []any) (out any) {
 					}
 					if dok {
 						value.(map[string]any)["#data"] = data
+
 					} else {
 						for key, svalue := range fields {
 							if _, ok := svalue.([]any); ok && key != "data" && key != "attributes" {
@@ -60,6 +62,7 @@ func flatten(in []any) (out any) {
 							out = []any{}
 						}
 						out = append(out.([]any), value)
+
 					} else {
 						out = value
 					}
@@ -90,12 +93,15 @@ func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 			index, _ := strconv.Atoi(captures[1])
 			if value, ok := out.([]any); !ok || index >= len(value) {
 				return nil, nil
+
 			} else {
 				out = value[index]
 			}
+
 		} else {
 			if value, ok := out.(map[string]any); !ok {
 				return nil, nil
+
 			} else {
 				parent = out
 				out = value[part]
@@ -138,11 +144,13 @@ func parseXML(in string) (out map[string]any) {
 				if value1[name] == nil {
 					value1[name] = element
 					path = append(path, name)
+
 				} else {
 					if value2, ok := value1[name].([]any); ok {
 						value2 = append(value2, element)
 						value1[name] = value2
 						path = append(path, []string{name, "[" + strconv.Itoa(len(value2)-1) + "]"}...)
+
 					} else {
 						value1[name] = []any{value1[name], element}
 						path = append(path, []string{name, "[1]"}...)
@@ -163,18 +171,22 @@ func parseXML(in string) (out map[string]any) {
 				if len(data) != 0 {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
+
 					} else {
 						if steps == 2 {
 							parent.(map[string]any)[last].([]any)[index] = string(data)
+
 						} else {
 							parent.(map[string]any)[last] = string(data)
 						}
 					}
 					data = nil
+
 				} else {
 					if value, ok := current.(map[string]any); ok && len(value) == 0 {
 						if steps == 2 {
 							parent.(map[string]any)[last] = parent.(map[string]any)[last].([]any)[:len(parent.(map[string]any)[last].([]any))-1]
+
 						} else {
 							delete(parent.(map[string]any), last)
 						}
@@ -213,6 +225,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 						for index := 0; index < length; index++ {
 							indexes = append(indexes, index)
 						}
+
 					} else {
 						if captures[2] != "" && captures[3] != "" {
 							start, _ := strconv.Atoi(captures[2])
@@ -225,6 +238,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 									indexes = append(indexes, index)
 								}
 							}
+
 						} else {
 							for _, value := range strings.Split(captures[1], ",") {
 								if index, err := strconv.Atoi(value); err == nil {
@@ -241,6 +255,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 					for _, index := range indexes {
 						if depth == last {
 							out[key] = append(out[key].([]any), next[index])
+
 						} else {
 							out[key] = append(out[key].([]any), Mapper(
 								matcher, next[index],
@@ -248,15 +263,18 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 						}
 					}
 					break
+
 				} else if next, ok := current.(map[string]any); ok {
 					out[key] = []any{}
 					out[key] = append(out[key].([]any), Mapper(
 						matcher, next,
 						map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 					break
+
 				} else {
 					break
 				}
+
 			} else {
 				if next, ok := current.(map[string]any); ok {
 					if part[0] == '~' {
@@ -273,14 +291,17 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 							if depth == last {
 								if len(indexes) > 1 {
 									out[key] = append(out[key].([]any), next[index])
+
 								} else {
 									out[key] = next[index]
 								}
+
 							} else {
 								if len(indexes) > 1 {
 									out[key] = append(out[key].([]any), Mapper(
 										matcher, next[index],
 										map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
+
 								} else {
 									out[key] = Mapper(
 										matcher, next[index],
@@ -289,18 +310,22 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 							}
 						}
 						break
+
 					} else {
 						if _, exists := next[part]; exists {
 							if depth == last {
 								out[key] = next[part]
 								break
+
 							} else {
 								current = next[part]
 							}
+
 						} else {
 							break
 						}
 					}
+
 				} else {
 					break
 				}

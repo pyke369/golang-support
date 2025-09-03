@@ -406,6 +406,106 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 	return out
 }
 
+func Flatten(in any, out map[string]string, extra ...map[string]any) {
+	separator, path, options := ".", "", map[string]any{}
+	if len(extra) > 0 && extra[0] != nil {
+		options = extra[0]
+	}
+	if value, ok := options["separator"].(string); ok {
+		separator = value
+	}
+	if value, ok := options["_path"].(string); ok {
+		path = value
+	}
+
+	if item, ok := in.(map[string]any); ok && len(item) != 0 {
+		for key, value := range item {
+			kpath := key
+			if path != "" {
+				kpath = path + separator + kpath
+			}
+			options["_path"] = kpath
+			Flatten(value, out, options)
+		}
+
+	} else if item, ok := in.([]any); ok && len(item) != 0 {
+		for index, value := range item {
+			kpath := "[" + strconv.Itoa(index) + "]"
+			if path != "" {
+				kpath = path + separator + kpath
+			}
+			options["_path"] = kpath
+			Flatten(value, out, options)
+		}
+
+	} else if value, ok := in.(bool); ok {
+		if value {
+			out[path] = "true"
+		} else {
+			out[path] = "false"
+		}
+
+	} else if value := Number(in); value != 0 {
+		if float64(int64(value)) != value {
+			out[path] = strconv.FormatFloat(value, 'f', -1, 64)
+		} else {
+			out[path] = strconv.FormatInt(int64(value), 10)
+		}
+
+	} else if value, ok := in.(string); ok {
+		if value := strings.TrimSpace(value); value != "" {
+			out[path] = strings.TrimSpace(value)
+		}
+
+	} else if in == nil {
+		out[path] = ""
+	}
+
+	if path == "" {
+		if filter, ok := options["filter"].(map[string][2]string); ok && len(filter) != 0 {
+			filtered := map[string]string{}
+		done:
+			for fpath, fvalue := range filter {
+				fpath, fvalue[0], fvalue[1] = strings.TrimSpace(fpath), strings.TrimSpace(fvalue[0]), strings.TrimSpace(fvalue[1])
+				if strings.HasPrefix(fpath, "~") {
+					matcher := rcache.Get(strings.TrimSpace(fpath[1:]))
+					for path := range out {
+						if matcher.MatchString(path) {
+							if fvalue[0] != "" && !rcache.Get(fvalue[0]).MatchString(out[path]) {
+								filtered = map[string]string{}
+								break done
+							}
+							if fvalue[1] != "" {
+								value := filtered[fvalue[1]]
+								if value != "" {
+									value += " "
+								}
+								filtered[fvalue[1]] = value + out[path]
+							}
+						}
+					}
+
+				} else {
+					value, exists := out[fpath]
+					if fvalue[0] != "" && (!exists || !rcache.Get(fvalue[0]).MatchString(value)) {
+						filtered = map[string]string{}
+						break
+					}
+					if fvalue[1] != "" && exists {
+						filtered[fvalue[1]] = strings.TrimSpace(value)
+					}
+				}
+			}
+			for key := range out {
+				delete(out, key)
+			}
+			for key, value := range filtered {
+				out[key] = value
+			}
+		}
+	}
+}
+
 func Boolean(in any) bool {
 	if cast, ok := in.(bool); ok {
 		return cast
