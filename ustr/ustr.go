@@ -1,8 +1,10 @@
 package ustr
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"net"
 	"reflect"
 	"sort"
 	"strconv"
@@ -140,6 +142,19 @@ func Hex(in []byte, extra ...byte) string {
 		}
 	}
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func HexInt(in uint64, size int) string {
+	size = min(8, max(1, size))
+	value := [8]byte{}
+	binary.BigEndian.PutUint64(value[:], in)
+	return Hex(value[8-size:])
+}
+
+func IPv4(in uint32) string {
+	ip := net.IPv4(0, 0, 0, 0).To4()
+	binary.BigEndian.PutUint32(ip, in)
+	return ip.String()
 }
 
 func Pointer(in any) string {
