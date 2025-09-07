@@ -119,6 +119,7 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 func (d *DYNACERT) TLSConfig(in ...*tls.Config) (out *tls.Config) {
 	if len(in) > 0 && in[0] != nil {
 		out = in[0].Clone()
+
 	} else {
 		out = &tls.Config{MinVersion: tls.VersionTLS13}
 	}

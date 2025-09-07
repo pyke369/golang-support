@@ -199,6 +199,7 @@ func server() {
 			<-signals
 			if err := db.Load(os.Args[3]); err != nil {
 				os.Stderr.WriteString(err.Error() + "\n")
+
 			} else {
 				os.Stderr.WriteString("- reloaded database " + os.Args[3] + " (version " + db.Version + ")\n")
 			}
@@ -212,6 +213,7 @@ func server() {
 			for key, value := range lookup {
 				response.Header().Set("X-"+strings.ReplaceAll(key, "_", "-"), value)
 			}
+
 		} else {
 			response.Header().Set("Content-Type", "application/json")
 			data, _ := json.Marshal(lookup)
@@ -224,6 +226,7 @@ func server() {
 	os.Stderr.WriteString("- started server (listening to " + os.Args[2] + ")\n")
 	if len(parts) > 1 {
 		server.ListenAndServeTLS(parts[1], parts[2])
+
 	} else {
 		server.ListenAndServe()
 	}

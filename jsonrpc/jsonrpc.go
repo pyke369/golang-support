@@ -48,6 +48,7 @@ type CALL struct {
 	id           string
 	paired       bool
 }
+
 type TRANSPORT_OPTIONS struct {
 	URL       string
 	Headers   map[string]string
@@ -55,6 +56,7 @@ type TRANSPORT_OPTIONS struct {
 	Context   any
 	Transport *http.Transport
 }
+
 type TRANSPORT func([]byte, any) ([]byte, error)
 
 type REQUEST struct {
@@ -63,20 +65,24 @@ type REQUEST struct {
 	Method  string
 	Params  any
 }
+
 type RESPONSE struct {
 	Id     any
 	Result any
 	Error  *ERROR
 }
+
 type ERROR struct {
 	Code    int
 	Message string
 	Data    any
 }
+
 type ROUTE struct {
 	Handler HANDLER
 	Context any
 }
+
 type HANDLER func(map[string]any, any) (any, *ERROR)
 
 var httpDefaultTransport *http.Transport
@@ -117,9 +123,11 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 			if response.StatusCode/100 != 2 || len(out) == 0 {
 				return nil, errors.New("jsonrpc: HTTP error " + strconv.Itoa(response.StatusCode))
 			}
+
 		} else {
 			return nil, ustr.Wrap(err, "jsonrpc")
 		}
+
 	} else {
 		return nil, ustr.Wrap(err, "jsonrpc")
 	}
@@ -138,6 +146,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 		call.id, call.paired = call.Id, false
 		if call.Notification {
 			call.id = ""
+
 		} else if call.Id == "" {
 			call.id = uuid.New().String()
 		}
@@ -156,6 +165,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 					payload = append(payload, '[')
 					payload = append(payload, marshaled...)
 					payload = append(payload, ']')
+
 				} else {
 					payload = append(payload, marshaled...)
 				}
@@ -202,6 +212,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 			if call, exists := ids[id]; exists {
 				call.Result, call.Error, call.paired = response.Result, response.Error, true
 			}
+
 		} else {
 			calls = append(calls, &CALL{Id: id, Result: response.Result, Error: response.Error})
 		}
@@ -244,6 +255,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
 	if len(in) == 0 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
+
 	} else {
 		if in[0] != '[' {
 			batch = false
@@ -252,9 +264,11 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 		}
 		if json.Unmarshal(in, &requests) != nil {
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
+
 		} else {
 			if len(requests) == 0 || len(requests) > 1024 || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
+
 			} else {
 				running, sink := 0, make(chan *RESPONSE, 1024)
 				for _, request := range requests {
@@ -326,6 +340,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 						}
 						if result, err := routes[request.Method].Handler(request.Params.(map[string]any), ctx); err != nil {
 							sink <- &RESPONSE{Id: request.Id, Error: err}
+
 						} else {
 							sink <- &RESPONSE{Id: request.Id, Result: result}
 						}
@@ -386,10 +401,12 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 				}
 			}
 			out = append(out, '}')
+
 		} else {
 			out = append(out, `"result":`...)
 			if result, err := json.Marshal(response.Result); err == nil {
 				out = append(out, result...)
+
 			} else {
 				out = append(out, `null`...)
 			}
@@ -441,6 +458,7 @@ func Flatten(in any, out map[string]string, extra ...map[string]any) {
 	} else if value, ok := in.(bool); ok {
 		if value {
 			out[path] = "true"
+
 		} else {
 			out[path] = "false"
 		}
@@ -448,6 +466,7 @@ func Flatten(in any, out map[string]string, extra ...map[string]any) {
 	} else if value := Number(in); value != 0 {
 		if float64(int64(value)) != value {
 			out[path] = strconv.FormatFloat(value, 'f', -1, 64)
+
 		} else {
 			out[path] = strconv.FormatInt(int64(value), 10)
 		}
@@ -524,12 +543,20 @@ func Boolean(in any) bool {
 	}
 	return false
 }
-func String(in any) string {
+
+func String(in any, fallback ...string) string {
 	if cast, ok := in.(string); ok {
+		if cast == "" && len(fallback) != 0 {
+			return fallback[0]
+		}
 		return cast
+	}
+	if len(fallback) != 0 {
+		return fallback[0]
 	}
 	return ""
 }
+
 func Number(in any, fallback ...float64) float64 {
 	if in != nil {
 		switch reflect.TypeOf(in).Kind() {
@@ -572,12 +599,14 @@ func Slice(in any) (out []any) {
 	}
 	return []any{}
 }
+
 func SliceItem(in []any, index int) any {
 	if index >= len(in) {
 		return nil
 	}
 	return in[index]
 }
+
 func StringSlice(in any, extra ...bool) (out []string) {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := in.([]string); ok {
@@ -603,12 +632,14 @@ func StringSlice(in any, extra ...bool) (out []string) {
 	}
 	return
 }
+
 func StringSliceItem(in []string, index int) string {
 	if index >= len(in) {
 		return ""
 	}
 	return in[index]
 }
+
 func NumberSlice(in any, extra ...bool) (out []float64) {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := in.([]float64); ok {
@@ -634,6 +665,7 @@ func NumberSlice(in any, extra ...bool) (out []float64) {
 	}
 	return
 }
+
 func NumberSliceItem(in []float64, index int) float64 {
 	if index >= len(in) {
 		return 0.0
@@ -655,6 +687,7 @@ func Map(in any) (out map[string]any) {
 	}
 	return map[string]any{}
 }
+
 func StringMap(in any, extra ...bool) (out map[string]string) {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := in.(map[string]string); ok {
@@ -680,6 +713,7 @@ func StringMap(in any, extra ...bool) (out map[string]string) {
 	}
 	return
 }
+
 func NumberMap(in any, extra ...bool) (out map[string]float64) {
 	noempty := len(extra) > 0 && extra[0]
 	if cast, ok := in.(map[string]float64); ok {
@@ -705,6 +739,7 @@ func NumberMap(in any, extra ...bool) (out map[string]float64) {
 	}
 	return
 }
+
 func IntegerMap(in any, extra ...bool) (out map[string]int) {
 	out = map[string]int{}
 	for key, value := range NumberMap(in, extra...) {
@@ -719,24 +754,29 @@ func KeysLength(in any) (out int) {
 	}
 	return
 }
+
 func MapKeys(in any) (out []string) {
 	for key := range Map(in) {
 		out = append(out, key)
 	}
 	sort.Strings(out)
+
 	return
 }
+
 func SwitchMap(in map[string]string) (out map[string]string) {
 	out = map[string]string{}
 	for key, value := range in {
 		out[value] = key
 	}
+
 	return
 }
 
 func Size(in string, fallback int64, extra ...bool) int64 {
 	return SizeBounds(in, fallback, 0, math.MaxInt64, extra...)
 }
+
 func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out int64) {
 	if captures := rcache.Get(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`).FindStringSubmatch(strings.TrimSpace(strings.ToUpper(in))); captures != nil {
 		value, err := strconv.ParseFloat(captures[1], 64)
@@ -748,15 +788,17 @@ func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out 
 			scale = float64(1024)
 		}
 		out = int64(value * math.Pow(scale, float64(strings.Index("_KMGTP", captures[2]))))
-	} else {
-		return fallback
+		return max(min(out, highest), max(0, lowest))
+
 	}
-	return max(min(out, highest), max(0, lowest))
+
+	return fallback
 }
 
 func Duration(in string, fallback float64) time.Duration {
 	return DurationBounds(in, fallback, 0, math.MaxFloat64)
 }
+
 func DurationBounds(in string, fallback, lowest, highest float64) (out time.Duration) {
 	in = strings.TrimSpace(in)
 
@@ -794,6 +836,7 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 				}
 			}
 		}
+
 	} else if captures := rcache.Get(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`).FindStringSubmatch(in); captures != nil {
 		hours, _ := strconv.ParseFloat(captures[1], 64)
 		minutes, _ := strconv.ParseFloat(captures[2], 64)
@@ -801,5 +844,6 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 		milliseconds, _ := strconv.ParseFloat(captures[4], 64)
 		value = (hours * 3600) + (min(minutes, 59) * 60) + min(seconds, 59) + (milliseconds / 1000)
 	}
+
 	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
 }

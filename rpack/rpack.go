@@ -49,6 +49,7 @@ func init() {
 		x2ntable[n] = p
 	}
 }
+
 func multmodp(a, b uint32) uint32 {
 	m, p := uint32(1<<31), uint32(0)
 	for {
@@ -61,12 +62,14 @@ func multmodp(a, b uint32) uint32 {
 		m >>= 1
 		if b&1 != 0 {
 			b = (b >> 1) ^ crc32.IEEE
+
 		} else {
 			b >>= 1
 		}
 	}
 	return p
 }
+
 func x2nmodp(n, k uint32) uint32 {
 	p := uint32(1 << 31)
 	for n > 0 {
@@ -78,6 +81,7 @@ func x2nmodp(n, k uint32) uint32 {
 	}
 	return p
 }
+
 func combine(crc1, crc2, len2 uint32) uint32 {
 	return multmodp(x2nmodp(len2, 3), crc1) ^ crc2
 }
@@ -252,9 +256,11 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 						content = append(content, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}...)
 						binary.LittleEndian.PutUint32(content[len(content)-8:], check)
 						binary.LittleEndian.PutUint32(content[len(content)-4:], size)
+
 					} else {
 						content[len(content)-5] = 0
 					}
+
 				} else {
 					content = append(content, pcontent...)
 				}
@@ -262,6 +268,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 				if pmodified > modified {
 					modified = pmodified
 				}
+
 			} else {
 				response.WriteHeader(http.StatusNotFound)
 				return

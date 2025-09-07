@@ -146,6 +146,7 @@ func (c *CHash) AddTarget(name string, weight uint8) bool {
 	}
 	return false
 }
+
 func (c *CHash) RemoveTarget(name string) bool {
 	c.mu.Lock()
 	delete(c.targets, name)
@@ -153,6 +154,7 @@ func (c *CHash) RemoveTarget(name string) bool {
 	c.mu.Unlock()
 	return true
 }
+
 func (c *CHash) ClearTargets() bool {
 	c.mu.Lock()
 	c.targets = make(map[string]uint8)
@@ -205,6 +207,7 @@ func (c *CHash) Serialize() []byte {
 	c.mu.RUnlock()
 	return serialized
 }
+
 func (c *CHash) FileSerialize(path string) bool {
 	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -260,6 +263,7 @@ func (c *CHash) Unserialize(serialized []byte) bool {
 	c.mu.Unlock()
 	return true
 }
+
 func (c *CHash) FileUnserialize(path string) bool {
 	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -303,6 +307,7 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 			}
 			if hash > c.ring[start].hash {
 				start += span
+
 			} else {
 				start -= span
 			}
@@ -332,6 +337,7 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 	c.mu.RUnlock()
 	return result
 }
+
 func (c *CHash) LookupBalance(candidate string, count int) string {
 	result := c.Lookup(candidate, count)
 	if len(result) > 0 {

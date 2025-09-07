@@ -25,6 +25,7 @@ type TCPAddr struct {
 func (a TCPAddr) Network() string {
 	return "tcp"
 }
+
 func (a TCPAddr) String() string {
 	return net.JoinHostPort(a.addr, a.port)
 }
@@ -115,36 +116,45 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	}
 	return
 }
+
 func (c *TCPConn) Write(b []byte) (n int, err error) {
 	return c.conn.Write(b)
 }
+
 func (c *TCPConn) Close() error {
 	return c.conn.Close()
 }
+
 func (c *TCPConn) LocalAddr() net.Addr {
 	if c.local != nil {
 		return *c.local
 	}
 	return c.conn.LocalAddr()
 }
+
 func (c *TCPConn) RemoteAddr() net.Addr {
 	if c.remote != nil {
 		return *c.remote
 	}
 	return c.conn.RemoteAddr()
 }
+
 func (c *TCPConn) SetDeadline(t time.Time) error {
 	return c.conn.SetDeadline(t)
 }
+
 func (c *TCPConn) SetReadDeadline(t time.Time) error {
 	return c.conn.SetReadDeadline(t)
 }
+
 func (c *TCPConn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
+
 func (c *TCPConn) Attrs() map[int][]byte {
 	return c.attrs
 }
+
 func (c *TCPConn) Attr(attr int) []byte {
 	if c.attrs != nil {
 		return c.attrs[attr]

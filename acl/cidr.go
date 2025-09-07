@@ -25,6 +25,7 @@ func CIDR(in string, values []string, fallback bool) (match bool, index int) {
 	}
 	return fallback, -1
 }
+
 func CIDRConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
 	return CIDR(in, config.Strings(path), fallback)
 }

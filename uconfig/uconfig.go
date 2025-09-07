@@ -83,13 +83,16 @@ done:
 			if len(sparts) == 1 {
 				if !negate && aindex < len(os.Args)-1 && (os.Args[aindex+1] == "" || os.Args[aindex+1][0] != '-') {
 					options[name] = os.Args[aindex+1]
+
 				} else {
 					if negate {
 						options[name] = "false"
+
 					} else {
 						options[name] = "true"
 					}
 				}
+
 			} else {
 				options[name] = sparts[1]
 			}
@@ -292,6 +295,7 @@ func (c *UConfig) SetSeparator(separator string) {
 func (c *UConfig) SetPrefix(prefix string) {
 	c.prefix = prefix
 }
+
 func (c *UConfig) GetPrefix() string {
 	return c.prefix
 }
@@ -329,6 +333,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				if char == '\r' || char == ';' {
 					char = '\n'
 					payload[cindex] = char
+
 				} else if char == '\t' {
 					char = ' '
 					payload[cindex] = char
@@ -420,6 +425,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 										insert = insert[:start+sizes[path]]
 										if read, err := handle.Read(insert[start:]); err != nil || read != sizes[path] {
 											insert = insert[:start]
+
 										} else {
 											insert = expand(insert, start)
 										}
@@ -657,6 +663,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 						if char == '<' && previous == '<' {
 							mstart = cindex - 1
 						}
+
 					} else if char == '>' && previous == '>' {
 						for index := mstart; index <= cindex; index++ {
 							payload[index] = ' '
@@ -698,6 +705,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 					offset--
 					payload[offset] = '"'
 					tokens[index-1][1]--
+
 				} else {
 					payload = grow(payload, 1, c.arena)
 					payload = slices.Insert(payload, offset, '"')
@@ -709,6 +717,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				if index < len(tokens)-1 && offset+length < len(payload)-1 && payload[offset+length] == ' ' {
 					payload[offset+length] = '"'
 					tokens[index+1][1]--
+
 				} else {
 					payload = grow(payload, 1, c.arena)
 					payload = slices.Insert(payload, offset+length, '"')
@@ -752,6 +761,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 				offset--
 				payload[offset] = ':'
 				tokens[index-1][1]--
+
 			} else {
 				payload = grow(payload, 1, c.arena)
 				payload = slices.Insert(payload, offset, ':')
@@ -828,15 +838,19 @@ func (c *UConfig) Reload() (changed bool, err error) {
 func (c *UConfig) Loaded() bool {
 	return c.config != nil
 }
+
 func (c *UConfig) Name() string {
 	return c.name
 }
+
 func (c *UConfig) Top() string {
 	return c.top
 }
+
 func (c *UConfig) Hash() uint32 {
 	return c.hash
 }
+
 func (c *UConfig) Dump() string {
 	if c.config != nil {
 		config := &bytes.Buffer{}
@@ -882,6 +896,7 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	if c.prefix != "" {
 		if path == "" {
 			path = c.prefix
+
 		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
 			path = prefix + path
 		}
@@ -1033,9 +1048,11 @@ func (c *UConfig) String(path string, fallback ...string) string {
 	}
 	return ""
 }
+
 func (c *UConfig) StringMatch(path, fallback, match string) string {
 	return c.StringMatchCaptures(path, fallback, match)[0]
 }
+
 func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
 	value, exists := c.value(path)
 	if !exists {
@@ -1049,6 +1066,7 @@ func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
 	}
 	return []string{value}
 }
+
 func (c *UConfig) StringMap(path string) (out map[string]string) {
 	if paths := c.Paths(path); len(paths) != 0 {
 		out = map[string]string{}
@@ -1060,13 +1078,16 @@ func (c *UConfig) StringMap(path string) (out map[string]string) {
 	}
 	return
 }
+
 func (c *UConfig) Strings(path string) (out []string) {
 	if value := strings.TrimSpace(c.String(path)); value != "" {
 		out = append(out, value)
+
 	} else {
 		for _, path := range c.Paths(path) {
 			if value := strings.TrimSpace(c.String(path)); value != "" {
 				out = append(out, value)
+
 			} else {
 				if value := strings.Join(c.Strings(path), " "); value != "" {
 					out = append(out, value)
@@ -1084,6 +1105,7 @@ func (c *UConfig) Integer(path string, extra ...int64) int64 {
 	}
 	return c.IntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
+
 func (c *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) int64 {
 	value, ok := c.value(path)
 	if !ok {
@@ -1103,6 +1125,7 @@ func (c *UConfig) Float(path string, extra ...float64) float64 {
 	}
 	return c.FloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
+
 func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) float64 {
 	value, ok := c.value(path)
 	if !ok {
@@ -1118,6 +1141,7 @@ func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) fl
 func (c *UConfig) Size(path string, fallback int64, extra ...bool) int64 {
 	return c.SizeBounds(path, fallback, 0, math.MaxInt64, extra...)
 }
+
 func (c *UConfig) SizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
 	if value, ok := c.value(path); ok {
 		return j.SizeBounds(value, fallback, lowest, highest, extra...)
@@ -1132,6 +1156,7 @@ func (c *UConfig) Duration(path string, extra ...float64) time.Duration {
 	}
 	return c.DurationBounds(path, fallback, 0, math.MaxFloat64)
 }
+
 func (c *UConfig) DurationBounds(path string, fallback, lowest, highest float64) time.Duration {
 	if value, ok := c.value(path); ok {
 		return j.DurationBounds(value, fallback, lowest, highest)
@@ -1151,12 +1176,14 @@ func Args() (args []string) {
 				if option != "-" && option != "--" && !strings.Contains(option, "=") && index < len(os.Args)-1 && (os.Args[index+1] == "" || os.Args[index+1][0] != '-') {
 					index++
 				}
+
 			} else {
 				args = []string{}
 			}
 		}
 		if args != nil {
 			args = append(args, option)
+
 		} else if option == "--" {
 			args = []string{}
 		}

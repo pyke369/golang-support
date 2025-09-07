@@ -33,6 +33,7 @@ type Group struct {
 	peers      map[string]*Peer
 	processors map[*Processor]struct{}
 }
+
 type Speaker struct {
 	name      string
 	key       string
@@ -43,6 +44,7 @@ type Speaker struct {
 	templates map[*Template]struct{}
 	peers     map[string]*Peer
 }
+
 type Template struct {
 	name     string
 	speaker  *Speaker
@@ -54,6 +56,7 @@ type Template struct {
 	prefixes map[string]*net.IPNet
 	peers    map[string]*Peer
 }
+
 type Peer struct {
 	name             string
 	key              string
@@ -91,6 +94,7 @@ type Peer struct {
 	dmu              sync.Mutex
 	data             []byte
 }
+
 type Processor struct {
 	OnPeer    func(group *Group, speaker *Speaker, peer *Peer, reason map[string]any)
 	OnState   func(group *Group, speaker *Speaker, peer *Peer, from, to string, reason map[string]any)
@@ -137,6 +141,7 @@ func AddProcessor(processor *Processor) {
 	}
 	mu.Unlock()
 }
+
 func RemoveProcessor(processor *Processor) {
 	mu.Lock()
 	if processor != nil {
@@ -149,6 +154,7 @@ func RemoveProcessor(processor *Processor) {
 	}
 	mu.Unlock()
 }
+
 func Enable(enabled bool) {
 	mu.RLock()
 	for _, group := range groups {
@@ -156,6 +162,7 @@ func Enable(enabled bool) {
 	}
 	mu.RUnlock()
 }
+
 func Update(update map[string]any) {
 	mu.RLock()
 	for _, group := range groups {
@@ -163,6 +170,7 @@ func Update(update map[string]any) {
 	}
 	mu.RUnlock()
 }
+
 func Groups() (list []*Group) {
 	list = []*Group{}
 	mu.RLock()
@@ -172,6 +180,7 @@ func Groups() (list []*Group) {
 	mu.RUnlock()
 	return
 }
+
 func Speakers() (list []*Speaker) {
 	list = []*Speaker{}
 	mu.RLock()
@@ -181,6 +190,7 @@ func Speakers() (list []*Speaker) {
 	mu.RUnlock()
 	return
 }
+
 func Peers() (peers []*Peer) {
 	peers = []*Peer{}
 	mu.RLock()
@@ -195,6 +205,7 @@ func init() {
 	go dispatch("global", &mu, messages, processors)
 	groups["default"].init()
 }
+
 func dispatch(category string, lock *sync.RWMutex, messages chan *message, processors map[*Processor]struct{}) {
 	for {
 		msg := <-messages
@@ -280,6 +291,7 @@ func (g *Group) AddProcessor(processor *Processor) {
 	}
 	g.mu.Unlock()
 }
+
 func (g *Group) RemoveProcessor(processor *Processor) {
 	g.mu.Lock()
 	if processor != nil {
@@ -292,6 +304,7 @@ func (g *Group) RemoveProcessor(processor *Processor) {
 	}
 	g.mu.Unlock()
 }
+
 func (g *Group) Enable(enabled bool) {
 	g.mu.RLock()
 	for _, peer := range g.peers {
@@ -299,6 +312,7 @@ func (g *Group) Enable(enabled bool) {
 	}
 	g.mu.RUnlock()
 }
+
 func (g *Group) Update(update map[string]any) {
 	g.mu.RLock()
 	for _, peer := range g.peers {
@@ -306,9 +320,11 @@ func (g *Group) Update(update map[string]any) {
 	}
 	g.mu.RUnlock()
 }
+
 func (g *Group) Name() string {
 	return g.name
 }
+
 func (g *Group) Peers() (peers []*Peer) {
 	peers = []*Peer{}
 	g.mu.RLock()
@@ -318,6 +334,7 @@ func (g *Group) Peers() (peers []*Peer) {
 	g.mu.RUnlock()
 	return
 }
+
 func (g *Group) init() {
 	go dispatch("group", &g.mu, g.messages, g.processors)
 }
@@ -397,9 +414,11 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 								default:
 								}
 								return
+
 							} else {
 								reason = err.Error()
 							}
+
 						} else {
 							reason = "unauthorized peer " + address.String()
 						}
@@ -413,6 +432,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 	speakers[speaker.key] = speaker
 	return
 }
+
 func (s *Speaker) AddTemplate(remotes []string, localASN, peerASN string, options ...map[string]any) (template *Template, err error) {
 	s.mu.RLock()
 	if s.closed {
@@ -452,6 +472,7 @@ func (s *Speaker) AddTemplate(remotes []string, localASN, peerASN string, option
 	s.mu.Unlock()
 	return
 }
+
 func (s *Speaker) AddPeer(remote, localASN, peerASN string, options ...map[string]any) (peer *Peer, err error) {
 	s.mu.RLock()
 	if s.closed {
@@ -480,6 +501,7 @@ func (s *Speaker) AddPeer(remote, localASN, peerASN string, options ...map[strin
 	mu.RUnlock()
 	if value := peer.speaker.local.IP.To4(); value != nil {
 		peer.id = int(binary.BigEndian.Uint32(value))
+
 	} else if value := peer.speaker.local.IP.To16(); value != nil {
 		peer.id = int(binary.BigEndian.Uint32(value[12:]))
 	}
@@ -573,6 +595,7 @@ func (s *Speaker) AddPeer(remote, localASN, peerASN string, options ...map[strin
 
 	return
 }
+
 func (s *Speaker) Close() {
 	peers := []*Peer{}
 	s.mu.Lock()
@@ -593,9 +616,11 @@ func (s *Speaker) Close() {
 	delete(speakers, s.key)
 	mu.Unlock()
 }
+
 func (s *Speaker) Name() string {
 	return s.name
 }
+
 func (s *Speaker) Templates() (templates []*Template) {
 	templates = []*Template{}
 	s.mu.RLock()
@@ -605,6 +630,7 @@ func (s *Speaker) Templates() (templates []*Template) {
 	s.mu.RUnlock()
 	return
 }
+
 func (s *Speaker) Peers() (peers []*Peer) {
 	peers = []*Peer{}
 	s.mu.RLock()
@@ -624,6 +650,7 @@ func (t *Template) AddPrefix(prefix string) {
 		t.mu.Unlock()
 	}
 }
+
 func (t *Template) RemovePrefix(prefix string) {
 	modified, count := false, 0
 	if _, prefix, err := net.ParseCIDR(prefix); err == nil {
@@ -661,6 +688,7 @@ func (t *Template) RemovePrefix(prefix string) {
 		}
 	}
 }
+
 func (t *Template) Remove() {
 	peers := []*Peer{}
 	t.mu.Lock()
@@ -678,6 +706,7 @@ func (t *Template) Remove() {
 	delete(t.speaker.templates, t)
 	t.speaker.mu.Unlock()
 }
+
 func (t *Template) Name() string {
 	return t.name
 }
@@ -694,6 +723,7 @@ func (p *Peer) AddProcessor(processor *Processor) {
 	}
 	p.mu.Unlock()
 }
+
 func (p *Peer) RemoveProcessor(processor *Processor) {
 	p.mu.Lock()
 	if processor != nil {
@@ -706,6 +736,7 @@ func (p *Peer) RemoveProcessor(processor *Processor) {
 	}
 	p.mu.Unlock()
 }
+
 func (p *Peer) Enable(enabled bool) {
 	p.mu.Lock()
 	if !p.removed {
@@ -713,6 +744,7 @@ func (p *Peer) Enable(enabled bool) {
 	}
 	p.mu.Unlock()
 }
+
 func (p *Peer) Update(update map[string]any) {
 	if p.State() != stateEstablished {
 		return
@@ -747,6 +779,7 @@ func (p *Peer) Update(update map[string]any) {
 							return
 						}
 					}
+
 				} else {
 					data, alength := []byte{0, 0, 0, 0, 0x90, byte(attributes["unreachable"]), 0, 0}, 3
 					data = binary.BigEndian.AppendUint16(data, uint16(family[0]))
@@ -792,6 +825,7 @@ func (p *Peer) Update(update map[string]any) {
 		if _, exists := attributes["as-path"]; !exists {
 			if p.localASN == p.peerASN {
 				attributes["as-path"] = ""
+
 			} else {
 				attributes["as-path"] = strconv.Itoa(p.localASN)
 			}
@@ -813,6 +847,7 @@ func (p *Peer) Update(update map[string]any) {
 							}
 						}
 						attributes["next-hop"] = nexthop
+
 					} else {
 						delete(attributes, "next-hop")
 					}
@@ -836,6 +871,7 @@ func (p *Peer) Update(update map[string]any) {
 								binary.BigEndian.PutUint16(data[2:], uint16(len(data)-4))
 							}
 							data = append(data, value...)
+
 						} else {
 							// TODO encode prefixes as MP_REACH_NLRI
 							binary.BigEndian.PutUint16(data[2:], uint16(len(data)-4))
@@ -854,6 +890,7 @@ func (p *Peer) Update(update map[string]any) {
 		}
 	}
 }
+
 func (p *Peer) EOR(list ...[]Family) {
 	families := p.LocalFamilies()
 	if len(list) > 0 && len(list[0]) > 0 {
@@ -869,6 +906,7 @@ func (p *Peer) EOR(list ...[]Family) {
 		p.Update(map[string]any{"unreachable": unreachable})
 	}
 }
+
 func (p *Peer) Refresh(family Family, enhanced ...int) {
 	if p.State() != stateEstablished {
 		return
@@ -883,6 +921,7 @@ func (p *Peer) Refresh(family Family, enhanced ...int) {
 		p.send(messageRefresh, []byte{byte(family[0] >> 8), byte(family[0]), byte(code), byte(family[1])})
 	}
 }
+
 func (p *Peer) Cease(subcode int, message string) {
 	if p.State() != stateEstablished {
 		return
@@ -892,6 +931,7 @@ func (p *Peer) Cease(subcode int, message string) {
 	}
 	p.notification(notificationCease, subcode, message)
 }
+
 func (p *Peer) Remove() {
 	p.idle(true)
 }
@@ -899,21 +939,26 @@ func (p *Peer) Remove() {
 func (p *Peer) Group() *Group {
 	return p.group
 }
+
 func (p *Peer) Speaker() *Speaker {
 	return p.speaker
 }
+
 func (p *Peer) Template() *Template {
 	return p.template
 }
+
 func (p *Peer) Name() string {
 	return p.name
 }
+
 func (p *Peer) State() (state string) {
 	p.mu.RLock()
 	state = p.state
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) Duration() (duration time.Duration) {
 	p.mu.RLock()
 	if !p.removed && p.state == stateEstablished {
@@ -922,6 +967,7 @@ func (p *Peer) Duration() (duration time.Duration) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) LocalAddr() (address string) {
 	p.mu.RLock()
 	if !p.removed && p.conn != nil {
@@ -930,6 +976,7 @@ func (p *Peer) LocalAddr() (address string) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) RemoteAddr() (address string) {
 	p.mu.RLock()
 	if !p.removed && p.conn != nil {
@@ -938,18 +985,21 @@ func (p *Peer) RemoteAddr() (address string) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) LocalASN() (asn int) {
 	p.mu.RLock()
 	asn = p.localASN
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) PeerASN() (asn int) {
 	p.mu.RLock()
 	asn = p.peerASN
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) LocalCapabilities() (list []Capability) {
 	p.mu.RLock()
 	list = append(list, []Capability{NewCapability("extended-message"), NewCapability("asn4(" + strconv.Itoa(p.localASN) + ")")}...)
@@ -959,10 +1009,12 @@ func (p *Peer) LocalCapabilities() (list []Capability) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) LocalCapability(in string) (capability Capability, exists bool) {
 	capability, exists = p.capabilities[capabilities[in]]
 	return
 }
+
 func (p *Peer) PeerCapabilities() (list []Capability) {
 	p.mu.RLock()
 	if p.state == stateEstablished {
@@ -973,10 +1025,12 @@ func (p *Peer) PeerCapabilities() (list []Capability) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) PeerCapability(in string) (capability Capability, exists bool) {
 	capability, exists = p.peerCapabilities[capabilities[in]]
 	return
 }
+
 func (p *Peer) LocalFamilies() (list []Family) {
 	p.mu.RLock()
 	for family := range p.families {
@@ -985,10 +1039,12 @@ func (p *Peer) LocalFamilies() (list []Family) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) LocalFamily(family Family) (exists bool) {
 	_, exists = p.families[family]
 	return
 }
+
 func (p *Peer) PeerFamilies() (list []Family) {
 	p.mu.RLock()
 	if p.state == stateEstablished {
@@ -999,10 +1055,12 @@ func (p *Peer) PeerFamilies() (list []Family) {
 	p.mu.RUnlock()
 	return
 }
+
 func (p *Peer) PeerFamily(family Family) (exists bool) {
 	_, exists = p.peerFamilies[family]
 	return
 }
+
 func (p *Peer) LocalMultipath(family Family, direction int) (ok bool) {
 	if !p.LocalFamily(family) || !p.PeerFamily(family) {
 		return
@@ -1027,6 +1085,7 @@ func (p *Peer) LocalMultipath(family Family, direction int) (ok bool) {
 	}
 	return
 }
+
 func (p *Peer) PeerMultipath(family Family, direction int) (ok bool) {
 	if !p.LocalFamily(family) || !p.PeerFamily(family) {
 		return
@@ -1106,6 +1165,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 							out = binary.BigEndian.AppendUint32(out, uint32(asn))
 						}
 						out[offset] = byte(len(out) - offset - 1)
+
 					} else {
 						asn4 := false
 						for _, asn := range path {
@@ -1163,6 +1223,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 	fmt.Printf("%#v\n%s\n", in, hex.Dump(out))
 	return
 }
+
 func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 	out = map[string]any{}
 	for offset := 0; offset < len(in); {
@@ -1283,6 +1344,7 @@ func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 					for index := 0; index < count; index++ {
 						if width == 2 {
 							path += " " + strconv.Itoa(int(binary.BigEndian.Uint16(in[offset+header+2+(index*width):])))
+
 						} else {
 							path += " " + strconv.Itoa(int(binary.BigEndian.Uint32(in[offset+header+2+(index*width):])))
 						}
@@ -1400,6 +1462,7 @@ func (p *Peer) dispatch(event string, payload map[string]any) {
 	}
 	p.mu.RUnlock()
 }
+
 func (p *Peer) to(state string) {
 	p.mu.Lock()
 	from := p.state
@@ -1416,6 +1479,7 @@ func (p *Peer) to(state string) {
 		p.reason = map[string]any{}
 	}
 }
+
 func (p *Peer) idle(remove ...bool) {
 	p.mu.Lock()
 	if p.removed {
@@ -1449,6 +1513,7 @@ func (p *Peer) idle(remove ...bool) {
 		p.mu.Unlock()
 	}
 }
+
 func (p *Peer) send(message int, data []byte) bool {
 	p.mu.RLock()
 	_, em := p.PeerCapability("extended-message")
@@ -1485,6 +1550,7 @@ func (p *Peer) send(message int, data []byte) bool {
 
 	return true
 }
+
 func (p *Peer) open() {
 	data, offset, local := make([]byte, (1<<8)+10), 10, p.localASN
 	if local >= (64 << 10) {
@@ -1524,6 +1590,7 @@ func (p *Peer) open() {
 
 	p.send(messageOpen, data[:offset])
 }
+
 func (p *Peer) notification(code, subcode int, extra ...string) {
 	length, message := 2, ""
 	if len(extra) > 0 {
@@ -1538,9 +1605,11 @@ func (p *Peer) notification(code, subcode int, extra ...string) {
 	p.send(messageNotification, data)
 	p.reason = map[string]any{"code": code, "subcode": subcode, "reason": message}
 }
+
 func (p *Peer) keepalive() {
 	p.send(messageKeepalive, nil)
 }
+
 func (p *Peer) receive(conn net.Conn) {
 	p.open()
 	p.to(stateOpenSent)
@@ -1553,6 +1622,7 @@ bailout:
 		}
 		if p.State() == stateEstablished {
 			conn.SetReadDeadline(time.Now().Add(hold / 3))
+
 		} else {
 			conn.SetReadDeadline(time.Now().Add(p.connect))
 		}
@@ -1662,6 +1732,7 @@ bailout:
 							}
 							p.peerFamilies[family] = struct{}{}
 							add = false
+
 						} else if int(caps[index]) == capabilities["asn4"] && caps[index+1] == 4 {
 							if p.peerASN4 = int(binary.BigEndian.Uint32(caps[index+2:])); p.peerASN4 == 0 {
 								p.notification(notificationOpen, 4, "invalid asn4")
@@ -1693,10 +1764,12 @@ bailout:
 							p.notification(notificationOpen, 2, "invalid peer asn "+strconv.Itoa(p.peerASN4)+" vs "+strconv.Itoa(p.peerASN))
 							break bailout
 						}
+
 					} else if p.peerASN4 != asn || p.peerASN4 != p.peerASN {
 						p.notification(notificationOpen, 2, "invalid peer asn "+strconv.Itoa(p.peerASN4)+" vs "+strconv.Itoa(p.peerASN))
 						break bailout
 					}
+
 				} else if asn != p.peerASN {
 					p.notification(notificationOpen, 2, "invalid peer asn "+strconv.Itoa(asn)+" vs "+strconv.Itoa(p.peerASN))
 					break bailout
@@ -1774,6 +1847,7 @@ bailout:
 				}
 				if p.localASN == p.peerASN {
 					decoded["as-path"] = ""
+
 				} else {
 					delete(decoded, "local-preference")
 				}
@@ -1789,6 +1863,7 @@ bailout:
 									if nexthop != "" {
 										delete(reachable[key], subkey)
 										reachable[key][nexthop] = subvalue
+
 									} else {
 										ok = false
 									}
@@ -1807,6 +1882,7 @@ bailout:
 							}
 						}
 						reachable = emptySliceMapMap
+
 					} else {
 						delete(decoded, "next-hop")
 						attributes = decoded
@@ -1837,6 +1913,7 @@ bailout:
 			if length != 19+4 {
 				if err {
 					p.notification(notificationRefresh, 1, "x"+ustr.Hex(data, ' '))
+
 				} else {
 					p.notification(notificationHeader, 7, "invalid message length "+strconv.Itoa(length))
 				}
@@ -1863,6 +1940,7 @@ bailout:
 	}
 	p.idle()
 }
+
 func (p *Peer) init() {
 	go dispatch("peer", &p.mu, p.messages, p.processors)
 	go func() {
@@ -1879,6 +1957,7 @@ func (p *Peer) init() {
 						p.to(stateConnect)
 						go p.receive(p.conn)
 						return
+
 					} else {
 						if pace := time.Since(p.last); pace < p.pace {
 							p.to(stateActive)

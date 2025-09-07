@@ -72,6 +72,7 @@ func Exec(command string, extra ...map[string]any) (lines []string) {
 
 	if combined {
 		content, _ = cmd.CombinedOutput()
+
 	} else {
 		content, _ = cmd.Output()
 	}

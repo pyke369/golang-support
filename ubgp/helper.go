@@ -253,6 +253,7 @@ func NewCapability(in string) (capability Capability) {
 	}
 	return
 }
+
 func (c Capability) String() (out string) {
 	if c.Code > 0 && c.Code < 255 {
 		for key, value := range capabilities {
@@ -326,6 +327,7 @@ func (c Capability) String() (out string) {
 	}
 	return
 }
+
 func (c Capability) Valid() bool {
 	return c.String() != ""
 }
@@ -346,6 +348,7 @@ func NewFamily(in string) (family Family) {
 	}
 	return
 }
+
 func (f Family) String() string {
 	if f[0] > 0 && f[0] < 65535 && f[1] > 0 && f[1] < 255 && f[1] != 3 && !(f[1] >= 130 && f[1] <= 131) && !(f[1] >= 135 && f[1] <= 139) && !(f[1] >= 141 && f[1] <= 240) {
 		afi, safi := "", ""
@@ -371,6 +374,7 @@ func (f Family) String() string {
 	}
 	return ""
 }
+
 func (f Family) Valid() bool {
 	return f.String() != ""
 }
@@ -384,6 +388,7 @@ func EncodeNexthop(in string, family Family) (out []byte) {
 			if addr, err := netip.ParseAddr(parts[0]); err == nil {
 				if addr.Is4() {
 					out = append(out, 4)
+
 				} else {
 					out = append(out, 16)
 				}
@@ -408,6 +413,7 @@ func EncodeNexthop(in string, family Family) (out []byte) {
 	}
 	return
 }
+
 func DecodeNexthop(in []byte, family Family) (out string, code int) {
 	code = 10
 	switch family[0] {
@@ -467,6 +473,7 @@ func EncodePrefix(in string, family Family, multipath bool) (out []byte) {
 	}
 	return
 }
+
 func DecodePrefixes(in []byte, family Family, multipath bool) (out []string, code int) {
 	out, code = []string{}, 10
 	if !family.Valid() {

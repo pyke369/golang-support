@@ -72,6 +72,7 @@ func flatten(in []any) (out any) {
 	}
 	return
 }
+
 func parseJSON(in string) (out map[string]any) {
 	var raw map[string]any
 
@@ -110,6 +111,7 @@ func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 	}
 	return
 }
+
 func parseXML(in string) (out map[string]any) {
 	type NODE struct {
 		Content []byte `xml:",innerxml"`
@@ -332,5 +334,6 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 			}
 		}
 	}
+
 	return
 }

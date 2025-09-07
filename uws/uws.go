@@ -179,6 +179,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 					if port == "0" {
 						if eurl.Scheme == "https" {
 							port = "443"
+
 						} else {
 							port = "80"
 						}
@@ -202,6 +203,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 							conn.Close()
 							return nil, errors.New("uws: proxy connection http status " + strconv.Itoa(response.StatusCode))
 						}
+
 					} else {
 						conn.Close()
 						return nil, ustr.Wrap(err, "uws")
@@ -259,16 +261,20 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						config.OpenHandler(ws)
 					}
 					go ws.receive(nil)
+
 				} else {
 					conn.Close()
 					return nil, err
 				}
+
 			} else {
 				return nil, ustr.Wrap(err, "uws")
 			}
+
 		} else {
 			return nil, ustr.Wrap(err, "uws")
 		}
+
 	} else {
 		return nil, ustr.Wrap(err, "uws")
 	}
@@ -310,6 +316,7 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 			}
 			if protocol != "" {
 				response.Header().Set("Sec-WebSocket-Protocol", protocol)
+
 			} else if config.NeedProtocol {
 				response.WriteHeader(http.StatusBadRequest)
 				return
@@ -504,6 +511,7 @@ close:
 		if buffered != nil {
 			read, err = buffered.Read(buffer[woffset:])
 			buffered = nil
+
 		} else {
 			read, err = s.conn.Read(buffer[woffset:])
 		}

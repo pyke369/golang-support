@@ -30,12 +30,14 @@ type SSHCredentials struct {
 	Password string
 	Key      string
 }
+
 type SSHOptions struct {
 	Mode      string
 	SubSystem string
 	Marker    string
 	Filter    string
 }
+
 type sshConnection struct {
 	mu      sync.Mutex
 	active  bool
@@ -47,6 +49,7 @@ type sshConnection struct {
 	output  io.Reader
 	result  chan []string
 }
+
 type sshTransport struct {
 	remote  string
 	idle    time.Duration
@@ -112,6 +115,7 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	if _, err := netip.ParseAddrPort(remote); err != nil {
 		if options.SubSystem == "netconf" {
 			remote += ":830"
+
 		} else {
 			remote += ":22"
 		}
@@ -148,8 +152,10 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	if credentials.Key != "" {
 		if private, err := os.ReadFile(credentials.Key); err != nil {
 			return nil, ustr.Wrap(err, "ssh")
+
 		} else if signer, err := ssh.ParsePrivateKey(private); err != nil {
 			return nil, ustr.Wrap(err, "ssh")
+
 		} else {
 			auth = append(auth, ssh.PublicKeys(signer))
 		}
@@ -182,6 +188,7 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	sshTransports[key] = transport
 	return
 }
+
 func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool) (result any, err error) {
 	var (
 		start = time.Now()
@@ -225,6 +232,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 				return nil, errors.New("ssh: max connections reached")
 			}
 			time.Sleep(time.Second)
+
 		} else {
 			break
 		}
@@ -252,6 +260,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 				conn.Reset()
 				return nil, ustr.Wrap(err, "ssh")
 			}
+
 		} else if err = conn.session.Shell(); err != nil {
 			conn.Reset()
 			return nil, ustr.Wrap(err, "ssh")
@@ -273,6 +282,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 						if end := bytes.Index(data[index:read], []byte("\n")); end >= 0 {
 							line, complete = strings.TrimRight(string(data[index:index+end]), "\r"), true
 							index += end + 1
+
 						} else {
 							line, index = string(data[index:read]), read
 							begin = len(line)
@@ -335,6 +345,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 				command += "|display xml|no-more"
 			}
 		}
+
 	case "netconf":
 		if !strings.HasPrefix(command, "<rpc>") || !strings.HasSuffix(command, "</rpc>") {
 			command = "<rpc>" + command + "</rpc>"
@@ -386,9 +397,11 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 	}
 	return
 }
+
 func (t *sshTransport) Map(command string, timeout time.Duration, mapping map[string]string, cache ...bool) (result map[string]any, err error) {
 	if run, err := t.Run(command, timeout, cache...); err != nil {
 		return nil, err
+
 	} else {
 		return Mapper(nil, run, mapping), nil
 	}

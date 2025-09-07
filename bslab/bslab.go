@@ -109,6 +109,7 @@ func (a *Arena) Trace(handle *os.File, extra ...map[string]string) {
 		a.tracer.match, a.tracer.sizes, a.tracer.calls = nil, nil, nil
 	}
 }
+
 func Trace(tracer *os.File, extra ...map[string]string) {
 	Default.Trace(tracer, extra...)
 }
@@ -197,6 +198,7 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 
 	return
 }
+
 func Get(size int, extra ...[]byte) (out []byte) {
 	return Default.Get(size, extra...)
 }
@@ -240,11 +242,13 @@ func (a *Arena) Put(in []byte) {
 			atomic.AddUint32(&(a.slabs[0].put), 1)
 			atomic.AddUint32(&(a.slabs[0].lost), uint32(cap(in)))
 		}
+
 	} else {
 		atomic.AddUint32(&(a.slabs[0].put), 1)
 		atomic.AddUint32(&(a.slabs[0].lost), uint32(cap(in)))
 	}
 }
+
 func Put(in []byte) {
 	Default.Put(in)
 }
@@ -255,6 +259,7 @@ func hcount(in uint32) string {
 	}
 	return strconv.Itoa(int(in))
 }
+
 func hsize(in uint32) string {
 	if in <= 0 {
 		return "."
@@ -270,6 +275,7 @@ func hsize(in uint32) string {
 	}
 	return strconv.Itoa(int(in/(1<<30))) + " GB"
 }
+
 func (a *Arena) Stat() *Info {
 	info := &Info{
 		Name:   a.name,
@@ -287,9 +293,11 @@ func (a *Arena) Stat() *Info {
 	}
 	return info
 }
+
 func Stat() *Info {
 	return Default.Stat()
 }
+
 func (i *Info) String() string {
 	sizes := make([]int, 0, len(i.Values))
 	for size := range i.Values {

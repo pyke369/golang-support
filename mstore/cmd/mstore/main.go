@@ -126,6 +126,7 @@ func main() {
 							hide = false
 							break done
 						}
+
 					case "text", "binary":
 						if j.String(value) != "" {
 							hide = false
@@ -135,6 +136,7 @@ func main() {
 				}
 				if hide {
 					columns[index].(map[string]any)["description"] = ""
+
 				} else {
 					names = append(names, description)
 				}
@@ -146,12 +148,14 @@ func main() {
 			for index, value := range j.Slice(line) {
 				if index == 0 {
 					values = append(values, time.Unix(int64(j.Number(value)), 0).UTC().Format(time.DateTime))
+
 				} else if index <= len(columns) {
 					column := j.Map(columns[index-1])
 					if description := j.String(column["description"]); description != "" {
 						switch j.String(column["mode"]) {
 						case "gauge", "counter", "increment":
 							values = append(values, strconv.FormatInt(int64(j.Number(value)), 10))
+
 						case "text", "binary":
 							values = append(values, `"`+j.String(value)+`"`)
 						}
@@ -197,6 +201,7 @@ func main() {
 			}
 			if dindex < len(data)-1 {
 				line += "],"
+
 			} else {
 				line += "]"
 			}

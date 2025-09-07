@@ -202,6 +202,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 	if value, exists := claims["exp"]; exists {
 		if value, ok := value.(float64); !ok {
 			return claims, errors.New("token: invalid exp claim")
+
 		} else if time.Now().After(time.Unix(int64(value), 0)) {
 			return claims, errors.New("token: expired exp:" + strconv.FormatInt(int64(value), 10))
 		}
@@ -209,6 +210,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 	if value, exists := claims["iat"]; exists {
 		if value, ok := value.(float64); !ok {
 			return claims, errors.New("token: invalid iat claim")
+
 		} else if time.Now().Before(time.Unix(int64(value), 0)) {
 			return claims, errors.New("token: issued in future iat:" + strconv.FormatInt(int64(value), 10))
 		}
@@ -216,6 +218,7 @@ func TokenDecode(token string, secrets []string) (claims map[string]any, err err
 	if value, exists := claims["nbf"]; exists {
 		if value, ok := value.(float64); !ok {
 			return claims, errors.New("token: invalid nbf claim")
+
 		} else if time.Now().Before(time.Unix(int64(value), 0)) {
 			return claims, errors.New("token: not valid yet nbf:" + strconv.FormatInt(int64(value), 10))
 		}

@@ -62,6 +62,7 @@ func mkjson() {
 			for {
 				if line, err := reader.ReadString('\n'); err != nil {
 					break
+
 				} else {
 					if fields := jsonMatcher.FindStringSubmatch(strings.TrimSpace(line)); fields != nil {
 						if prefix, err := netip.ParsePrefix(fields[1]); err == nil {
@@ -91,6 +92,7 @@ func mkjson() {
 		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
+
 	} else {
 		os.Stderr.WriteString("saving database   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
@@ -106,6 +108,7 @@ func mkoui() {
 			for {
 				if line, err := reader.ReadString('\n'); err != nil {
 					break
+
 				} else {
 					// TODO 12:34:56:78:9a:bc -> fe80::1034:56ff:fe78:9abc
 					data, address, mask := OUI{}, "fe80:0000:0000:0000:0000:", 80
@@ -150,6 +153,7 @@ func mkoui() {
 		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
+
 	} else {
 		os.Stderr.WriteString("saving database   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
@@ -162,27 +166,27 @@ func mkcity() {
 		last := time.Now()
 		start := last
 		for {
-			if line, err := reader.ReadString('\n'); err != nil {
+			line, err := reader.ReadString('\n')
+			if err != nil {
 				break
-			} else {
-				if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 14); len(fields) == 14 {
-					for index := 0; index < len(fields); index++ {
-						fields[index][1] = strings.Trim(fields[index][1], `"`)
-					}
-					if id, err := strconv.Atoi(fields[0][1]); err == nil {
-						locations[id] = &LOCATION{
-							ContinentCode: fields[2][1],
-							ContinentName: fields[3][1],
-							CountryCode:   fields[4][1],
-							CountryName:   fields[5][1],
-							RegionCode:    fields[6][1],
-							RegionName:    fields[7][1],
-							StateCode:     fields[8][1],
-							StateName:     fields[9][1],
-							CityName:      fields[10][1],
-							TimeZone:      fields[12][1],
-							InEurope:      fields[13][1] == "1",
-						}
+			}
+			if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 14); len(fields) == 14 {
+				for index := 0; index < len(fields); index++ {
+					fields[index][1] = strings.Trim(fields[index][1], `"`)
+				}
+				if id, err := strconv.Atoi(fields[0][1]); err == nil {
+					locations[id] = &LOCATION{
+						ContinentCode: fields[2][1],
+						ContinentName: fields[3][1],
+						CountryCode:   fields[4][1],
+						CountryName:   fields[5][1],
+						RegionCode:    fields[6][1],
+						RegionName:    fields[7][1],
+						StateCode:     fields[8][1],
+						StateName:     fields[9][1],
+						CityName:      fields[10][1],
+						TimeZone:      fields[12][1],
+						InEurope:      fields[13][1] == "1",
 					}
 				}
 			}
@@ -207,36 +211,36 @@ func mkcity() {
 			last := time.Now()
 			start := last
 			for {
-				if line, err := reader.ReadString('\n'); err != nil {
+				line, err := reader.ReadString('\n')
+				if err != nil {
 					break
-				} else {
-					if fields := strings.Split(strings.TrimSpace(line), ","); len(fields) >= 10 {
-						id := 0
-						if id, _ = strconv.Atoi(fields[1]); id == 0 {
-							id, _ = strconv.Atoi(fields[2])
-						}
-						if id != 0 && locations[id] != nil {
-							if prefix, err := netip.ParsePrefix(fields[0]); err == nil {
-								latitude, _ := strconv.ParseFloat(fields[7], 64)
-								longitude, _ := strconv.ParseFloat(fields[8], 64)
-								pfdb.Add(prefix, map[string]any{
-									"continent_code": locations[id].ContinentCode,
-									"continent_name": locations[id].ContinentName,
-									"country_code":   locations[id].CountryCode,
-									"country_name":   locations[id].CountryName,
-									"region_code":    locations[id].RegionCode,
-									"region_name":    locations[id].RegionName,
-									"state_code":     locations[id].StateCode,
-									"state_name":     locations[id].StateName,
-									"city_name":      locations[id].CityName,
-									"in_europe":      locations[id].InEurope,
-									"timezone":       locations[id].TimeZone,
-									"postal_code":    fields[6],
-									"latitude":       latitude,
-									"longitude":      longitude,
-								}, clusters)
-								count++
-							}
+				}
+				if fields := strings.Split(strings.TrimSpace(line), ","); len(fields) >= 10 {
+					id := 0
+					if id, _ = strconv.Atoi(fields[1]); id == 0 {
+						id, _ = strconv.Atoi(fields[2])
+					}
+					if id != 0 && locations[id] != nil {
+						if prefix, err := netip.ParsePrefix(fields[0]); err == nil {
+							latitude, _ := strconv.ParseFloat(fields[7], 64)
+							longitude, _ := strconv.ParseFloat(fields[8], 64)
+							pfdb.Add(prefix, map[string]any{
+								"continent_code": locations[id].ContinentCode,
+								"continent_name": locations[id].ContinentName,
+								"country_code":   locations[id].CountryCode,
+								"country_name":   locations[id].CountryName,
+								"region_code":    locations[id].RegionCode,
+								"region_name":    locations[id].RegionName,
+								"state_code":     locations[id].StateCode,
+								"state_name":     locations[id].StateName,
+								"city_name":      locations[id].CityName,
+								"in_europe":      locations[id].InEurope,
+								"timezone":       locations[id].TimeZone,
+								"postal_code":    fields[6],
+								"latitude":       latitude,
+								"longitude":      longitude,
+							}, clusters)
+							count++
 						}
 					}
 				}
@@ -261,6 +265,7 @@ func mkcity() {
 		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
+
 	} else {
 		os.Stderr.WriteString("saving database  [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
@@ -274,21 +279,21 @@ func mkasn() {
 			last := time.Now()
 			start := last
 			for {
-				if line, err := reader.ReadString('\n'); err != nil {
+				line, err := reader.ReadString('\n')
+				if err != nil {
 					break
-				} else {
-					if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 3); len(fields) == 3 {
-						for index := 0; index < len(fields); index++ {
-							fields[index][1] = strings.Trim(fields[index][1], `"`)
-						}
-						if asnum, _ := strconv.Atoi(fields[1][1]); asnum != 0 {
-							if prefix, err := netip.ParsePrefix(fields[0][1]); err == nil {
-								pfdb.Add(prefix, map[string]any{
-									"as_number": "AS" + strconv.Itoa(asnum),
-									"as_name":   fields[2][1],
-								}, nil)
-								count++
-							}
+				}
+				if fields := csvMatcher.FindAllStringSubmatch(strings.TrimSpace(line), 3); len(fields) == 3 {
+					for index := 0; index < len(fields); index++ {
+						fields[index][1] = strings.Trim(fields[index][1], `"`)
+					}
+					if asnum, _ := strconv.Atoi(fields[1][1]); asnum != 0 {
+						if prefix, err := netip.ParsePrefix(fields[0][1]); err == nil {
+							pfdb.Add(prefix, map[string]any{
+								"as_number": "AS" + strconv.Itoa(asnum),
+								"as_name":   fields[2][1],
+							}, nil)
+							count++
 						}
 					}
 				}
@@ -313,6 +318,7 @@ func mkasn() {
 		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
+
 	} else {
 		os.Stderr.WriteString("saving database  [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 	}
@@ -348,8 +354,8 @@ func lookup() {
 			if err := database.Load(os.Args[index]); err == nil {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
-
 				databases = append(databases, database)
+
 			} else {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
@@ -360,6 +366,7 @@ func lookup() {
 			if len(lookup) != 0 {
 				remote = os.Args[index]
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
+
 			} else {
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
@@ -391,6 +398,7 @@ done:
 				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 				databases = append(databases, database)
+
 			} else {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
@@ -401,6 +409,7 @@ done:
 			if len(lookup) != 0 {
 				remote = os.Args[index]
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "]\n")
+
 			} else {
 				os.Stderr.WriteString("remote   [" + os.Args[index] + "] failed (not a valid prefixdb server)\n")
 			}
@@ -425,6 +434,7 @@ done:
 						lookup, search := map[string]any{}, strings.Split(record[column], "/")[0]
 						if _, exists := cache[search]; exists {
 							lookup = cache[search]
+
 						} else {
 							for _, database := range databases {
 								database.Lookup(search, lookup)
@@ -438,15 +448,19 @@ done:
 							if value := lookup[os.Args[field]]; value != nil {
 								if rvalue := j.Number(value, 999); rvalue != 999 {
 									record = append(record, strconv.FormatFloat(rvalue, 'f', -1, 64))
+
 								} else if rvalue := j.String(value); rvalue != "" {
 									record = append(record, rvalue)
+
 								} else {
 									if rvalue := j.Boolean(value); rvalue {
 										record = append(record, "true")
+
 									} else {
 										record = append(record, "false")
 									}
 								}
+
 							} else {
 								record = append(record, "")
 							}
@@ -457,6 +471,7 @@ done:
 					writer.Flush()
 				}
 				os.Stderr.WriteString("\rlookup   [" + strconv.Itoa(len(records)) + " records]                                        \n")
+
 			} else {
 				os.Stderr.WriteString("csv      [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
@@ -473,6 +488,7 @@ func server() {
 			os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 				strconv.Itoa((int(database.Version>>8) & 0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 			databases = append(databases, database)
+
 		} else {
 			os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 		}
@@ -514,6 +530,7 @@ func server() {
 			if err := server.ListenAndServeTLS(parts[1], parts[2]); err != nil {
 				os.Stderr.WriteString("listen   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 			}
+
 		} else {
 			if err := server.ListenAndServe(); err != nil {
 				os.Stderr.WriteString("listen   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")

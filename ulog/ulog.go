@@ -99,11 +99,13 @@ type ULog struct {
 	arena                 *bslab.Arena
 	mu                    sync.RWMutex
 }
+
 type fileOutput struct {
 	handle *os.File
 	last   time.Time
 	path   string
 }
+
 type colorizer struct {
 	expression *regexp.Regexp
 	replace    []byte
@@ -434,10 +436,13 @@ func (l *ULog) SetLevel(level string) {
 	switch level {
 	case "error":
 		l.level = LOG_ERR
+
 	case "warning":
 		l.level = LOG_WARNING
+
 	case "info":
 		l.level = LOG_INFO
+
 	case "debug":
 		l.level = LOG_DEBUG
 	}
@@ -451,11 +456,13 @@ func (l *ULog) SetField(key string, value any) {
 	l.fields[key] = value
 	l.mu.Unlock()
 }
+
 func (l *ULog) SetFields(fields map[string]any) {
 	for key, value := range fields {
 		l.SetField(key, value)
 	}
 }
+
 func (l *ULog) ClearFields() {
 	l.mu.Lock()
 	l.fields = nil
@@ -467,6 +474,7 @@ func (l *ULog) SetOrder(names []string) {
 	l.order = slices.Clone(names)
 	l.mu.Unlock()
 }
+
 func (l *ULog) ClearOrder() {
 	l.mu.Lock()
 	l.order = nil
@@ -478,6 +486,7 @@ func (l *ULog) SetExternal(external func(string, []byte)) {
 	l.external = external
 	l.mu.Unlock()
 }
+
 func (l *ULog) ClearExternal() {
 	l.mu.Lock()
 	l.external = nil
@@ -748,12 +757,15 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 func (l *ULog) Error(layout any, a ...any) {
 	l.Log(time.Now(), LOG_ERR, layout, a...)
 }
+
 func (l *ULog) Warn(layout any, a ...any) {
 	l.Log(time.Now(), LOG_WARNING, layout, a...)
 }
+
 func (l *ULog) Info(layout any, a ...any) {
 	l.Log(time.Now(), LOG_INFO, layout, a...)
 }
+
 func (l *ULog) Debug(layout any, a ...any) {
 	l.Log(time.Now(), LOG_DEBUG, layout, a...)
 }
@@ -761,12 +773,15 @@ func (l *ULog) Debug(layout any, a ...any) {
 func (l *ULog) ErrorTime(now time.Time, layout any, a ...any) {
 	l.Log(now, LOG_ERR, layout, a...)
 }
+
 func (l *ULog) WarnTime(now time.Time, layout any, a ...any) {
 	l.Log(now, LOG_WARNING, layout, a...)
 }
+
 func (l *ULog) InfoTime(now time.Time, layout any, a ...any) {
 	l.Log(now, LOG_INFO, layout, a...)
 }
+
 func (l *ULog) DebugTime(now time.Time, layout any, a ...any) {
 	l.Log(now, LOG_DEBUG, layout, a...)
 }

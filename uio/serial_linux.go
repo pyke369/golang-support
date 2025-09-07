@@ -70,6 +70,7 @@ type serialAddr struct {
 func (a *serialAddr) Network() string {
 	return "serial"
 }
+
 func (a *serialAddr) String() string {
 	return a.name
 }
@@ -135,6 +136,7 @@ func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string)
 
 	return &serial{handle: handle, control: speed < 0, local: &serialAddr{name: path}, remote: &serialAddr{name: peer}}, nil
 }
+
 func (s *serial) Close() error {
 	return unix.Close(s.handle)
 }
@@ -166,6 +168,7 @@ func (s *serial) Read(b []byte) (n int, err error) {
 
 	return unix.Read(s.handle, b)
 }
+
 func (s *serial) Write(b []byte) (n int, err error) {
 	if s.control {
 		return 0, errors.ErrUnsupported
@@ -193,6 +196,7 @@ func (s *serial) Write(b []byte) (n int, err error) {
 func (s *serial) LocalAddr() net.Addr {
 	return s.local
 }
+
 func (s *serial) RemoteAddr() net.Addr {
 	return s.remote
 }
@@ -201,10 +205,12 @@ func (s *serial) SetDeadline(t time.Time) error {
 	s.rdeadline, s.wdeadline = t, t
 	return nil
 }
+
 func (s *serial) SetReadDeadline(t time.Time) error {
 	s.rdeadline = t
 	return nil
 }
+
 func (s *serial) SetWriteDeadline(t time.Time) error {
 	s.wdeadline = t
 	return nil
@@ -227,6 +233,7 @@ func (s *serial) GetControl() (control string, err error) {
 	if value&unix.TIOCM_RI != 0 {
 		control += " RI"
 	}
+
 	return strings.TrimSpace(control), nil
 }
 
@@ -246,6 +253,7 @@ func (s *serial) SetControl(control string) (err error) {
 		}
 		return unix.IoctlSetPointerInt(s.handle, unix.TIOCMSET, value)
 	}
+
 	return nil
 }
 
@@ -265,5 +273,6 @@ func (s *serial) ClearControl(control string) (err error) {
 		}
 		return unix.IoctlSetPointerInt(s.handle, unix.TIOCMSET, value)
 	}
+
 	return nil
 }

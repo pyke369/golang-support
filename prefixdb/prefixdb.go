@@ -21,10 +21,13 @@ type fame struct {
 	fame  int
 	value any
 }
+
 type byfame []*fame
 
-func (a byfame) Len() int           { return len(a) }
-func (a byfame) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a byfame) Len() int { return len(a) }
+
+func (a byfame) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
 func (a byfame) Less(i, j int) bool { return a[i].fame > a[j].fame }
 
 type node struct {
@@ -36,11 +39,13 @@ type node struct {
 	emitted  bool
 	id       int
 }
+
 type cluster struct {
 	values [3]int   // fame / initial index / final index
 	pairs  []uint64 // cluster pairs
 	data   []byte   // reduced cluster pairs
 }
+
 type PrefixDB struct {
 	mu          sync.RWMutex
 	tree        node
@@ -111,6 +116,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				if _, exists := d.strings[key]; !exists {
 					index = len(d.strings)
 					d.strings[key] = &[3]int{1, index}
+
 				} else {
 					index = d.strings[key][1]
 					d.strings[key][0]++
@@ -121,11 +127,13 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 						if _, exists := d.strings[tvalue]; !exists {
 							index = len(d.strings)
 							d.strings[tvalue] = &[3]int{1, index}
+
 						} else {
 							index = d.strings[tvalue][1]
 							d.strings[tvalue][0]++
 						}
 						pair |= uint64((uint32(index) & 0x0fffffff) | 0x10000000)
+
 					} else {
 						pair |= uint64(0x50000000)
 					}
@@ -134,6 +142,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					if _, exists := d.numbers[tvalue]; !exists {
 						index = len(d.numbers)
 						d.numbers[tvalue] = &[3]int{1, index}
+
 					} else {
 						index = d.numbers[tvalue][1]
 						d.numbers[tvalue][0]++
@@ -143,6 +152,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				} else if tvalue, ok := value.(bool); ok {
 					if tvalue {
 						pair |= uint64(0x30000000)
+
 					} else {
 						pair |= uint64(0x40000000)
 					}
@@ -153,11 +163,13 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				if _, exists := d.pairs[pair]; !exists {
 					index = len(d.pairs)
 					d.pairs[pair] = &[3]int{1, index}
+
 				} else {
 					d.pairs[pair][0]++
 				}
 				if cindex < len(ckeys)-1 {
 					cpairs = append(cpairs, pair)
+
 				} else {
 					pnode.data = append(pnode.data, pair)
 				}
@@ -173,6 +185,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 			if _, exists := d.clusters[key]; !exists {
 				index = len(d.clusters)
 				d.clusters[key] = &cluster{pairs: cpairs, values: [3]int{1, index}}
+
 			} else {
 				index = d.clusters[key].values[1]
 				d.clusters[key].values[0]++
@@ -190,6 +203,7 @@ func wbytes(in, value int, data []byte) {
 		}
 	}
 }
+
 func wpbits(prefix byte, value int) []byte {
 	if value <= 7 {
 		return []byte{prefix | (byte(value) & 0x07)}
@@ -201,6 +215,7 @@ func wpbits(prefix byte, value int) []byte {
 	}
 	return data
 }
+
 func wnbits(bits, value0, value1 int, data []byte) {
 	if bits >= 8 && bits <= 32 && bits%4 == 0 && len(data) >= bits/4 {
 		switch bits {
@@ -234,6 +249,7 @@ func wnbits(bits, value0, value1 int, data []byte) {
 		}
 	}
 }
+
 func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	// layout header + signature placeholder + description
 	d.mu.Lock()
@@ -308,6 +324,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	for index, item := range flist {
 		if item.fame > 1 {
 			d.pairs[item.value.(uint64)][2] = index
+
 		} else {
 			delete(d.pairs, item.value.(uint64))
 		}
@@ -341,6 +358,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		for _, pair := range cluster.pairs {
 			if _, exists := d.pairs[pair]; exists {
 				cluster.data = append(cluster.data, wpbits(0x60, d.pairs[pair][2])...)
+
 			} else {
 				cluster.data = append(cluster.data, wpbits(0x10, d.strings[fstrings[(pair>>32)&0x0fffffff].value.(string)][2])...)
 				switch (pair & 0xf0000000) >> 28 {
@@ -408,6 +426,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 		if pnode.down[0] == nil && pnode.down[1] == nil {
 			if len(pnode.data) == 0 {
 				pnode.offset = 1
+
 			} else {
 				data := []byte{}
 				for index := 0; index < len(pnode.data); index++ {
@@ -417,9 +436,11 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 					}
 					if ((pnode.data[index]>>32)&0xf0000000)>>28 == 7 {
 						data = append(data, wpbits(last|0x70, d.clusters[fclusters[(pnode.data[index]>>32)&0x0fffffff].value.([16]byte)].values[2])...)
+
 					} else {
 						if _, exists := d.pairs[pnode.data[index]]; exists {
 							data = append(data, wpbits(last|0x60, d.pairs[pnode.data[index]][2])...)
+
 						} else {
 							data = append(data, wpbits(0x10, d.strings[fstrings[(pnode.data[index]>>32)&0x0fffffff].value.(string)][2])...)
 							switch (pnode.data[index] & 0xf0000000) >> 28 {
@@ -465,6 +486,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 				if pnode.down[index] != nil {
 					if pnode.down[index].id != 0 {
 						next[index] = pnode.down[index].id
+
 					} else {
 						next[index] += pnode.down[index].offset
 					}
@@ -501,6 +523,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	if path != "" {
 		if path == "-" {
 			_, err = os.Stdout.Write(d.data)
+
 		} else {
 			err = os.WriteFile(path, d.data, 0o644)
 		}
@@ -513,12 +536,14 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 func (d *PrefixDB) Load(path string) error {
 	if data, err := os.ReadFile(path); err != nil {
 		return err
+
 	} else {
 		if len(data) < 8 || string(data[0:4]) != "PFDB" {
 			return errors.New(`prefixdb: invalid preamble`)
 		}
 		if version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7]); (version & 0xff0000) > (VERSION & 0xff0000) {
 			return errors.New("prefixdb: incompatible library and database major versions")
+
 		} else {
 			hash := md5.Sum(data[24:])
 			if len(data) < 24 || slices.Compare(hash[:], data[8:24]) != 0 {
@@ -604,6 +629,7 @@ func (d *PrefixDB) Load(path string) error {
 	}
 	return nil
 }
+
 func rpbits(data []byte) (section, index, size int, last bool) {
 	section = int((data[0] & 0x70) >> 4)
 	if data[0]&0x80 != 0 || section == 0 {
@@ -615,6 +641,7 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 			for nibble := 1; nibble <= size; nibble++ {
 				index |= int(data[nibble]) << (uint(size-nibble) * 8)
 			}
+
 		} else {
 			index = int(data[0] & 0x07)
 		}
@@ -622,6 +649,7 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 	size++
 	return section, index, size, last
 }
+
 func rnbits(bits, index, down int, data []byte) int {
 	if bits >= 8 && bits <= 32 && bits%4 == 0 && (down == 0 || down == 1) && len(data) >= (index+1)*(bits/4) {
 		offset := index * (bits / 4)
@@ -632,9 +660,9 @@ func rnbits(bits, index, down int, data []byte) int {
 		case 12:
 			if down == 0 {
 				return (int(data[offset]) << 4) | ((int(data[offset+1]) >> 4) & 0x0f)
-			} else {
-				return ((int(data[offset+1]) & 0x0f) << 8) | int(data[offset+2])
+
 			}
+			return ((int(data[offset+1]) & 0x0f) << 8) | int(data[offset+2])
 
 		case 16:
 			return int(binary.BigEndian.Uint16(data[offset+(down*2):]))
@@ -642,23 +670,22 @@ func rnbits(bits, index, down int, data []byte) int {
 		case 20:
 			if down == 0 {
 				return (int(data[offset]) << 12) | (int(data[offset+1]) << 4) | ((int(data[offset+2]) >> 4) & 0x0f)
-			} else {
-				return ((int(data[offset+2]) & 0x0f) << 16) | (int(data[offset+3]) << 8) | int(data[offset+4])
+
 			}
+			return ((int(data[offset+2]) & 0x0f) << 16) | (int(data[offset+3]) << 8) | int(data[offset+4])
 
 		case 24:
 			if down == 0 {
 				return (int(data[offset]) << 16) | (int(data[offset+1]) << 8) | int(data[offset+2])
-			} else {
-				return (int(data[offset+3]) << 16) | (int(data[offset+4]) << 8) | int(data[offset+5])
+
 			}
+			return (int(data[offset+3]) << 16) | (int(data[offset+4]) << 8) | int(data[offset+5])
 
 		case 28:
 			if down == 0 {
 				return (int(data[offset]) << 20) | (int(data[offset+1]) << 12) | (int(data[offset+2]) << 4) | ((int(data[offset+3]) >> 4) & 0x0f)
-			} else {
-				return ((int(data[offset+3]) & 0x0f) << 24) | (int(data[offset+4]) << 16) | (int(data[offset+5]) << 8) | int(data[offset+6])
 			}
+			return ((int(data[offset+3]) & 0x0f) << 24) | (int(data[offset+4]) << 16) | (int(data[offset+5]) << 8) | int(data[offset+6])
 
 		case 32:
 			return int(binary.BigEndian.Uint32(data[offset+(down*4):]))
@@ -666,12 +693,14 @@ func rnbits(bits, index, down int, data []byte) int {
 	}
 	return index
 }
+
 func rbytes(width int, data []byte) (value int) {
 	for index := 0; index < width; index++ {
 		value |= int(data[index]) << (uint(width-1-index) * 8)
 	}
 	return value
 }
+
 func (d *PrefixDB) rstring(index int) string {
 	count, offset, width := d.Strings[1], d.Strings[2], d.Strings[3]
 	if index >= count {
@@ -680,17 +709,20 @@ func (d *PrefixDB) rstring(index int) string {
 	start, end := rbytes(width, d.data[offset+(index*width):]), 0
 	if index < count-1 {
 		end = rbytes(width, d.data[offset+(index+1)*width:])
+
 	} else {
 		end = d.Strings[0] - (count * width)
 	}
 	return string(d.data[offset+(count*width)+start : offset+(count*width)+end])
 }
+
 func (d *PrefixDB) rnumber(index int) float64 {
 	if index >= d.Numbers[1] {
 		return 0.0
 	}
 	return math.Float64frombits(binary.BigEndian.Uint64(d.data[d.Numbers[2]+(index*8):]))
 }
+
 func (d *PrefixDB) rpair(index int, pairs map[string]any) {
 	if index < d.Pairs[1] {
 		pair := binary.BigEndian.Uint64(d.data[d.Pairs[2]+(index*8):])
@@ -711,12 +743,14 @@ func (d *PrefixDB) rpair(index int, pairs map[string]any) {
 		}
 	}
 }
+
 func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 	count, offset, width := d.Clusters[1], d.Clusters[2], d.Clusters[3]
 	if index < count {
 		start, end := rbytes(width, d.data[offset+(index*width):]), 0
 		if index < count-1 {
 			end = rbytes(width, d.data[offset+(index+1)*width:])
+
 		} else {
 			end = d.Clusters[0] - (count * width)
 		}
@@ -730,6 +764,7 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 				if key != "" {
 					pairs[key] = d.rstring(index)
 					key = ""
+
 				} else {
 					key = d.rstring(index)
 				}
@@ -764,6 +799,7 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 		}
 	}
 }
+
 func (d *PrefixDB) Lookup(value string, out map[string]any) {
 	if out == nil || d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
 		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || value == "" {
@@ -796,6 +832,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 						if key != "" {
 							out[key] = d.rstring(index)
 							key = ""
+
 						} else {
 							key = d.rstring(index)
 						}

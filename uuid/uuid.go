@@ -85,6 +85,7 @@ func (u UUID) String() string {
 			index := (offset - part) / 2
 			if high {
 				out[offset] = hex[u[index]>>4]
+
 			} else {
 				out[offset] = hex[u[index]&0x0f]
 			}

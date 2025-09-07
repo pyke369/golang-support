@@ -72,21 +72,21 @@ func New(size ...int) *UADB {
 }
 
 func (db *UADB) Load(path string) error {
-	if payload, err := os.ReadFile(path); err != nil {
+	payload, err := os.ReadFile(path)
+	if err != nil {
 		return err
-	} else {
-		loaded := New()
-		if err := json.Unmarshal(payload, loaded); err != nil {
-			return err
-		}
-		if loaded.Version == "" || len(loaded.Agents) == 0 || len(loaded.Devices) == 0 || len(loaded.Systems) == 0 || len(loaded.Crawlers) == 0 {
-			return errors.New("invalid uadb database")
-		}
-		db.Version, db.Agents, db.Devices, db.Systems, db.Crawlers = loaded.Version, loaded.Agents, loaded.Devices, loaded.Systems, loaded.Crawlers
-		db.lock.Lock()
-		db.cache = map[uint32]*cache{}
-		db.lock.Unlock()
 	}
+	loaded := New()
+	if err := json.Unmarshal(payload, loaded); err != nil {
+		return err
+	}
+	if loaded.Version == "" || len(loaded.Agents) == 0 || len(loaded.Devices) == 0 || len(loaded.Systems) == 0 || len(loaded.Crawlers) == 0 {
+		return errors.New("invalid uadb database")
+	}
+	db.Version, db.Agents, db.Devices, db.Systems, db.Crawlers = loaded.Version, loaded.Agents, loaded.Devices, loaded.Systems, loaded.Crawlers
+	db.lock.Lock()
+	db.cache = map[uint32]*cache{}
+	db.lock.Unlock()
 
 	return nil
 }

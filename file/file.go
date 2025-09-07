@@ -65,6 +65,7 @@ func Write(path string, lines []string, extra ...string) {
 		}
 		if strings.Contains(extra[0], "append") {
 			options |= os.O_APPEND
+
 		} else {
 			options |= os.O_TRUNC
 		}
@@ -79,11 +80,13 @@ func Exists(path string) string {
 	if _, err := os.Stat(path); err == nil {
 		return path
 	}
+
 	return ""
 }
 
 func IsDir(path string) bool {
 	info, err := os.Stat(path)
+
 	return err == nil && info.IsDir()
 }
 
@@ -91,6 +94,7 @@ func Link(path string) (base string) {
 	if value, err := os.Readlink(path); err == nil {
 		base = filepath.Base(value)
 	}
+
 	return
 }
 
@@ -103,6 +107,7 @@ func Sum(path string) (sum string, size int64) {
 		}
 		size, sum = info.Size(), ustr.Hex(hasher.Sum(nil))
 	}
+
 	return
 }
 
@@ -140,5 +145,6 @@ func Copy(source, target string, extra ...bool) (err error) {
 	if copied < ssize {
 		return errors.New("truncated copy " + strconv.FormatInt(copied, 10) + " < " + strconv.FormatInt(ssize, 10))
 	}
+
 	return
 }

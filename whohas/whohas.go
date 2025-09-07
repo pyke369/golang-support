@@ -20,12 +20,14 @@ type BACKEND struct {
 	Penalty time.Duration
 	Probe   bool
 }
+
 type CACHE struct {
 	TTL   time.Duration
 	last  time.Time
 	mu    sync.RWMutex
 	items map[string]*LOOKUP
 }
+
 type LOOKUP struct {
 	index    int
 	deadline time.Time
@@ -152,6 +154,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 							}
 							if header := response.Header.Get("Date"); header != "" {
 								lookup.Date, _ = http.ParseTime(header)
+
 							} else {
 								lookup.Date = time.Now()
 							}
@@ -160,6 +163,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 							}
 							if header := response.Header.Get("Expires"); header != "" {
 								lookup.Expires, _ = http.ParseTime(header)
+
 							} else {
 								lookup.Expires = lookup.Date.Add(time.Hour)
 							}
@@ -222,6 +226,7 @@ func Lookup(path string, backends []BACKEND, timeout time.Duration, cache *CACHE
 				cache.items[cpath] = &LOOKUP{deadline: now.Add(5 * time.Second)}
 			}
 			lookup = nil
+
 		} else {
 			cache.TTL = max(cache.TTL, 2*time.Second)
 			if ckey != "" {

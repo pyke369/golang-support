@@ -32,6 +32,7 @@ type attr struct {
 	size     int
 	children []*attr
 }
+
 type request struct {
 	header    *syscall.NlMsghdr
 	data      []byte
@@ -64,6 +65,7 @@ func newAttr(cmd int, data []byte, attrs []*attr) *attr {
 		size:     (length + syscall.NLMSG_ALIGNTO - 1) & ^(syscall.NLMSG_ALIGNTO - 1),
 	}
 }
+
 func newRequest(cmd, flags int, data []byte, attrs []*attr) *request {
 	length := syscall.NLMSG_HDRLEN + len(data)
 	for _, attr := range attrs {
@@ -80,18 +82,21 @@ func newRequest(cmd, flags int, data []byte, attrs []*attr) *request {
 		attrs: attrs,
 	}
 }
+
 func (nr *request) marshalAttrs(attrs []*attr, level int) {
 	for _, attr := range attrs {
 		if attr != nil {
 			if attr.header.Type == syscall.IFLA_UNSPEC {
 				copy(nr.marshaled[nr.offset:], attr.data)
 				nr.offset += attr.size
+
 			} else {
 				binary.LittleEndian.PutUint16(nr.marshaled[nr.offset:], attr.header.Len)
 				binary.LittleEndian.PutUint16(nr.marshaled[nr.offset+2:], attr.header.Type)
 				if len(attr.data) != 0 {
 					copy(nr.marshaled[nr.offset+4:], attr.data)
 					nr.offset += attr.size
+
 				} else {
 					nr.offset += 4
 					nr.marshalAttrs(attr.children, level+1)
@@ -100,6 +105,7 @@ func (nr *request) marshalAttrs(attrs []*attr, level int) {
 		}
 	}
 }
+
 func (nr *request) marshal() []byte {
 	nr.marshaled = make([]byte, nr.header.Len)
 	binary.LittleEndian.PutUint32(nr.marshaled[0:], nr.header.Len)
@@ -112,6 +118,7 @@ func (nr *request) marshal() []byte {
 	nr.marshalAttrs(nr.attrs, 0)
 	return nr.marshaled
 }
+
 func exec(request *request, trace ...bool) (err error) {
 	handle, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
 	if err != nil {
@@ -163,7 +170,6 @@ func exec(request *request, trace ...bool) (err error) {
 	}
 }
 
-// interfaces
 func Interfaces(filter ...string) (itfs []map[string]any) {
 	itfs = []map[string]any{}
 	if value, err := syscall.NetlinkRIB(syscall.RTM_GETLINK, syscall.AF_UNSPEC); err == nil {
@@ -334,6 +340,7 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 		expression, itfs2 := strings.TrimSpace(filter[0]), []map[string]any{}
 		if strings.HasPrefix(expression, "~") {
 			expression = strings.TrimSpace(expression[1:])
+
 		} else {
 			expression = "^" + expression + "$"
 		}
@@ -359,6 +366,7 @@ func AddDummy(name string, options ...map[string]any) error {
 	// TODO support dummy interfaces
 	return nil
 }
+
 func AddVlan(name string, vlan int, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -383,6 +391,7 @@ func AddVlan(name string, vlan int, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func AddVirtualPair(name1, name2 string, options ...map[string]any) error {
 	imsg := [syscall.SizeofIfInfomsg]byte{}
 	return exec(newRequest(
@@ -402,6 +411,7 @@ func AddVirtualPair(name1, name2 string, options ...map[string]any) error {
 			}),
 		}), j.Boolean(getOption("trace", options...)))
 }
+
 func AddBridge(name string, options ...map[string]any) error {
 	imsg, value := [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
 	binary.LittleEndian.PutUint32(value[:], 1)
@@ -421,6 +431,7 @@ func AddBridge(name string, options ...map[string]any) error {
 			}),
 		}), j.Boolean(getOption("trace", options...)))
 }
+
 func AddBond(name string, options ...map[string]any) error {
 	imsg := [syscall.SizeofIfInfomsg]byte{}
 	return exec(newRequest(
@@ -438,6 +449,7 @@ func AddBond(name string, options ...map[string]any) error {
 			}),
 		}), j.Boolean(getOption("trace", options...)))
 }
+
 func RenameInterface(from, to string, options ...map[string]any) error {
 	if itfs := Interfaces(from); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -454,6 +466,7 @@ func RenameInterface(from, to string, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func SetInterfaceNamespace(name string, pid int, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -471,6 +484,7 @@ func SetInterfaceNamespace(name string, pid int, options ...map[string]any) erro
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func LinkInterface(master, slave string, options ...map[string]any) error {
 	if master == slave {
 		return syscall.Errno(syscall.EINVAL)
@@ -497,9 +511,11 @@ func LinkInterface(master, slave string, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func UnlinkInterface(slave string, options ...map[string]any) error {
 	return LinkInterface("", slave, options...)
 }
+
 func RemoveInterface(name string, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -514,6 +530,7 @@ func RemoveInterface(name string, options ...map[string]any) error {
 	}
 	return nil
 }
+
 func SetInterfaceState(name string, up bool, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -532,6 +549,7 @@ func SetInterfaceState(name string, up bool, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func SetInterfaceHWAddress(name, address string, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -551,6 +569,7 @@ func SetInterfaceHWAddress(name, address string, options ...map[string]any) erro
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func SetInterfaceMTU(name string, mtu int, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -568,6 +587,7 @@ func SetInterfaceMTU(name string, mtu int, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func SetInterfaceQueue(name string, qlen int, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -585,6 +605,7 @@ func SetInterfaceQueue(name string, qlen int, options ...map[string]any) error {
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func AddInterfaceAddress(name, address string, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -593,6 +614,7 @@ func AddInterfaceAddress(name, address string, options ...map[string]any) error 
 				amsg := [syscall.SizeofIfAddrmsg]byte{syscall.AF_INET, byte(ones), syscall.IFA_F_NODAD}
 				if bits == 128 {
 					amsg[0] = syscall.AF_INET6
+
 				} else {
 					address = address.To4()
 				}
@@ -611,6 +633,7 @@ func AddInterfaceAddress(name, address string, options ...map[string]any) error 
 	}
 	return syscall.Errno(syscall.ENODEV)
 }
+
 func RemoveInterfaceAddress(name, address string, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
@@ -619,6 +642,7 @@ func RemoveInterfaceAddress(name, address string, options ...map[string]any) err
 				amsg := [syscall.SizeofIfAddrmsg]byte{syscall.AF_INET, byte(ones), syscall.IFA_F_NODAD}
 				if bits == 128 {
 					amsg[0] = syscall.AF_INET6
+
 				} else {
 					address = address.To4()
 				}
@@ -638,7 +662,6 @@ func RemoveInterfaceAddress(name, address string, options ...map[string]any) err
 	return syscall.Errno(syscall.ENODEV)
 }
 
-// routes
 func Routes(filter ...string) (routes []map[string]any) {
 	routes = []map[string]any{}
 	if value, err := syscall.NetlinkRIB(syscall.RTM_GETROUTE, syscall.AF_UNSPEC); err == nil {
@@ -662,10 +685,12 @@ func Routes(filter ...string) (routes []map[string]any) {
 	}
 	return
 }
+
 func AddRoute() error {
 	// TODO support adding routes
 	return nil
 }
+
 func RemoveRoute() error {
 	// TODO support removing routes
 	return nil

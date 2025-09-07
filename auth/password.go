@@ -52,6 +52,7 @@ func crypt512(key, salt string, rounds int) (out string) {
 	for bit := length; bit > 0; bit >>= 1 { // 11
 		if bit%2 == 0 {
 			hash.Write(bkey)
+
 		} else {
 			hash.Write(B)
 		}
@@ -96,6 +97,7 @@ func crypt512(key, salt string, rounds int) (out string) {
 		hash.Reset() // 21a
 		if index%2 != 0 {
 			hash.Write(P) // 21b
+
 		} else {
 			hash.Write(A) // 21c
 		}
@@ -107,6 +109,7 @@ func crypt512(key, salt string, rounds int) (out string) {
 		}
 		if index%2 != 0 {
 			hash.Write(A) // 21f
+
 		} else {
 			hash.Write(P) // 21g
 		}

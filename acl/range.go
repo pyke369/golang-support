@@ -32,8 +32,10 @@ func Ranges(in time.Time, values []string, fallback bool) (match bool, index int
 					if value, err := time.Parse("2006-01-02", captures[2]); err == nil {
 						entry.dates[1] = value.Add(86399 * time.Second)
 					}
+
 				} else if captures := matcher2.FindStringSubmatch(strings.ToLower(value)); len(captures) == 3 {
 					entry.days[0], entry.days[1] = days[captures[1]], days[captures[2]]
+
 				} else if captures := matcher3.FindStringSubmatch(value); len(captures) == 7 {
 					hour, _ := strconv.ParseInt(captures[1], 10, 64)
 					minute, _ := strconv.ParseInt(captures[2], 10, 64)
@@ -65,6 +67,7 @@ func Ranges(in time.Time, values []string, fallback bool) (match bool, index int
 	}
 	return fallback, -1
 }
+
 func RangesConfig(in time.Time, config *uconfig.UConfig, path string, fallback bool) (match bool, index int) {
 	return Ranges(in, config.Strings(path), fallback)
 }

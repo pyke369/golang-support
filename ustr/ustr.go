@@ -64,6 +64,7 @@ func Int(in int, extra ...int) string {
 				out[index] = pad
 			}
 			copy(out[usize-length:], value)
+
 		} else {
 			out[0] = '-'
 			for index := 1; index <= usize-length; index++ {
@@ -71,6 +72,7 @@ func Int(in int, extra ...int) string {
 			}
 			copy(out[usize-length+1:], value[1:])
 		}
+
 	} else {
 		copy(out, value)
 		for index := length; index < usize; index++ {
@@ -104,12 +106,14 @@ func String(in string, extra ...int) string {
 	out := make([]byte, usize)
 	if usize < length {
 		copy(out, in)
+
 	} else {
 		if size < 0 {
 			copy(out, in)
 			for index := length; index < usize; index++ {
 				out[index] = pad
 			}
+
 		} else {
 			for index := 0; index < usize-length; index++ {
 				out[index] = pad
@@ -191,6 +195,7 @@ func Range(in string) (out []int) {
 		if start >= 0 {
 			if end < 0 {
 				list[start] = struct{}{}
+
 			} else {
 				for index := start; index <= end; index++ {
 					list[index] = struct{}{}
@@ -278,6 +283,7 @@ func Strftime(layout string, base time.Time) string {
 				case 'l':
 					if base.Hour() == 0 || base.Hour() == 12 {
 						out = append(out, "12"...)
+
 					} else {
 						out = append(out, Int(base.Hour()%12, 2, 1)...)
 					}
@@ -336,6 +342,7 @@ func Strftime(layout string, base time.Time) string {
 					day := int(base.Weekday())
 					if day == 0 {
 						day = 6
+
 					} else {
 						day--
 					}

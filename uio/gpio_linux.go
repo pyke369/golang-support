@@ -44,11 +44,13 @@ type _GPIO_CHIPINFO struct {
 	label [32]byte
 	lines uint32
 }
+
 type _GPIO_LINEATTRIBUTE struct {
 	id      uint32
 	padding uint32
 	value   uint64
 }
+
 type _GPIO_LINEINFO struct {
 	name      [32]byte
 	consumer  [32]byte
@@ -65,6 +67,7 @@ type GPIO struct {
 	label  string
 	lines  int
 }
+
 type GPIOLINE struct {
 	Name     string
 	Consumer string
@@ -146,5 +149,6 @@ func (g *GPIO) Lines() (lines []*GPIOLINE) {
 			})
 		}
 	}
+
 	return
 }
