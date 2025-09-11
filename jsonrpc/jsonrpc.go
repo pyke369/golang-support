@@ -486,20 +486,27 @@ func Flatten(in any, out map[string]string, extra ...map[string]any) {
 		done:
 			for fpath, fvalue := range filter {
 				fpath, fvalue[0], fvalue[1] = strings.TrimSpace(fpath), strings.TrimSpace(fvalue[0]), strings.TrimSpace(fvalue[1])
+				for _, replace := range rcache.Get(`\{\{\s*([^\}\s]+)\s*\}\}`).FindAllStringSubmatch(fpath, -1) {
+					fpath = strings.Replace(fpath, replace[0], out[replace[1]], 1)
+				}
+
 				if strings.HasPrefix(fpath, "~") {
 					matcher := rcache.Get(strings.TrimSpace(fpath[1:]))
 					for path := range out {
-						if matcher.MatchString(path) {
+						if captures := matcher.FindStringSubmatch(path); captures != nil {
 							if fvalue[0] != "" && !rcache.Get(fvalue[0]).MatchString(out[path]) {
 								filtered = map[string]string{}
 								break done
 							}
-							if fvalue[1] != "" {
-								value := filtered[fvalue[1]]
+							if key := fvalue[1]; key != "" {
+								for index := 1; index < len(captures); index++ {
+									key = strings.ReplaceAll(key, `${`+strconv.Itoa(index)+`}`, captures[index])
+								}
+								value := filtered[key]
 								if value != "" {
 									value += " "
 								}
-								filtered[fvalue[1]] = value + out[path]
+								filtered[key] = value + out[path]
 							}
 						}
 					}
