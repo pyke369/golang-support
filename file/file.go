@@ -84,10 +84,18 @@ func Exists(path string) string {
 	return ""
 }
 
+func IsRegular(path string) os.FileInfo {
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return info
+	}
+
+	return nil
+}
+
 func IsDir(path string) bool {
 	info, err := os.Stat(path)
 
-	return err == nil && info.IsDir()
+	return err == nil && info.Mode().IsDir()
 }
 
 func Link(path string) (base string) {

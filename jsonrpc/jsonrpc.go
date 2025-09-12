@@ -637,6 +637,11 @@ func StringSlice(in any, extra ...bool) (out []string) {
 			}
 		}
 	}
+	if value, ok := in.(string); ok {
+		if !noempty || strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
 	return
 }
 
