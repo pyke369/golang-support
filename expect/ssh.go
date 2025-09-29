@@ -351,6 +351,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 			command = "<rpc>" + command + "</rpc>"
 		}
 	}
+
 	if _, err = conn.input.Write([]byte(command + "\n")); err != nil {
 		conn.Reset()
 		return nil, ustr.Wrap(err, "ssh")
@@ -377,7 +378,7 @@ func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool)
 					break
 				}
 			}
-			result = parseXML(strings.Join(value, ""))
+			result = parseXML(strings.Join(value, "\n"))
 		}
 
 	case <-time.After(timeout - time.Since(start)):
