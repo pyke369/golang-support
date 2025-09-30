@@ -28,6 +28,7 @@ func Wrap(err error, msg string) error {
 	if err == nil {
 		return nil
 	}
+
 	return errors.New(msg + ": " + err.Error())
 }
 
@@ -39,6 +40,7 @@ func Bool(in bool, extra ...int) (out string) {
 	if in {
 		return bools[mode][1]
 	}
+
 	return bools[mode][0]
 }
 
@@ -79,7 +81,20 @@ func Int(in int, extra ...int) string {
 			out[index] = pad
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func Float(in float64, extra ...int) string {
+	precision := 0
+	if len(extra) > 0 {
+		precision = extra[0]
+	}
+	if len(extra) > 1 {
+		return String(strconv.FormatFloat(in, 'f', precision, 64), extra[1:]...)
+	}
+
+	return strconv.FormatFloat(in, 'f', precision, 64)
 }
 
 func String(in string, extra ...int) string {
@@ -121,6 +136,7 @@ func String(in string, extra ...int) string {
 			copy(out[usize-length:], in)
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
@@ -145,6 +161,7 @@ func Hex(in []byte, extra ...byte) string {
 			offset++
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
@@ -152,12 +169,14 @@ func HexInt(in uint64, size int) string {
 	size = min(8, max(1, size))
 	value := [8]byte{}
 	binary.BigEndian.PutUint64(value[:], in)
+
 	return Hex(value[8-size:])
 }
 
 func IPv4(in uint32) string {
 	ip := net.IPv4(0, 0, 0, 0).To4()
 	binary.BigEndian.PutUint32(ip, in)
+
 	return ip.String()
 }
 
@@ -170,13 +189,15 @@ func Pointer(in any) string {
 			out = append(out, htable[value>>4], htable[value&0x0f])
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
-func Binarize(dst []byte, src string) (i int, err error) {
+func Binary(dst []byte, src string) (i int, err error) {
 	if len(src)%2 != 0 || len(dst) < len(src)/2 {
 		return 0, hex.ErrLength
 	}
+
 	return hex.Decode(dst, []byte(src))
 }
 
@@ -207,6 +228,7 @@ func Range(in string) (out []int) {
 		out = append(out, value)
 	}
 	sort.Ints(out)
+
 	return
 }
 
@@ -217,7 +239,43 @@ func Duration(duration time.Duration) string {
 	if duration < time.Second {
 		return duration.Truncate(time.Millisecond).String()
 	}
+
 	return duration.Truncate(10 * time.Millisecond).String()
+}
+
+func Size(size float64, extra ...int) (out string) {
+	switch {
+	case size <= 1<<10:
+		out = strconv.FormatInt(int64(size), 10) + "B "
+
+	case size <= 1<<20:
+		out = strconv.FormatInt(int64(size/(1<<10)), 10) + "kB"
+
+	case size <= 1<<30:
+		out = strconv.FormatInt(int64(size/(1<<20)), 10) + "MB"
+
+	case size <= 1<<40:
+		out = strconv.FormatInt(int64(size/(1<<30)), 10) + "GB"
+
+	default:
+		out = strconv.FormatInt(int64(size/(1<<40)), 10) + "TB"
+	}
+	if len(extra) > 0 {
+		return String(out, extra...)
+	}
+
+	return
+}
+
+func Plural(in string, count int, plural ...string) string {
+	if count > 1 {
+		if len(plural) > 0 && plural[0] != "" {
+			return in + plural[0]
+		}
+		return in + "s"
+	}
+
+	return in
 }
 
 func Strftime(layout string, base time.Time) string {
@@ -379,6 +437,7 @@ func Strftime(layout string, base time.Time) string {
 			out = append(out, layout[index])
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
@@ -417,6 +476,7 @@ func Options(in string) (out int) {
 			out |= OptionJSON
 		}
 	}
+
 	return
 }
 
@@ -433,5 +493,6 @@ func Transform(in string, options int) string {
 	if options&OptionUpper != 0 {
 		in = strings.ToUpper(in)
 	}
+
 	return in
 }
