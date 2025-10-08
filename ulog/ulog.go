@@ -255,6 +255,7 @@ func (l *ULog) Load(target string) *ULog {
 	l.filePath = ""
 	l.fileTime = TIME_DATETIME
 	l.fileSeverity = true
+	l.fileFacility = 0
 	l.console = false
 	l.consoleTime = TIME_DATETIME
 	l.consoleSeverity = true
@@ -266,6 +267,7 @@ func (l *ULog) Load(target string) *ULog {
 	l.purgeCount = 0
 	l.compressPath = ""
 	l.compressAge = 0
+	l.level = LOG_INFO
 
 	for _, target := range regexp.MustCompile(`(file|console|syslog|option|purge|compress)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
