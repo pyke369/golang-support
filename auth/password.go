@@ -14,7 +14,7 @@ import (
 // see https://akkadia.org/drepper/SHA-crypt.txt
 var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 
-func crypt512(key, salt string, rounds int) (out string) {
+func Crypt512(key, salt string, rounds int) (out string) {
 	out = "$6$"
 	if rounds == 0 {
 		rounds = 5000
@@ -162,7 +162,7 @@ func Password(in string, values []string, fallback bool) (match bool, entry stri
 						rounds, _ = strconv.Atoi(parts[2][7:])
 						salt = parts[3]
 					}
-					if crypt512(password, salt, rounds) == check {
+					if Crypt512(password, salt, rounds) == check {
 						return true, value
 					}
 
