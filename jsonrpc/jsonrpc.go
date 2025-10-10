@@ -131,6 +131,7 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 	} else {
 		return nil, ustr.Wrap(err, "jsonrpc")
 	}
+
 	return
 }
 
@@ -179,6 +180,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 	if len(calls) > 1 {
 		payload = append(payload, ']')
 	}
+
 	return
 }
 
@@ -224,6 +226,7 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 			}
 		}
 	}
+
 	return calls, nil
 }
 
@@ -245,6 +248,7 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 	if err != nil {
 		return nil, err
 	}
+
 	return Response(out, calls)
 }
 
@@ -420,6 +424,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 	if batch {
 		out = append(out, ']')
 	}
+
 	return out
 }
 
@@ -548,6 +553,7 @@ func Boolean(in any) bool {
 		}
 		return false
 	}
+
 	return false
 }
 
@@ -561,6 +567,7 @@ func String(in any, fallback ...string) string {
 	if len(fallback) != 0 {
 		return fallback[0]
 	}
+
 	return ""
 }
 
@@ -590,6 +597,7 @@ func Number(in any, fallback ...float64) float64 {
 	if len(fallback) != 0 {
 		return fallback[0]
 	}
+
 	return 0.0
 }
 
@@ -604,6 +612,7 @@ func Slice(in any) (out []any) {
 		}
 		return
 	}
+
 	return []any{}
 }
 
@@ -611,6 +620,7 @@ func SliceItem(in []any, index int) any {
 	if index >= len(in) {
 		return nil
 	}
+
 	return in[index]
 }
 
@@ -628,28 +638,31 @@ func StringSlice(in any, extra ...bool) (out []string) {
 		}
 		return
 	}
+
 	out = []string{}
-	if cast, ok := in.([]any); ok {
-		for _, item := range cast {
-			value := String(item)
-			if !noempty || strings.TrimSpace(value) != "" {
-				out = append(out, value)
-			}
+	for _, item := range Slice(in) {
+		value := String(item)
+		if !noempty || strings.TrimSpace(value) != "" {
+			out = append(out, value)
 		}
 	}
+
 	if value, ok := in.(string); ok {
 		if !noempty || strings.TrimSpace(value) != "" {
 			out = append(out, value)
 		}
 	}
+
 	return
 }
 
-func StringSliceItem(in []string, index int) string {
-	if index >= len(in) {
+func StringSliceItem(in any, index int) string {
+	ssin := StringSlice(in)
+	if index >= len(ssin) {
 		return ""
 	}
-	return in[index]
+
+	return ssin[index]
 }
 
 func NumberSlice(in any, extra ...bool) (out []float64) {
@@ -666,23 +679,25 @@ func NumberSlice(in any, extra ...bool) (out []float64) {
 		}
 		return
 	}
+
 	out = []float64{}
-	if cast, ok := in.([]any); ok {
-		for _, item := range cast {
-			value := Number(item)
-			if !noempty || value != 0 {
-				out = append(out, value)
-			}
+	for _, item := range Slice(in) {
+		value := Number(item)
+		if !noempty || value != 0 {
+			out = append(out, value)
 		}
 	}
+
 	return
 }
 
 func NumberSliceItem(in []float64, index int) float64 {
-	if index >= len(in) {
+	nsin := NumberSlice(in)
+	if index >= len(nsin) {
 		return 0.0
 	}
-	return in[index]
+
+	return nsin[index]
 }
 
 func Map(in any) (out map[string]any) {
@@ -697,6 +712,7 @@ func Map(in any) (out map[string]any) {
 		}
 		return
 	}
+
 	return map[string]any{}
 }
 
@@ -714,15 +730,15 @@ func StringMap(in any, extra ...bool) (out map[string]string) {
 		}
 		return
 	}
+
 	out = map[string]string{}
-	if cast, ok := in.(map[string]any); ok {
-		for key, item := range cast {
-			value := String(item)
-			if !noempty || strings.TrimSpace(value) != "" {
-				out[key] = value
-			}
+	for key, item := range Map(in) {
+		value := String(item)
+		if !noempty || strings.TrimSpace(value) != "" {
+			out[key] = value
 		}
 	}
+
 	return
 }
 
@@ -740,15 +756,15 @@ func NumberMap(in any, extra ...bool) (out map[string]float64) {
 		}
 		return
 	}
+
 	out = map[string]float64{}
-	if cast, ok := in.(map[string]any); ok {
-		for key, item := range cast {
-			value := Number(item)
-			if !noempty || value != 0 {
-				out[key] = value
-			}
+	for key, item := range Map(in) {
+		value := Number(item)
+		if !noempty || value != 0 {
+			out[key] = value
 		}
 	}
+
 	return
 }
 
@@ -757,6 +773,7 @@ func IntegerMap(in any, extra ...bool) (out map[string]int) {
 	for key, value := range NumberMap(in, extra...) {
 		out[key] = int(value)
 	}
+
 	return
 }
 
@@ -764,6 +781,7 @@ func KeysLength(in any) (out int) {
 	for key := range Map(in) {
 		out = max(len(key), out)
 	}
+
 	return
 }
 
@@ -776,7 +794,7 @@ func MapKeys(in any) (out []string) {
 	return
 }
 
-func SwitchMap(in map[string]string) (out map[string]string) {
+func InvertMap(in map[string]string) (out map[string]string) {
 	out = map[string]string{}
 	for key, value := range in {
 		out[value] = key

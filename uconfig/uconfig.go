@@ -136,6 +136,7 @@ func grow(in []byte, extra int, arena *bslab.Arena) (out []byte) {
 		out = append(out, in...)
 		arena.Put(in)
 	}
+
 	return
 }
 
@@ -285,6 +286,7 @@ func New(in string, extra ...map[string]any) (config *UConfig, err error) {
 	}
 	config = &UConfig{size: 64 << 10, input: in, separator: ".", arena: arena}
 	err = config.Load(in, inline)
+
 	return config, err
 }
 
@@ -832,6 +834,7 @@ func (c *UConfig) Reload() (changed bool, err error) {
 	if err = c.Load(c.input); err != nil {
 		return
 	}
+
 	return hash != c.hash, nil
 }
 
@@ -861,6 +864,7 @@ func (c *UConfig) Dump() string {
 			return config.String()
 		}
 	}
+
 	return "{}"
 }
 
@@ -881,6 +885,7 @@ func (c *UConfig) Path(in ...string) string {
 			}
 		}
 	}
+
 	return unsafe.String(unsafe.SliceData(out), len(out))
 }
 
@@ -888,6 +893,7 @@ func (c *UConfig) Base(path string) string {
 	if index := strings.LastIndex(path, c.separator); index != -1 {
 		return path[index+1:]
 	}
+
 	return path
 }
 
@@ -961,6 +967,7 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	c.mu.Lock()
 	c.cache[path] = paths
 	c.mu.Unlock()
+
 	return
 }
 
@@ -1026,6 +1033,7 @@ func (c *UConfig) value(path string) (out string, exists bool) {
 	c.mu.Lock()
 	c.cache[path] = false
 	c.mu.Unlock()
+
 	return "", false
 }
 
@@ -1036,6 +1044,7 @@ func (c *UConfig) Boolean(path string, fallback ...bool) bool {
 	if len(fallback) > 0 {
 		return fallback[0]
 	}
+
 	return false
 }
 
@@ -1046,6 +1055,7 @@ func (c *UConfig) String(path string, fallback ...string) string {
 	if len(fallback) > 0 {
 		return fallback[0]
 	}
+
 	return ""
 }
 
@@ -1064,6 +1074,7 @@ func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
 		}
 		return []string{fallback}
 	}
+
 	return []string{value}
 }
 
@@ -1076,6 +1087,7 @@ func (c *UConfig) StringMap(path string) (out map[string]string) {
 			}
 		}
 	}
+
 	return
 }
 
@@ -1095,6 +1107,7 @@ func (c *UConfig) Strings(path string) (out []string) {
 			}
 		}
 	}
+
 	return
 }
 
@@ -1103,6 +1116,7 @@ func (c *UConfig) Integer(path string, extra ...int64) int64 {
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
+
 	return c.IntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
 
@@ -1115,6 +1129,7 @@ func (c *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) in
 	if err != nil {
 		return fallback
 	}
+
 	return max(min(nvalue, highest), lowest)
 }
 
@@ -1123,6 +1138,7 @@ func (c *UConfig) Float(path string, extra ...float64) float64 {
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
+
 	return c.FloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
 
@@ -1135,6 +1151,7 @@ func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) fl
 	if err != nil {
 		return fallback
 	}
+
 	return max(min(nvalue, highest), lowest)
 }
 
@@ -1146,6 +1163,7 @@ func (c *UConfig) SizeBounds(path string, fallback, lowest, highest int64, extra
 	if value, ok := c.value(path); ok {
 		return j.SizeBounds(value, fallback, lowest, highest, extra...)
 	}
+
 	return fallback
 }
 
@@ -1161,6 +1179,7 @@ func (c *UConfig) DurationBounds(path string, fallback, lowest, highest float64)
 	if value, ok := c.value(path); ok {
 		return j.DurationBounds(value, fallback, lowest, highest)
 	}
+
 	return time.Duration(fallback * float64(time.Second))
 }
 
@@ -1188,5 +1207,6 @@ func Args() (args []string) {
 			args = []string{}
 		}
 	}
+
 	return
 }
