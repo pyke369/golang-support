@@ -18,7 +18,8 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 			out += ` ` + key + `="` + strings.ReplaceAll(value, `"`, `\"`) + `"`
 		}
 	}
-	out += ">"
+	out += ">\n"
+
 	if len(parameters) > 0 {
 		keys := []string{}
 		for key := range parameters[0] {
@@ -29,13 +30,14 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 			value := parameters[0][key]
 			out += "<" + key
 			if value == "" {
-				out += "/>"
+				out += "/>\n"
 			} else {
-				out += ">" + value + "</" + key + ">"
+				out += ">\n" + value + "\n</" + key + ">\n"
 			}
 		}
 	}
-	out += "</" + command + ">"
+
+	out += "</" + command + ">\n"
 
 	return
 }
