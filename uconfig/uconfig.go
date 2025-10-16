@@ -1091,7 +1091,7 @@ func (c *UConfig) StringMap(path string) (out map[string]string) {
 	return
 }
 
-func (c *UConfig) Strings(path string) (out []string) {
+func (c *UConfig) Strings(path string, fallback ...[]string) (out []string) {
 	if value := strings.TrimSpace(c.String(path)); value != "" {
 		out = append(out, value)
 
@@ -1106,6 +1106,9 @@ func (c *UConfig) Strings(path string) (out []string) {
 				}
 			}
 		}
+	}
+	if len(out) == 0 && len(fallback) > 0 {
+		return fallback[0]
 	}
 
 	return

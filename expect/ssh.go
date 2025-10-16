@@ -2,27 +2,18 @@ package expect
 
 import (
 	"bytes"
-	"crypto/md5"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/netip"
 	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
-
+	"github.com/pyke369/golang-support/uuid"
 	"golang.org/x/crypto/ssh"
-)
-
-const (
-	sshMaxConnections = 5
-	sshIdleTimeout    = 120 * time.Second
-	sshConnectTimeout = 10 * time.Second
-	sshExecTimeout    = 30 * time.Second
 )
 
 type SSHCredentials struct {
@@ -32,76 +23,33 @@ type SSHCredentials struct {
 }
 
 type SSHOptions struct {
-	Mode      string
-	SubSystem string
-	Marker    string
-	Filter    string
+	ConnectTimeout time.Duration
+	ExecTimeout    time.Duration
+	IdleTimeout    time.Duration
+	Mode           string
+	SubSystem      string
+	Pty            bool
+	Prompt         string
+	Filter         string
+	Mock           func(string, any) []string
+	Rewrite        func([]string, any) []string
 }
 
-type sshConnection struct {
-	mu      sync.Mutex
-	active  bool
-	running bool
-	last    time.Time
+type SSHConn struct {
+	remote  string
+	closed  atomic.Bool
+	last    int64
+	config  *ssh.ClientConfig
+	options *SSHOptions
 	client  *ssh.Client
 	session *ssh.Session
 	input   io.WriteCloser
 	output  io.Reader
-	result  chan []string
 }
 
-type sshTransport struct {
-	remote  string
-	idle    time.Duration
-	config  *ssh.ClientConfig
-	options *SSHOptions
-	sync.Mutex
-	connections []*sshConnection
-}
-
-var (
-	sshTransports = map[string]*sshTransport{}
-	sshLock       sync.Mutex
-)
-
-func init() {
-	go func() {
-		for range time.Tick(5 * time.Second) {
-			sshLock.Lock()
-			for _, transport := range sshTransports {
-				transport.Lock()
-				for _, conn := range transport.connections {
-					if conn != nil && !conn.last.IsZero() {
-						if time.Since(conn.last) >= transport.idle {
-							conn.Reset()
-						}
-					}
-				}
-				transport.Unlock()
-			}
-			sshLock.Unlock()
-		}
-	}()
-}
-
-func (c *sshConnection) Reset() {
-	c.mu.Lock()
-	if c.session != nil {
-		c.session.Close()
-	}
-	if c.client != nil {
-		c.client.Close()
-	}
-	if c.result != nil {
-		close(c.result)
-	}
-	c.active, c.running, c.last, c.result, c.client, c.session, c.input, c.output = false, false, time.Time{}, nil, nil, nil, nil, nil
-	c.mu.Unlock()
-}
-
-func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOptions, extra ...int) (transport *sshTransport, err error) {
+func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions) (conn *SSHConn, err error) {
 	if remote == "" {
-		return nil, errors.New("ssh: invalid remote parameter")
+		return nil, errors.New("ssh: invalid remote")
 	}
 	if credentials == nil || credentials.Username == "" || (credentials.Password == "" && credentials.Key == "") {
 		return nil, errors.New("ssh: invalid credentials")
@@ -109,6 +57,24 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	if options == nil {
 		options = &SSHOptions{Mode: TEXT}
 	}
+	if options.Mode == "" {
+		options.Mode = TEXT
+	}
+	if options.ConnectTimeout == 0 {
+		options.ConnectTimeout = 7 * time.Second
+	}
+	options.ConnectTimeout = min(15*time.Second, max(time.Second, options.ConnectTimeout))
+	if options.ExecTimeout == 0 {
+		options.ExecTimeout = 30 * time.Second
+	}
+	options.ExecTimeout = min(2*time.Minute, max(5*time.Second, options.ExecTimeout))
+	if options.IdleTimeout == 0 {
+		options.IdleTimeout = time.Minute
+	}
+	if options.IdleTimeout != 0 {
+		options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
+	}
+
 	if options.SubSystem != "" && options.SubSystem != "netconf" {
 		return nil, errors.New("ssh: invalid subsystem")
 	}
@@ -122,8 +88,8 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 	}
 	switch options.SubSystem {
 	case "":
-		if options.Marker == "" {
-			options.Marker = `^[^\$]*[\$]`
+		if options.Prompt == "" {
+			options.Prompt = `^[^\$#]*[\$#]`
 		}
 		if options.Mode == XML && options.Filter == "" {
 			options.Filter = `^([^<]|$)`
@@ -131,23 +97,17 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 
 	case "netconf":
 		options.Mode = XML
-		if options.Marker == "" {
-			options.Marker = `^\]\]>\]\]>`
+		if options.Prompt == "" {
+			options.Prompt = `^\]\]>\]\]>`
 		}
 	}
-	if options.Marker == "" {
-		return nil, errors.New("ssh: invalid marker")
+	if options.Prompt == "" {
+		return nil, errors.New("ssh: invalid prompt")
 	}
 	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
 		return nil, errors.New("ssh: invalid mode")
 	}
 
-	key := remote + credentials.Username + credentials.Password + credentials.Key + options.Mode + options.SubSystem + options.Marker + options.Filter
-	sshLock.Lock()
-	defer sshLock.Unlock()
-	if transport = sshTransports[key]; transport != nil {
-		return
-	}
 	auth := []ssh.AuthMethod{}
 	if credentials.Key != "" {
 		if private, err := os.ReadFile(credentials.Key); err != nil {
@@ -164,246 +124,304 @@ func NewSSHTransport(remote string, credentials *SSHCredentials, options *SSHOpt
 		auth = append(auth, ssh.Password(credentials.Password))
 	}
 
-	idle := sshIdleTimeout
-	if len(extra) >= 2 && extra[1] != 0 {
-		idle = time.Duration(extra[1]) * time.Second
-	}
-	transport = &sshTransport{
+	return &SSHConn{
 		remote:  remote,
-		idle:    idle,
 		options: options,
 		config: &ssh.ClientConfig{
 			User:            credentials.Username,
-			Timeout:         sshConnectTimeout,
+			Timeout:         options.ConnectTimeout,
 			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 			Auth:            auth,
 		},
-	}
-
-	highest := sshMaxConnections
-	if len(extra) >= 1 && extra[0] != 0 {
-		highest = extra[0]
-	}
-	transport.connections = make([]*sshConnection, min(sshMaxConnections, max(1, highest)))
-	sshTransports[key] = transport
-	return
+	}, nil
 }
 
-func (t *sshTransport) Run(command string, timeout time.Duration, cache ...bool) (result any, err error) {
-	var (
-		start = time.Now()
-		conn  *sshConnection
-		ckey  string
-	)
+func (c *SSHConn) Close() {
+	if c.closed.Load() {
+		return
+	}
+	c.closed.Store(true)
+	if c.session != nil {
+		c.session.Close()
+	}
+	if c.client != nil {
+		c.client.Close()
+	}
+	if c.input != nil {
+		c.input.Close()
+	}
+}
 
-	if len(cache) > 0 && cache[0] {
-		hash := md5.Sum([]byte(t.remote + t.options.Mode + t.options.SubSystem + t.options.Marker + t.options.Filter + command))
-		ckey = "/tmp/_" + ustr.Hex(hash[:]) + ".json"
-		if content, err := os.ReadFile(ckey); err == nil {
-			if json.Unmarshal(content, &result) == nil {
-				return result, nil
+func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string) (lines []string, err error) {
+	queue := make(chan []string)
+
+	go func() {
+		defer func() {
+			recover()
+		}()
+
+		data, offset, prompt, filter, lines := make([]byte, 64<<10), 0, rcache.Get(prompt), rcache.Get(filter), []string{}
+	done:
+		for {
+			n, err := c.output.Read(data[offset:])
+			if err != nil {
+				return
 			}
-		}
-	}
-	if command == "" {
-		return nil, errors.New("ssh: invalid or missing parameter")
-	}
-	if timeout <= 0 {
-		timeout = sshExecTimeout
-	}
+			n += offset
 
-	for {
-		t.Lock()
-		for index, value := range t.connections {
-			if value == nil || !value.active {
-				conn = value
-				if conn == nil {
-					conn = &sshConnection{}
-					t.connections[index] = conn
-
+			loffset := 0
+			for {
+				if lindex := bytes.IndexAny(data[loffset:n], "\n"); lindex >= 0 {
+					line := bytes.TrimSpace(data[loffset : loffset+lindex])
+					loffset += lindex + 1
+					if prompt.Match(line) {
+						break done
+					}
+					if c.options.Filter != "" && filter.Match(line) {
+						continue
+					}
+					lines = append(lines, string(line))
+					continue
 				}
-				conn.active, conn.last = true, time.Now()
+
+				offset = 0
+				if loffset < n {
+					copy(data, data[loffset:n])
+					offset = n - loffset
+					if prompt.Match(bytes.TrimSpace(data[:offset])) {
+						break done
+					}
+				}
 				break
 			}
 		}
-		t.Unlock()
-		if conn == nil {
-			if time.Since(start) >= timeout/2 {
-				return nil, errors.New("ssh: max connections reached")
-			}
-			time.Sleep(time.Second)
+		queue <- lines
+	}()
 
-		} else {
-			break
-		}
+	select {
+	case lines = <-queue:
+
+	case <-time.After(timeout):
+		c.Close()
+		err = os.ErrDeadlineExceeded
+	}
+	close(queue)
+
+	return
+}
+
+func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err error) {
+	if command == "" {
+		return nil, errors.New("ssh: invalid or missing parameter")
+	}
+	if c.closed.Load() {
+		return nil, errors.New("ssh: connection closed")
 	}
 
-	if conn.session == nil {
-		if conn.client, err = ssh.Dial("tcp", t.remote, t.config); err != nil {
-			conn.Reset()
+	var (
+		ctx   any
+		trace *os.File
+	)
+
+	timeout, prompt, filter, mock, rewrite, raw, empty := c.options.ExecTimeout, c.options.Prompt, c.options.Filter, c.options.Mock, c.options.Rewrite, false, false
+	if len(extra) > 0 {
+		if value, ok := extra[0]["timeout"].(time.Duration); ok {
+			timeout = value
+		}
+		if value, ok := extra[0]["prompt"].(string); ok && value != "" {
+			prompt = value
+		}
+		if value, ok := extra[0]["filter"].(string); ok {
+			filter = value
+		}
+		if value, exists := extra[0]["context"]; exists {
+			ctx = value
+		}
+		if value, ok := extra[0]["mock"].(func(string, any) []string); ok {
+			mock = value
+		}
+		if value, ok := extra[0]["rewrite"].(func([]string, any) []string); ok {
+			rewrite = value
+		}
+		if value, ok := extra[0]["raw"].(bool); ok {
+			raw = value
+		}
+		if value, ok := extra[0]["empty"].(bool); ok {
+			empty = value
+		}
+		if value, ok := extra[0]["trace"].(*os.File); ok {
+			trace = value
+		}
+	}
+	timeout = min(5*time.Minute, max(5*time.Second, timeout))
+
+	if c.session == nil && mock == nil {
+		start := time.Now()
+		if c.client, err = ssh.Dial("tcp", c.remote, c.config); err != nil {
+			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
 		}
-		if conn.session, err = conn.client.NewSession(); err != nil {
-			conn.Reset()
+		if c.session, err = c.client.NewSession(); err != nil {
+			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
 		}
-		if conn.input, err = conn.session.StdinPipe(); err != nil {
-			conn.Reset()
+
+		if c.input, err = c.session.StdinPipe(); err != nil {
+			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
 		}
-		if conn.output, err = conn.session.StdoutPipe(); err != nil {
-			conn.Reset()
+		if c.output, err = c.session.StdoutPipe(); err != nil {
+			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
 		}
-		if t.options.SubSystem != "" {
-			if err = conn.session.RequestSubsystem(t.options.SubSystem); err != nil {
-				conn.Reset()
+		if c.options.SubSystem != "" {
+			if err = c.session.RequestSubsystem(c.options.SubSystem); err != nil {
+				c.Close()
 				return nil, ustr.Wrap(err, "ssh")
 			}
 
-		} else if err = conn.session.Shell(); err != nil {
-			conn.Reset()
+		} else {
+			if c.options.Pty {
+				if err = c.session.RequestPty("xterm", 40, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
+					c.Close()
+					return nil, ustr.Wrap(err, "ssh")
+				}
+			}
+			if err = c.session.Shell(); err != nil {
+				c.Close()
+				return nil, ustr.Wrap(err, "ssh")
+			}
+		}
+
+		if _, err := c.readlines(c.options.ConnectTimeout-time.Since(start), prompt, filter); err != nil {
+			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
 		}
 
-		go func() {
-			begin, data, lines, mmatcher, fmatcher := 0, make([]byte, 64<<10), make([]string, 0, 4<<10), rcache.Get(t.options.Marker), rcache.Get(t.options.Filter)
-			for {
-				if conn.output == nil {
-					break
-				}
-				read, err := conn.output.Read(data[begin:])
-				if read > 0 {
-					read += begin
-					begin = 0
-					index := 0
-					for index < read {
-						line, complete := "", false
-						if end := bytes.Index(data[index:read], []byte("\n")); end >= 0 {
-							line, complete = strings.TrimRight(string(data[index:index+end]), "\r"), true
-							index += end + 1
-
-						} else {
-							line, index = string(data[index:read]), read
-							begin = len(line)
-							copy(data, line)
-						}
-						sline := strings.TrimSpace(line)
-						if mmatcher.MatchString(sline) {
-							conn.mu.Lock()
-							if conn.result == nil {
-								conn.result = make(chan []string)
-							}
-							if conn.result != nil && conn.running {
-								conn.result <- lines
-							}
-							conn.mu.Unlock()
-							lines, begin = lines[:0], 0
-							continue
-						}
-						if complete {
-							if t.options.Filter != "" && fmatcher.MatchString(sline) {
-								continue
-							}
-							lines = append(lines, line)
-						}
+		if c.options.IdleTimeout != 0 {
+			c.last = time.Now().Unix()
+			go func(c *SSHConn) {
+				for {
+					if c.closed.Load() {
+						break
 					}
+					if time.Now().Unix()-atomic.LoadInt64(&c.last) >= int64(c.options.IdleTimeout/time.Second) {
+						c.Close()
+						break
+					}
+					time.Sleep(time.Second)
 				}
-				if err != nil {
-					break
-				}
-			}
-		}()
-	}
-
-	for {
-		if time.Since(start) >= timeout {
-			conn.Reset()
-			return nil, errors.New("ssh: readyness timeout")
+			}(c)
 		}
-		conn.mu.Lock()
-		if conn.result != nil {
-			conn.running = true
-			conn.mu.Unlock()
-			break
-		}
-		conn.mu.Unlock()
-		time.Sleep(time.Second / 6)
 	}
 
 	command = strings.TrimSpace(command)
-	switch t.options.SubSystem {
+	suffix := ""
+	switch c.options.SubSystem {
 	case "":
-		switch t.options.Mode {
+		switch c.options.Mode {
 		case JSON:
 			if !strings.Contains(command, "display json") {
-				command += "|display json|no-more"
+				command += "|display json |no-more"
 			}
 
 		case XML:
 			if !strings.Contains(command, "display xml") {
-				command += "|display xml|no-more"
+				command += "|display xml |no-more"
 			}
 		}
 
 	case "netconf":
-		if !strings.HasPrefix(command, "<rpc>") || !strings.HasSuffix(command, "</rpc>") {
-			command = "<rpc>" + command + "</rpc>"
+		if !strings.HasPrefix(command, "<rpc") {
+			id := uuid.New()
+			command = `<rpc message-id="` + id.String() + `">` + "\n" + command
+		}
+		if !strings.HasSuffix(command, "</rpc>") {
+			command += "\n</rpc>"
+		}
+		suffix = "\n]]>]]>"
+	}
+	if trace != nil {
+		trace.WriteString(">  " + strings.Join(strings.Split(command, "\n"), "\n>  ") + "\n\n")
+	}
+
+	var lines []string
+
+	if mock != nil {
+		lines = mock(command+suffix+"\n", ctx)
+
+	} else {
+		atomic.StoreInt64(&c.last, time.Now().Unix())
+		if _, err = c.input.Write([]byte(command + suffix + "\n")); err != nil {
+			c.Close()
+			return nil, ustr.Wrap(err, "ssh")
+		}
+
+		lines, err = c.readlines(timeout, prompt, filter)
+		if err != nil {
+			c.Close()
+			return nil, ustr.Wrap(err, "ssh")
 		}
 	}
 
-	if _, err = conn.input.Write([]byte(command + "\n")); err != nil {
-		conn.Reset()
-		return nil, ustr.Wrap(err, "ssh")
-	}
-	select {
-	case value := <-conn.result:
-		switch t.options.Mode {
+	if raw {
+		if rewrite != nil {
+			lines = rewrite(lines, ctx)
+		}
+		if trace != nil {
+			trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
+		}
+		result = lines
+
+	} else {
+		switch c.options.Mode {
 		case TEXT:
-			result = value
+			if rewrite != nil {
+				lines = rewrite(lines, ctx)
+			}
+			if trace != nil {
+				trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
+			}
+			result = lines
 
 		case JSON:
-			for index, line := range value {
+			if rewrite != nil {
+				lines = rewrite(lines, ctx)
+			}
+			for index, line := range lines {
 				if line != "" && line[0] == '{' {
-					value = value[index:]
+					lines = lines[index:]
 					break
 				}
 			}
-			result = parseJSON(strings.Join(value, ""))
+			result = ParseJSON(strings.Join(lines, ""))
 
 		case XML:
-			for index, line := range value {
+			if rewrite != nil {
+				lines = rewrite(lines, ctx)
+			}
+			if trace != nil {
+				trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
+			}
+			for index, line := range lines {
 				if line != "" && line[0] == '<' {
-					value = value[index:]
+					lines = lines[index:]
 					break
 				}
 			}
-			result = parseXML(strings.Join(value, "\n"))
+			result = ParseXML(strings.Join(lines, "\n"), empty)
 		}
+	}
+	atomic.StoreInt64(&c.last, time.Now().Unix())
 
-	case <-time.After(timeout - time.Since(start)):
-		err = errors.New("ssh: execution timeout")
-		conn.Reset()
-	}
-	conn.mu.Lock()
-	conn.active, conn.running = false, false
-	conn.mu.Unlock()
-	if ckey != "" {
-		if handle, err := os.OpenFile(ckey, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
-			encoder := json.NewEncoder(handle)
-			encoder.SetEscapeHTML(false)
-			encoder.Encode(result)
-			handle.Close()
-		}
-	}
 	return
 }
 
-func (t *sshTransport) Map(command string, timeout time.Duration, mapping map[string]string, cache ...bool) (result map[string]any, err error) {
-	if run, err := t.Run(command, timeout, cache...); err != nil {
+func (c *SSHConn) Map(command string, mapping map[string]string, extra ...map[string]any) (result map[string]any, err error) {
+	run, err := c.Run(command, extra...)
+	if err != nil {
 		return nil, err
-
-	} else {
-		return Mapper(nil, run, mapping), nil
 	}
+
+	return Mapper(nil, run, mapping), nil
 }

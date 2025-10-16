@@ -12,6 +12,7 @@ func Rand(in int) (out int) {
 		value[0] &= 0x7f
 		out = int(binary.BigEndian.Uint64(value)) % in
 	}
+
 	return
 }
 
@@ -69,5 +70,6 @@ func CRC16(inputs ...[]byte) uint16 {
 	if csum > 0xffff {
 		csum = (csum & 0xffff) + ((csum >> 16) & 0xffff)
 	}
+
 	return ^uint16(csum)
 }

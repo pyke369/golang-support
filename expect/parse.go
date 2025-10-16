@@ -11,7 +11,7 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
-func flatten(in []any) (out any) {
+func flattenJSON(in []any) (out any) {
 	for _, element := range in {
 		if fields, ok := element.(map[string]any); ok {
 			data, dok := fields["data"].(string)
@@ -49,7 +49,7 @@ func flatten(in []any) (out any) {
 					} else {
 						for key, svalue := range fields {
 							if _, ok := svalue.([]any); ok && key != "data" && key != "attributes" {
-								if svalue := flatten(svalue.([]any)); svalue != nil {
+								if svalue := flattenJSON(svalue.([]any)); svalue != nil {
 									value.(map[string]any)[key] = svalue
 								}
 							}
@@ -70,16 +70,17 @@ func flatten(in []any) (out any) {
 			}
 		}
 	}
+
 	return
 }
 
-func parseJSON(in string) (out map[string]any) {
+func ParseJSON(in string) (out map[string]any) {
 	var raw map[string]any
 
 	if json.Unmarshal([]byte(in), &raw) == nil {
 		for key, value := range raw {
 			if _, ok := value.([]any); ok {
-				out = map[string]any{key: flatten(value.([]any))}
+				out = map[string]any{key: flattenJSON(value.([]any))}
 				break
 			}
 		}
@@ -87,7 +88,7 @@ func parseJSON(in string) (out map[string]any) {
 	return
 }
 
-func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
+func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 	out, parent = in, in
 	for _, part := range path {
 		if captures := matcher.FindStringSubmatch(part); captures != nil {
@@ -109,18 +110,25 @@ func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 			}
 		}
 	}
+
 	return
 }
 
-func parseXML(in string) (out map[string]any) {
+func ParseXML(in string, extra ...bool) (out map[string]any) {
 	type NODE struct {
 		Content []byte `xml:",innerxml"`
 	}
+
 	var (
 		data    []byte
 		node    NODE
 		matcher = rcache.Get(`^\[(\d+)\]$`)
+		empty   = false
 	)
+
+	if len(extra) > 0 {
+		empty = extra[0]
+	}
 
 	out = map[string]any{}
 	if xml.Unmarshal([]byte(in), &node) == nil {
@@ -132,16 +140,18 @@ func parseXML(in string) (out map[string]any) {
 		if err != nil || token == nil {
 			break
 		}
+
 		switch node := token.(type) {
 		case xml.StartElement:
 			name := node.Name.Local
-			if current, _ := next(matcher, out, path); current != nil {
+			if current, _ := nextXML(matcher, out, path); current != nil {
 				element := map[string]any{}
 				for _, attribute := range node.Attr {
 					if !strings.HasPrefix(attribute.Name.Local, "xmlns") {
 						element["@"+attribute.Name.Local] = attribute.Value
 					}
 				}
+
 				value1 := current.(map[string]any)
 				if value1[name] == nil {
 					value1[name] = element
@@ -169,7 +179,8 @@ func parseXML(in string) (out map[string]any) {
 					index, _ = strconv.Atoi(captures[1])
 				}
 			}
-			if current, parent := next(matcher, out, path); current != nil && steps != 0 {
+
+			if current, parent := nextXML(matcher, out, path); current != nil && steps != 0 {
 				if len(data) != 0 {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
@@ -184,7 +195,7 @@ func parseXML(in string) (out map[string]any) {
 					}
 					data = nil
 
-				} else {
+				} else if !empty {
 					if value, ok := current.(map[string]any); ok && len(value) == 0 {
 						if steps == 2 {
 							parent.(map[string]any)[last] = parent.(map[string]any)[last].([]any)[:len(parent.(map[string]any)[last].([]any))-1]
@@ -201,6 +212,7 @@ func parseXML(in string) (out map[string]any) {
 			data = bytes.TrimSpace(node.Copy())
 		}
 	}
+
 	return
 }
 
