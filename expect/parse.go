@@ -11,7 +11,7 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
-func flatten(in []any) (out any) {
+func flattenJSON(in []any) (out any) {
 	for _, element := range in {
 		if fields, ok := element.(map[string]any); ok {
 			data, dok := fields["data"].(string)
@@ -49,7 +49,7 @@ func flatten(in []any) (out any) {
 					} else {
 						for key, svalue := range fields {
 							if _, ok := svalue.([]any); ok && key != "data" && key != "attributes" {
-								if svalue := flatten(svalue.([]any)); svalue != nil {
+								if svalue := flattenJSON(svalue.([]any)); svalue != nil {
 									value.(map[string]any)[key] = svalue
 								}
 							}
@@ -70,6 +70,7 @@ func flatten(in []any) (out any) {
 			}
 		}
 	}
+
 	return
 }
 
@@ -79,7 +80,7 @@ func parseJSON(in string) (out map[string]any) {
 	if json.Unmarshal([]byte(in), &raw) == nil {
 		for key, value := range raw {
 			if _, ok := value.([]any); ok {
-				out = map[string]any{key: flatten(value.([]any))}
+				out = map[string]any{key: flattenJSON(value.([]any))}
 				break
 			}
 		}
@@ -87,7 +88,7 @@ func parseJSON(in string) (out map[string]any) {
 	return
 }
 
-func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
+func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 	out, parent = in, in
 	for _, part := range path {
 		if captures := matcher.FindStringSubmatch(part); captures != nil {
@@ -109,6 +110,7 @@ func next(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 			}
 		}
 	}
+
 	return
 }
 
@@ -116,6 +118,7 @@ func parseXML(in string) (out map[string]any) {
 	type NODE struct {
 		Content []byte `xml:",innerxml"`
 	}
+
 	var (
 		data    []byte
 		node    NODE
@@ -135,7 +138,7 @@ func parseXML(in string) (out map[string]any) {
 		switch node := token.(type) {
 		case xml.StartElement:
 			name := node.Name.Local
-			if current, _ := next(matcher, out, path); current != nil {
+			if current, _ := nextXML(matcher, out, path); current != nil {
 				element := map[string]any{}
 				for _, attribute := range node.Attr {
 					if !strings.HasPrefix(attribute.Name.Local, "xmlns") {
@@ -169,7 +172,7 @@ func parseXML(in string) (out map[string]any) {
 					index, _ = strconv.Atoi(captures[1])
 				}
 			}
-			if current, parent := next(matcher, out, path); current != nil && steps != 0 {
+			if current, parent := nextXML(matcher, out, path); current != nil && steps != 0 {
 				if len(data) != 0 {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
@@ -201,10 +204,11 @@ func parseXML(in string) (out map[string]any) {
 			data = bytes.TrimSpace(node.Copy())
 		}
 	}
+
 	return
 }
 
-func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[string]any) {
+func mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[string]any) {
 	separator := "/"
 	out = map[string]any{}
 	if matcher == nil {
@@ -259,7 +263,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 							out[key] = append(out[key].([]any), next[index])
 
 						} else {
-							out[key] = append(out[key].([]any), Mapper(
+							out[key] = append(out[key].([]any), mapper(
 								matcher, next[index],
 								map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 						}
@@ -268,7 +272,7 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 
 				} else if next, ok := current.(map[string]any); ok {
 					out[key] = []any{}
-					out[key] = append(out[key].([]any), Mapper(
+					out[key] = append(out[key].([]any), mapper(
 						matcher, next,
 						map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 					break
@@ -300,12 +304,12 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 
 							} else {
 								if len(indexes) > 1 {
-									out[key] = append(out[key].([]any), Mapper(
+									out[key] = append(out[key].([]any), mapper(
 										matcher, next[index],
 										map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 
 								} else {
-									out[key] = Mapper(
+									out[key] = mapper(
 										matcher, next[index],
 										map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"]
 								}
