@@ -409,7 +409,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 					break
 				}
 			}
-			result = ParseXML(strings.Join(lines, "\n"), empty)
+			result = ParseXML(lines, empty)
 		}
 	}
 	atomic.StoreInt64(&c.last, time.Now().Unix())

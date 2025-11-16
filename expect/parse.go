@@ -114,27 +114,24 @@ func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 	return
 }
 
-func ParseXML(in string, extra ...bool) (out map[string]any) {
-	type NODE struct {
-		Content []byte `xml:",innerxml"`
-	}
-
+func ParseXML(in []string, extra ...bool) (out map[string]any) {
 	var (
 		data    []byte
-		node    NODE
 		matcher = rcache.Get(`^\[(\d+)\]$`)
 		empty   = false
 	)
 
+	out = map[string]any{}
 	if len(extra) > 0 {
 		empty = extra[0]
 	}
-
-	out = map[string]any{}
-	if xml.Unmarshal([]byte(in), &node) == nil {
-		in = string(node.Content)
+	if len(in) >= 2 {
+		if captures := rcache.Get(`^<([^\s>]+).*>$`).FindStringSubmatch(in[0]); len(captures) >= 2 && strings.HasPrefix(in[len(in)-1], "</"+captures[1]) {
+			in = in[1 : len(in)-1]
+		}
 	}
-	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(in))
+
+	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(strings.Join(in, "\n")))
 	for {
 		token, err := decoder.Token()
 		if err != nil || token == nil {

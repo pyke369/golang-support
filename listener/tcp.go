@@ -36,24 +36,31 @@ type TCPOptions struct {
 	WriteBuffer int
 	Callback    func(net.Conn)
 	Proxy       func(*TCPConn) bool
+	TLS         func(*TCPConn, string, []byte) bool
 }
 
 type TCPConn struct {
-	options *TCPOptions
-	conn    *net.TCPConn
-	parsed  bool
-	local   *TCPAddr
-	remote  *TCPAddr
-	attrs   map[int][]byte
+	options     *TCPOptions
+	conn        *net.TCPConn
+	proxyParsed bool
+	tlsParsed   bool
+	hijacked    bool
+	local       *TCPAddr
+	remote      *TCPAddr
+	attrs       map[int][]byte
 }
 
 func (c *TCPConn) Read(b []byte) (n int, err error) {
 	n, err = c.conn.Read(b)
-	if err == nil && !c.parsed {
-		c.parsed = true
+	if err != nil {
+		return 0, err
+	}
+
+	if !c.proxyParsed {
+		c.proxyParsed = true
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
-			if n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
+			if size < 16+12 || n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
 				c.Close()
 				return 0, net.ErrClosed
 			}
@@ -97,6 +104,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 
 				if c.attrs != nil {
 					if value, exists := c.attrs[3]; exists {
+						delete(c.attrs, 3)
 						if crc32.Checksum(b[:size], proxyTable) != binary.BigEndian.Uint32(value) {
 							c.local, c.remote, c.attrs = nil, nil, nil
 							c.Close()
@@ -108,13 +116,56 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 
 			if n > size {
 				copy(b, b[size:n])
-				n -= size
-				return
 			}
-			return c.conn.Read(b)
+			n -= size
 		}
 	}
-	return
+
+	if n == 0 {
+		n, err = c.conn.Read(b)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	if !c.tlsParsed {
+		c.tlsParsed = true
+
+		if c.options.TLS != nil {
+			if n >= 44 && b[0] == 0x16 && b[1] == 3 && b[2] >= 1 && b[5] == 1 && b[9] == 3 && b[10] >= 1 {
+				if offset := 44 + int(b[43]); offset < n-1 {
+					if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 {
+						offset += 2 + length
+						if offset < n {
+							offset += 1 + int(b[offset])
+							if offset < n-1 {
+								end := offset + 2 + int(binary.BigEndian.Uint16(b[offset:]))
+								offset += 2
+								end = min(end, n)
+								for offset <= end-4 {
+									key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
+									if offset+4+length < end {
+										if key == 0 && length >= 6 && b[offset+7] == 0 {
+											cb := make([]byte, n)
+											copy(cb, b[:n])
+											if c.options.TLS(c, string(b[offset+9:offset+4+length]), cb) {
+												c.hijacked = true
+												return 0, net.ErrClosed
+											}
+											break
+										}
+									}
+									offset += 4 + length
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return n, err
 }
 
 func (c *TCPConn) Write(b []byte) (n int, err error) {
@@ -122,6 +173,14 @@ func (c *TCPConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *TCPConn) Close() error {
+	if c.hijacked {
+		return nil
+	}
+
+	return c.conn.Close()
+}
+
+func (c *TCPConn) Close2() error {
 	return c.conn.Close()
 }
 

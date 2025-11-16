@@ -6,7 +6,6 @@
 - expect
 - file
 - fqdn
-- gpio
 - jsonrpc
 - listener
 - mstore
@@ -19,8 +18,10 @@
 - uadb
 - ubgp
 - uconfig
-- ustr
+- uhash
+- uio
 - ulog
+- ustr
 - uuid
 - uws
 - whohas
