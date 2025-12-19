@@ -616,12 +616,13 @@ func Slice(in any) (out []any) {
 	return []any{}
 }
 
-func SliceItem(in []any, index int) any {
-	if index >= len(in) {
+func SliceItem(in any, index int) any {
+	sin := Slice(in)
+	if index >= len(sin) {
 		return nil
 	}
 
-	return in[index]
+	return sin[index]
 }
 
 func StringSlice(in any, extra ...bool) (out []string) {
@@ -691,7 +692,7 @@ func NumberSlice(in any, extra ...bool) (out []float64) {
 	return
 }
 
-func NumberSliceItem(in []float64, index int) float64 {
+func NumberSliceItem(in any, index int) float64 {
 	nsin := NumberSlice(in)
 	if index >= len(nsin) {
 		return 0.0
