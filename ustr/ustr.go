@@ -201,7 +201,18 @@ func Binary(dst []byte, src string) (i int, err error) {
 	return hex.Decode(dst, []byte(src))
 }
 
-func Range(in string) (out []int) {
+func Range(in string, extra ...int) (out []int) {
+	maximum, lower, upper := -1, -1, -1
+	if len(extra) > 0 {
+		maximum = max(0, extra[0])
+		if len(extra) > 1 {
+			lower = max(0, extra[1])
+			if len(extra) > 2 {
+				upper = max(0, extra[2])
+			}
+		}
+	}
+
 	list := map[int]struct{}{}
 	for _, part := range strings.Split(in, ",") {
 		bounds, start, end := strings.Split(strings.TrimSpace(part), "-"), -1, -1
@@ -214,12 +225,22 @@ func Range(in string) (out []int) {
 			}
 		}
 		if start >= 0 {
+			if maximum > 0 && len(list) >= maximum {
+				continue
+			}
 			if end < 0 {
-				list[start] = struct{}{}
+				if (lower < 0 || (lower >= 0 && start >= lower)) && (upper < 0 || (upper >= 0 && start <= upper)) {
+					list[start] = struct{}{}
+				}
 
 			} else {
 				for index := start; index <= end; index++ {
-					list[index] = struct{}{}
+					if maximum > 0 && len(list) >= maximum {
+						continue
+					}
+					if (lower < 0 || (lower >= 0 && index >= lower)) && (upper < 0 || (upper >= 0 && index <= upper)) {
+						list[index] = struct{}{}
+					}
 				}
 			}
 		}
