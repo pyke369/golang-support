@@ -17,15 +17,20 @@ func New() (out UUID) {
 	rand.Read(out[:])
 	out[6] = (out[6] & 0x0f) | 0x40
 	out[8] = (out[8] & 0x3f) | 0x80
+
 	return
 }
 
 func From(in []byte) (out UUID) {
-	if len(in) >= 16 {
-		copy(out[:], in[:16])
-		out[6] = (out[6] & 0x0f) | 0x40
-		out[8] = (out[8] & 0x3f) | 0x80
+	out = New()
+	for index := 0; index < min(len(in), 16); index++ {
+		if in[index] != 0 {
+			out[index] = in[index]
+		}
 	}
+	out[6] = (out[6] & 0x0f) | 0x40
+	out[8] = (out[8] & 0x3f) | 0x80
+
 	return
 }
 
@@ -72,6 +77,7 @@ func Unmarshal(in string) (out UUID) {
 		out[14] = (uhex[in[32]] << 4) | uhex[in[33]]
 		out[15] = (uhex[in[34]] << 4) | uhex[in[35]]
 	}
+
 	return
 }
 

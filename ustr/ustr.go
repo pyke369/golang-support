@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -138,6 +139,33 @@ func String(in string, extra ...int) string {
 	}
 
 	return unsafe.String(unsafe.SliceData(out), len(out))
+}
+
+func Truncate(in string, length int, ellipsis ...bool) (out string) {
+	if in = strings.TrimSpace(in); in == "" {
+		return
+	}
+
+	count := 0
+	for _, c := range in {
+		if count < length {
+			out += string(c)
+		}
+		count++
+	}
+	out = strings.TrimSpace(out)
+
+	if length < count && len(ellipsis) != 0 && ellipsis[0] {
+		end := len(out)
+		for remove := 1; remove <= 3; remove++ {
+			if _, size := utf8.DecodeLastRuneInString(out[:end]); size < end {
+				end -= size
+			}
+		}
+		out = out[:end] + "..."
+	}
+
+	return
 }
 
 func Hex(in []byte, extra ...byte) string {
