@@ -281,33 +281,98 @@ func Range(in string, extra ...int) (out []int) {
 	return
 }
 
-func Duration(duration time.Duration) string {
-	if duration < time.Millisecond {
-		return duration.Truncate(time.Microsecond).String()
-	}
-	if duration < time.Second {
-		return duration.Truncate(time.Millisecond).String()
-	}
-
-	return duration.Truncate(10 * time.Millisecond).String()
-}
-
-func Size(size float64, extra ...int) (out string) {
+func Duration(duration time.Duration, extra ...int) (out string) {
 	switch {
-	case size <= 1<<10:
-		out = strconv.FormatInt(int64(size), 10) + "B "
+	case duration < time.Millisecond:
+		out = duration.Truncate(time.Microsecond).String()
 
-	case size <= 1<<20:
-		out = strconv.FormatInt(int64(size/(1<<10)), 10) + "kB"
-
-	case size <= 1<<30:
-		out = strconv.FormatInt(int64(size/(1<<20)), 10) + "MB"
-
-	case size <= 1<<40:
-		out = strconv.FormatInt(int64(size/(1<<30)), 10) + "GB"
+	case duration < time.Second:
+		out = duration.Truncate(time.Millisecond).String()
 
 	default:
-		out = strconv.FormatInt(int64(size/(1<<40)), 10) + "TB"
+		out = duration.Truncate(10 * time.Millisecond).String()
+	}
+	if len(extra) > 0 {
+		return String(out, extra...)
+	}
+
+	return
+}
+
+func Size(size int64, extra ...int) (out string) {
+	switch {
+	case size < 1<<10:
+		out = strconv.FormatInt(size, 10) + "B "
+
+	case size < 1<<20:
+		out = strconv.FormatInt(size/(1<<10), 10) + "kiB"
+
+	case size < 10*(1<<20):
+		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 2, 64) + "MiB"
+
+	case size < 100*(1<<20):
+		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 1, 64) + "MiB"
+
+	case size < 1<<30:
+		out = strconv.FormatInt(size/(1<<20), 10) + "MiB"
+
+	case size < 10*(1<<30):
+		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 2, 64) + "GiB"
+
+	case size < 100*(1<<30):
+		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 1, 64) + "GiB"
+
+	case size < 1<<40:
+		out = strconv.FormatInt(size/(1<<30), 10) + "GiB"
+
+	case size < 10*(1<<40):
+		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 2, 64) + "TiB"
+
+	case size < 100*(1<<40):
+		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 1, 64) + "TiB"
+
+	default:
+		out = strconv.FormatInt(size/(1<<40), 10) + "TiB"
+	}
+	if len(extra) > 0 {
+		return String(out, extra...)
+	}
+
+	return
+}
+
+func Bandwidth(bandwidth int64, extra ...int) (out string) { // in b/s
+	switch {
+	case bandwidth < 1000:
+		out = strconv.FormatInt(bandwidth, 10) + "b/s "
+
+	case bandwidth < 10*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/1000, 'f', 2, 64) + "kb/s"
+
+	case bandwidth < 100*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/1000, 'f', 1, 64) + "kb/s"
+
+	case bandwidth < 1000*1000:
+		out = strconv.FormatInt(bandwidth/1000, 10) + "kb/s"
+
+	case bandwidth < 10*1000*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/(1000*1000), 'f', 2, 64) + "Mb/s"
+
+	case bandwidth < 100*1000*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/(1000*1000), 'f', 1, 64) + "Mb/s"
+
+	case bandwidth < 1000*1000*1000:
+		out = strconv.FormatInt(bandwidth/(1000*1000), 10) + "Mb/s"
+
+	case bandwidth < 10*1000*1000*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/(1000*1000*1000), 'f', 2, 64) + "Gb/s"
+
+	case bandwidth < 100*1000*1000*1000:
+		out = strconv.FormatFloat(float64(bandwidth)/(1000*1000*1000), 'f', 1, 64) + "Gb/s"
+
+	default:
+		out = strconv.FormatInt(bandwidth/(1000*1000*1000), 10) + "Gb/s"
+
 	}
 	if len(extra) > 0 {
 		return String(out, extra...)
