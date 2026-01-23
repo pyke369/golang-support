@@ -971,6 +971,47 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	return
 }
 
+func (c *UConfig) Copy(path string) (out any) {
+	current := c.config
+	if c.prefix != "" {
+		if path == "" {
+			path = c.prefix
+
+		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+			path = prefix + path
+		}
+	}
+	if current == nil {
+		return
+	}
+
+	for _, part := range strings.Split(path, c.separator) {
+		switch reflect.TypeOf(current).Kind() {
+		case reflect.Slice:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(current.([]any)) {
+				return
+			}
+			current = current.([]any)[index]
+
+		case reflect.Map:
+			if current = current.(map[string]any)[part]; current == nil {
+				return
+			}
+
+		default:
+			return
+		}
+	}
+
+	// lazy deep-copy
+	if content, err := json.Marshal(current); err == nil {
+		json.Unmarshal(content, &out)
+	}
+
+	return
+}
+
 func (c *UConfig) value(path string) (out string, exists bool) {
 	current := c.config
 	if c.prefix != "" {
