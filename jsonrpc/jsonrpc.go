@@ -874,6 +874,9 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 		seconds, _ := strconv.ParseFloat(captures[3], 64)
 		milliseconds, _ := strconv.ParseFloat(captures[4], 64)
 		value = (hours * 3600) + (min(minutes, 59) * 60) + min(seconds, 59) + (milliseconds / 1000)
+
+	} else {
+		value = fallback
 	}
 
 	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
