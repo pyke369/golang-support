@@ -2,7 +2,9 @@ package uhash
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
+	"strings"
 )
 
 func Rand(in int) (out int) {
@@ -14,6 +16,18 @@ func Rand(in int) (out int) {
 	}
 
 	return
+}
+
+func Key(extra ...int) (out string) {
+	size := 64
+	if len(extra) > 0 && extra[0] > 0 && extra[0] <= 256 {
+		size = extra[0]
+	}
+	value := make([]byte, size*2)
+	rand.Read(value)
+	out = strings.ReplaceAll(strings.ReplaceAll(base64.RawStdEncoding.EncodeToString(value), "/", ""), "+", "")
+
+	return out[:min(len(out), size)]
 }
 
 func CRC16(inputs ...[]byte) uint16 {
