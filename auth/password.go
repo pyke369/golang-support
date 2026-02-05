@@ -14,7 +14,7 @@ import (
 // see https://akkadia.org/drepper/SHA-crypt.txt
 var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 
-func Crypt512(key, salt string, rounds int) (out string) {
+func Crypt512(in, salt string, rounds int) (out string) {
 	out = "$6$"
 	if rounds == 0 {
 		rounds = 5000
@@ -32,16 +32,16 @@ func Crypt512(key, salt string, rounds int) (out string) {
 	out += salt + "$"
 
 	// digest B (steps 4-8)
-	bkey, bsalt, length := []byte(key), []byte(salt), len(key)
+	key, bsalt, length := []byte(in), []byte(salt), len(in)
 	hash := sha512.New() // 4
-	hash.Write(bkey)     // 5
+	hash.Write(key)      // 5
 	hash.Write(bsalt)    // 6
-	hash.Write(bkey)     // 7
+	hash.Write(key)      // 7
 	B := hash.Sum(nil)   // 8
 
 	// digest A (steps 1-3 + 9-12)
 	hash.Reset()                                 // 1
-	hash.Write(bkey)                             // 2
+	hash.Write(key)                              // 2
 	hash.Write(bsalt)                            // 3
 	for index := 0; index < length/64; index++ { // 9
 		hash.Write(B)
@@ -51,7 +51,7 @@ func Crypt512(key, salt string, rounds int) (out string) {
 	}
 	for bit := length; bit > 0; bit >>= 1 { // 11
 		if bit%2 == 0 {
-			hash.Write(bkey)
+			hash.Write(key)
 
 		} else {
 			hash.Write(B)
@@ -62,7 +62,7 @@ func Crypt512(key, salt string, rounds int) (out string) {
 	// digest DP (steps 13-15)
 	hash.Reset()                              // 13
 	for index := 0; index < length; index++ { // 14
-		hash.Write(bkey)
+		hash.Write(key)
 	}
 	DP := hash.Sum(nil) // 15
 
