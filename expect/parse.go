@@ -116,16 +116,19 @@ func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 
 func ParseXML(in []string, extra ...bool) (out map[string]any) {
 	var (
-		data    []byte
-		matcher = rcache.Get(`^\[(\d+)\]$`)
-		empty   = false
+		data        []byte
+		matcher     = rcache.Get(`^\[(\d+)\]$`)
+		empty, skip = false, true
 	)
 
 	out = map[string]any{}
 	if len(extra) > 0 {
 		empty = extra[0]
+		if len(extra) > 1 {
+			skip = extra[1]
+		}
 	}
-	if len(in) >= 2 {
+	if skip && len(in) >= 2 {
 		if captures := rcache.Get(`^<([^\s>]+).*>$`).FindStringSubmatch(in[0]); len(captures) >= 2 && strings.HasPrefix(in[len(in)-1], "</"+captures[1]) {
 			in = in[1 : len(in)-1]
 		}

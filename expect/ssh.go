@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
@@ -31,8 +32,6 @@ type SSHOptions struct {
 	Pty            bool
 	Prompt         string
 	Filter         string
-	Mock           func(string, any) []string
-	Rewrite        func([]string, any) []string
 }
 
 type SSHConn struct {
@@ -61,19 +60,17 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		options.Mode = TEXT
 	}
 	if options.ConnectTimeout == 0 {
-		options.ConnectTimeout = 7 * time.Second
+		options.ConnectTimeout = 5 * time.Second
 	}
 	options.ConnectTimeout = min(15*time.Second, max(time.Second, options.ConnectTimeout))
 	if options.ExecTimeout == 0 {
-		options.ExecTimeout = 30 * time.Second
+		options.ExecTimeout = 20 * time.Second
 	}
 	options.ExecTimeout = min(2*time.Minute, max(5*time.Second, options.ExecTimeout))
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = time.Minute
 	}
-	if options.IdleTimeout != 0 {
-		options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
-	}
+	options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
 
 	if options.SubSystem != "" && options.SubSystem != "netconf" {
 		return nil, errors.New("ssh: invalid subsystem")
@@ -152,7 +149,7 @@ func (c *SSHConn) Close() {
 	}
 }
 
-func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string) (lines []string, err error) {
+func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace *os.File) (lines []string, err error) {
 	queue := make(chan []string)
 
 	go func() {
@@ -172,9 +169,16 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string) (lines
 			loffset := 0
 			for {
 				if lindex := bytes.IndexAny(data[loffset:n], "\n"); lindex >= 0 {
-					line := bytes.TrimSpace(data[loffset : loffset+lindex])
+					line := data[loffset : loffset+lindex]
+					if trace != nil {
+						trace.WriteString("<  " + string(line) + "\n")
+					}
+					line = bytes.TrimSpace(line)
 					loffset += lindex + 1
 					if prompt.Match(line) {
+						if trace != nil {
+							trace.WriteString("\n")
+						}
 						break done
 					}
 					if c.options.Filter != "" && filter.Match(line) {
@@ -210,7 +214,22 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string) (lines
 	return
 }
 
+func (c *SSHConn) write(message string, trace *os.File) (err error) {
+	message = strings.TrimSpace(message)
+	if trace != nil {
+		for _, line := range strings.Split(message, "\n") {
+			trace.WriteString(">  " + line + "\n")
+		}
+		trace.WriteString("\n")
+	}
+	_, err = c.input.Write([]byte(message + "\n"))
+
+	return
+}
+
 func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err error) {
+	var trace *os.File
+
 	if command == "" {
 		return nil, errors.New("ssh: invalid or missing parameter")
 	}
@@ -218,12 +237,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		return nil, errors.New("ssh: connection closed")
 	}
 
-	var (
-		ctx   any
-		trace *os.File
-	)
-
-	timeout, prompt, filter, mock, rewrite, raw, empty := c.options.ExecTimeout, c.options.Prompt, c.options.Filter, c.options.Mock, c.options.Rewrite, false, false
+	timeout, prompt, filter, raw, empty := c.options.ExecTimeout, c.options.Prompt, c.options.Filter, false, false
 	if len(extra) > 0 {
 		if value, ok := extra[0]["timeout"].(time.Duration); ok {
 			timeout = value
@@ -233,15 +247,6 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 		if value, ok := extra[0]["filter"].(string); ok {
 			filter = value
-		}
-		if value, exists := extra[0]["context"]; exists {
-			ctx = value
-		}
-		if value, ok := extra[0]["mock"].(func(string, any) []string); ok {
-			mock = value
-		}
-		if value, ok := extra[0]["rewrite"].(func([]string, any) []string); ok {
-			rewrite = value
 		}
 		if value, ok := extra[0]["raw"].(bool); ok {
 			raw = value
@@ -255,7 +260,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 	}
 	timeout = min(5*time.Minute, max(5*time.Second, timeout))
 
-	if c.session == nil && mock == nil {
+	if c.session == nil {
 		start := time.Now()
 		if c.client, err = ssh.Dial("tcp", c.remote, c.config); err != nil {
 			c.Close()
@@ -293,9 +298,30 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			}
 		}
 
-		if _, err := c.readlines(c.options.ConnectTimeout-time.Since(start), prompt, filter); err != nil {
+		lines, err := c.readlines(c.options.ConnectTimeout-time.Since(start), prompt, filter, trace)
+		if err != nil {
 			c.Close()
 			return nil, ustr.Wrap(err, "ssh")
+		}
+
+		if c.options.SubSystem == "netconf" {
+			message := ParseXML(lines, false, false)
+			hello, exists := message["hello"]
+			if !exists {
+				return nil, errors.New("ssh: invalid netconf hello message")
+			}
+			if _, exists := j.Map(hello)["session-id"]; !exists {
+				return nil, errors.New("ssh: invalid netconf hello message")
+			}
+			if err := c.write(`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <capabilities>
+    <capability>urn:ietf:params:netconf:base:1.0</capability>
+    <capability>urn:ietf:params:xml:ns:netconf:base:1.0</capability>
+  </capabilities>
+</hello>
+]]>]]>`, trace); err != nil {
+				return nil, ustr.Wrap(err, "ssh")
+			}
 		}
 
 		if c.options.IdleTimeout != 0 {
@@ -316,7 +342,6 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 	}
 
 	command = strings.TrimSpace(command)
-	suffix := ""
 	switch c.options.SubSystem {
 	case "":
 		switch c.options.Mode {
@@ -339,55 +364,32 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		if !strings.HasSuffix(command, "</rpc>") {
 			command += "\n</rpc>"
 		}
-		suffix = "\n]]>]]>"
-	}
-	if trace != nil {
-		trace.WriteString(">  " + strings.Join(strings.Split(command, "\n"), "\n>  ") + "\n\n")
+		command += "\n]]>]]>"
 	}
 
 	var lines []string
 
-	if mock != nil {
-		lines = mock(command+suffix+"\n", ctx)
+	atomic.StoreInt64(&c.last, time.Now().Unix())
+	if err = c.write(command, trace); err != nil {
+		c.Close()
+		return nil, ustr.Wrap(err, "ssh")
+	}
 
-	} else {
-		atomic.StoreInt64(&c.last, time.Now().Unix())
-		if _, err = c.input.Write([]byte(command + suffix + "\n")); err != nil {
-			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
-		}
-
-		lines, err = c.readlines(timeout, prompt, filter)
-		if err != nil {
-			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
-		}
+	lines, err = c.readlines(timeout, prompt, filter, trace)
+	if err != nil {
+		c.Close()
+		return nil, ustr.Wrap(err, "ssh")
 	}
 
 	if raw {
-		if rewrite != nil {
-			lines = rewrite(lines, ctx)
-		}
-		if trace != nil {
-			trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
-		}
 		result = lines
 
 	} else {
 		switch c.options.Mode {
 		case TEXT:
-			if rewrite != nil {
-				lines = rewrite(lines, ctx)
-			}
-			if trace != nil {
-				trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
-			}
 			result = lines
 
 		case JSON:
-			if rewrite != nil {
-				lines = rewrite(lines, ctx)
-			}
 			for index, line := range lines {
 				if line != "" && line[0] == '{' {
 					lines = lines[index:]
@@ -397,12 +399,6 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			result = ParseJSON(strings.Join(lines, ""))
 
 		case XML:
-			if rewrite != nil {
-				lines = rewrite(lines, ctx)
-			}
-			if trace != nil {
-				trace.WriteString("<  " + strings.Join(lines, "\n<  ") + "\n\n")
-			}
 			for index, line := range lines {
 				if line != "" && line[0] == '<' {
 					lines = lines[index:]
