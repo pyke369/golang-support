@@ -22,7 +22,6 @@ func main() {
 	options.String("output", "resources.go", "the generated output file path")
 	options.String("pkgname", "main", "the package name to use in the generated output")
 	options.String("funcname", "Resources", "the function name prefix to use in the generated output")
-	options.String("default", "index.html", "the document to act as default")
 	options.String("exclude", "", "an optionnal pattern of paths to exclude")
 	options.Bool("main", false, "whether to generate a main func or not")
 	if err := options.Parse(os.Args[1:]); err != nil {
@@ -35,7 +34,11 @@ func main() {
 	if options.Lookup("main").Value.String() == "true" {
 		usemain = true
 	}
-	rpack.Pack(options.Arg(0), options.Lookup("output").Value.String(), options.Lookup("pkgname").Value.String(),
-		options.Lookup("funcname").Value.String(), options.Lookup("default").Value.String(),
-		options.Lookup("exclude").Value.String(), usemain)
+	rpack.Pack(options.Arg(0),
+		options.Lookup("output").Value.String(),
+		options.Lookup("pkgname").Value.String(),
+		options.Lookup("funcname").Value.String(),
+		options.Lookup("exclude").Value.String(),
+		usemain,
+	)
 }

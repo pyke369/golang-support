@@ -282,27 +282,27 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	return
 }
 
-func Handle(response http.ResponseWriter, request *http.Request, config *Config) (handled bool, ws *Socket) {
-	if strings.Contains(strings.ToLower(request.Header.Get("Connection")), "upgrade") && strings.ToLower(request.Header.Get("Upgrade")) == "websocket" {
+func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bool, ws *Socket) {
+	if strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") && strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
 		handled = true
-		if request.Method != http.MethodGet {
-			response.WriteHeader(http.StatusMethodNotAllowed)
+		if r.Method != http.MethodGet {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		ckey := request.Header.Get("Sec-WebSocket-Key")
-		if request.Header.Get("Sec-WebSocket-Version") != VERSION || ckey == "" {
-			response.Header().Set("Sec-WebSocket-Version", VERSION)
-			response.WriteHeader(http.StatusBadRequest)
+		ckey := r.Header.Get("Sec-WebSocket-Key")
+		if r.Header.Get("Sec-WebSocket-Version") != VERSION || ckey == "" {
+			rw.Header().Set("Sec-WebSocket-Version", VERSION)
+			rw.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if _, ok := response.(http.Hijacker); !ok {
-			response.WriteHeader(http.StatusInternalServerError)
+		if _, ok := rw.(http.Hijacker); !ok {
+			rw.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		cprotocols, sprotocols, protocol := []string{}, map[string]bool{}, ""
 		if len(config.Protocols) > 0 {
 			if splitter := rcache.Get("[, ]+"); splitter != nil {
-				cprotocols = splitter.Split(request.Header.Get("Sec-WebSocket-Protocol"), 10)
+				cprotocols = splitter.Split(r.Header.Get("Sec-WebSocket-Protocol"), 10)
 			}
 			if len(cprotocols) > 0 {
 				for _, value := range config.Protocols {
@@ -315,19 +315,19 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 				}
 			}
 			if protocol != "" {
-				response.Header().Set("Sec-WebSocket-Protocol", protocol)
+				rw.Header().Set("Sec-WebSocket-Protocol", protocol)
 
 			} else if config.NeedProtocol {
-				response.WriteHeader(http.StatusBadRequest)
+				rw.WriteHeader(http.StatusBadRequest)
 				return
 			}
 		}
 		skey := sha1.Sum([]byte(ckey + UUID))
-		response.Header().Set("Connection", "Upgrade")
-		response.Header().Set("Upgrade", "websocket")
-		response.Header().Set("Sec-WebSocket-Accept", base64.StdEncoding.EncodeToString(skey[:]))
-		response.WriteHeader(http.StatusSwitchingProtocols)
-		if conn, reader, err := response.(http.Hijacker).Hijack(); err == nil {
+		rw.Header().Set("Connection", "Upgrade")
+		rw.Header().Set("Upgrade", "websocket")
+		rw.Header().Set("Sec-WebSocket-Accept", base64.StdEncoding.EncodeToString(skey[:]))
+		rw.WriteHeader(http.StatusSwitchingProtocols)
+		if conn, reader, err := rw.(http.Hijacker).Hijack(); err == nil {
 			conn.SetDeadline(time.Time{})
 			if config == nil {
 				config = &Config{}
@@ -355,14 +355,14 @@ func Handle(response http.ResponseWriter, request *http.Request, config *Config)
 					tconn.SetWriteBuffer(config.WriteBufferSize)
 				}
 			}
-			origin := request.Header.Get("Origin")
+			origin := r.Header.Get("Origin")
 			if strings.EqualFold(origin, "null") {
 				origin = ""
 			}
 			ws = &Socket{
-				Path:      request.URL.Path,
+				Path:      r.URL.Path,
 				Origin:    origin,
-				Agent:     request.Header.Get("User-Agent"),
+				Agent:     r.Header.Get("User-Agent"),
 				Remote:    conn.RemoteAddr().String(),
 				Protocol:  protocol,
 				Context:   config.Context,

@@ -493,17 +493,17 @@ func server() {
 			os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 		}
 	}
-	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
-		response.Header().Set("Content-Type", "application/json")
-		response.Header().Set("Access-Control-Allow-Origin", "*")
-		remote := request.RemoteAddr
+	http.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Header().Set("Access-Control-Allow-Origin", "*")
+		remote := r.RemoteAddr
 		if value, err := netip.ParseAddrPort(remote); err == nil {
 			remote = value.Addr().String()
 		}
-		if value := request.Header.Get("X-Forwarded-For"); value != "" {
+		if value := r.Header.Get("X-Forwarded-For"); value != "" {
 			remote = strings.Split(value, ",")[0]
 		}
-		parameters := request.URL.Query()
+		parameters := r.URL.Query()
 		if value := parameters.Get("remote"); value != "" {
 			remote = value
 		}
@@ -513,8 +513,8 @@ func server() {
 			database.Lookup(remote, lookup)
 		}
 		data, _ := json.Marshal(lookup)
-		response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		response.Write(data)
+		rw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		rw.Write(data)
 		os.Stderr.WriteString("lookup   [" + remote + "] " + string(data) + "\n")
 	})
 	parts := strings.Split(os.Args[2], ",")

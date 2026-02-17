@@ -24,7 +24,6 @@ import (
 )
 
 type RPACK struct {
-	Default  bool
 	Modified int64
 	Mime     string
 	Content  string
@@ -67,6 +66,7 @@ func multmodp(a, b uint32) uint32 {
 			b >>= 1
 		}
 	}
+
 	return p
 }
 
@@ -79,6 +79,7 @@ func x2nmodp(n, k uint32) uint32 {
 		n >>= 1
 		k++
 	}
+
 	return p
 }
 
@@ -88,7 +89,7 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // 🔔 /SHAME! 🔔
 
-func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
+func Pack(root, out, pkgname, funcname, exclude string, main bool) {
 	var matcher *regexp.Regexp
 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
@@ -124,9 +125,6 @@ func Pack(root, out, pkgname, funcname, defdoc, exclude string, main bool) {
 				}
 			}
 			pack := &RPACK{Modified: info.ModTime().Unix(), Mime: "text/plain"}
-			if rpath == defdoc {
-				pack.Default = true
-			}
 			if value := mime.TypeByExtension(filepath.Ext(rpath)); value != "" {
 				pack.Mime = value
 			}
@@ -169,8 +167,7 @@ var ` + uid + ` map[string]*rpack.RPACK = map[string]*rpack.RPACK{
 		}
 		length += 3
 		for path, entry := range entries {
-			handle.WriteString(`	` + ustr.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Default: ` + ustr.Bool(entry.Default) +
-				`, Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
+			handle.WriteString(`	` + ustr.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
 		}
 		handle.WriteString(`}
 
@@ -197,18 +194,14 @@ func main() {
 }
 
 func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte, ctype string, modified int64, err error) {
-	if rpath == "" && pack != nil {
-		for name, entry := range pack {
-			if entry.Default {
-				rpath = name
-				break
-			}
-		}
+	if path.Ext(rpath) == "" {
+		rpath += ".html"
 	}
 	if pack == nil || pack[rpath] == nil {
 		err = errors.New("rpack: resource not found")
 		return
 	}
+
 	if pack[rpath].raw == nil {
 		if pack[rpath].raw, err = base64.StdEncoding.DecodeString(pack[rpath].Content); err != nil {
 			return
@@ -222,27 +215,33 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 		decompressor.Close()
 		guzpool.Put(decompressor)
 	}
+
 	return
 }
 
 func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodHead && request.Method != http.MethodGet {
-			response.WriteHeader(http.StatusMethodNotAllowed)
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead && r.Method != http.MethodGet {
+			rw.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 		if sttl := ttl / time.Second; sttl > 0 {
-			response.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
-			response.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
+			rw.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
+			rw.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
-		prefix, resources := strings.TrimPrefix(path.Dir(request.URL.Path), "/"), strings.Split(strings.TrimPrefix(path.Base(request.URL.Path), "/"), "+")
+
+		if strings.HasSuffix(r.URL.Path, "/") {
+			r.URL.Path += "index"
+		}
+		prefix, resources := path.Dir(r.URL.Path), strings.Split(path.Base(r.URL.Path), "+")
+
 		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
-		if strings.Contains(request.Header.Get("Accept-Encoding"), "gzip") && request.Header.Get("Range") == "" {
-			response.Header().Set("Content-Encoding", "gzip")
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && r.Header.Get("Range") == "" {
+			rw.Header().Set("Content-Encoding", "gzip")
 			uncompress = false
 		}
 		for index, resource := range resources {
-			rpath := path.Join(prefix, resource)
+			rpath := strings.TrimPrefix(path.Join(prefix, resource), "/")
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
 				if len(resources) > 1 && !uncompress {
 					ucheck, usize := binary.LittleEndian.Uint32(pcontent[len(pcontent)-8:]), binary.LittleEndian.Uint32(pcontent[len(pcontent)-4:])
@@ -270,12 +269,13 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 				}
 
 			} else {
-				response.WriteHeader(http.StatusNotFound)
+				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
 		}
-		response.Header().Set("Content-Type", ctype)
-		response.Header().Set("Content-Length", strconv.Itoa(len(content)))
-		http.ServeContent(response, request, "", time.Unix(modified, 0), bytes.NewReader(content))
+
+		rw.Header().Set("Content-Type", ctype)
+		rw.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))
 	})
 }

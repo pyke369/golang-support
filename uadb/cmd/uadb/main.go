@@ -206,19 +206,19 @@ func server() {
 		}
 	}()
 
-	http.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
-		lookup, code := make(map[string]string, 24), strings.ToLower(request.URL.Query().Get("code"))
-		db.Lookup(request.Header.Get("User-Agent"), lookup, code == "1" || code == "true" || code == "on" || code == "yes")
-		if request.Method == http.MethodHead {
+	http.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
+		lookup, code := make(map[string]string, 24), strings.ToLower(r.URL.Query().Get("code"))
+		db.Lookup(r.Header.Get("User-Agent"), lookup, code == "1" || code == "true" || code == "on" || code == "yes")
+		if r.Method == http.MethodHead {
 			for key, value := range lookup {
-				response.Header().Set("X-"+strings.ReplaceAll(key, "_", "-"), value)
+				rw.Header().Set("X-"+strings.ReplaceAll(key, "_", "-"), value)
 			}
 
 		} else {
-			response.Header().Set("Content-Type", "application/json")
+			rw.Header().Set("Content-Type", "application/json")
 			data, _ := json.Marshal(lookup)
-			response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-			response.Write(data)
+			rw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			rw.Write(data)
 		}
 	})
 	parts := strings.Split(os.Args[2], ",")
