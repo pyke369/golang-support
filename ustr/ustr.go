@@ -253,7 +253,7 @@ func Range(in string, extra ...int) (out []int) {
 			}
 		}
 		if start >= 0 {
-			if len(list) >= count {
+			if count > 0 && len(list) >= count {
 				continue
 			}
 			if end < 0 {
@@ -263,7 +263,7 @@ func Range(in string, extra ...int) (out []int) {
 
 			} else {
 				for index := start; index <= end; index++ {
-					if len(list) >= count {
+					if count > 0 && len(list) >= count {
 						continue
 					}
 					if (lower < 0 || (lower >= 0 && index >= lower)) && (upper < 0 || (upper >= 0 && index <= upper)) {
