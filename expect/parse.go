@@ -114,18 +114,24 @@ func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 	return
 }
 
-func ParseXML(in []string, extra ...bool) (out map[string]any) {
+func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 	var (
 		data        []byte
 		matcher     = rcache.Get(`^\[(\d+)\]$`)
 		empty, skip = false, true
+		raw         = []string{}
 	)
 
 	out = map[string]any{}
-	if len(extra) > 0 {
-		empty = extra[0]
-		if len(extra) > 1 {
-			skip = extra[1]
+	if len(extra) != 0 && extra[0] != nil {
+		if value, ok := extra[0]["empty"].(bool); ok {
+			empty = value
+		}
+		if value, ok := extra[0]["skip"].(bool); ok {
+			skip = value
+		}
+		if value, ok := extra[0]["raw"].([]string); ok {
+			raw = value
 		}
 	}
 	if skip && len(in) >= 2 {
@@ -133,8 +139,13 @@ func ParseXML(in []string, extra ...bool) (out map[string]any) {
 			in = in[1 : len(in)-1]
 		}
 	}
+	content := strings.Join(in, "\n")
+	for _, tag := range raw {
+		content = rcache.Get(`(?i)(<`+strings.TrimSpace(tag)+`[^>]*>)`).ReplaceAllString(content, "${1}<![CDATA[")
+		content = rcache.Get(`(?i)(</`+strings.TrimSpace(tag)+`>)`).ReplaceAllString(content, "]]>${1}")
+	}
 
-	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(strings.Join(in, "\n")))
+	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(content))
 	for {
 		token, err := decoder.Token()
 		if err != nil || token == nil {
@@ -209,7 +220,9 @@ func ParseXML(in []string, extra ...bool) (out map[string]any) {
 			}
 
 		case xml.CharData:
-			data = bytes.TrimSpace(node.Copy())
+			if value := bytes.TrimSpace(node.Copy()); len(value) != 0 {
+				data = value
+			}
 		}
 	}
 

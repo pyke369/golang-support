@@ -305,7 +305,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 
 		if c.options.SubSystem == "netconf" {
-			message := ParseXML(lines, false, false)
+			message := ParseXML(lines, map[string]any{"skip": false})
 			hello, exists := message["hello"]
 			if !exists {
 				return nil, errors.New("ssh: invalid netconf hello message")
@@ -405,7 +405,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 					break
 				}
 			}
-			result = ParseXML(lines, empty)
+			result = ParseXML(lines, map[string]any{"empty": empty})
 		}
 	}
 	atomic.StoreInt64(&c.last, time.Now().Unix())
