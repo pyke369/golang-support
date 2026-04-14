@@ -89,13 +89,13 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // 🔔 /SHAME! 🔔
 
-func Pack(root, out, pkgname, funcname, exclude string, main bool) {
+func Pack(root, out, pkgname, funcname, exclude string, usemain, usemin bool) {
 	var matcher *regexp.Regexp
 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
 		return
 	}
-	if pkgname == "" || main {
+	if pkgname == "" || usemain {
 		pkgname = "main"
 	}
 	if funcname == "" {
@@ -177,10 +177,10 @@ func ` + funcname + `Get(path string) (content []byte, err error) {
 }
 
 func ` + funcname + `Handler(ttl time.Duration) http.Handler {
-	return rpack.Serve(` + uid + `, ttl)
+	return rpack.Serve(` + uid + `, ttl, ` + map[bool]string{false: "false", true: "true"}[usemin] + `)
 }
 `)
-		if main {
+		if usemain {
 			handle.WriteString(
 				`
 func main() {
@@ -219,7 +219,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	return
 }
 
-func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
+func Serve(pack map[string]*RPACK, ttl time.Duration, usemin bool) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead && r.Method != http.MethodGet {
 			rw.WriteHeader(http.StatusMethodNotAllowed)
@@ -242,6 +242,13 @@ func Serve(pack map[string]*RPACK, ttl time.Duration) http.Handler {
 		}
 		for index, resource := range resources {
 			rpath := strings.TrimPrefix(path.Join(prefix, resource), "/")
+			if usemin && pack != nil && (strings.HasSuffix(rpath, ".js") || strings.HasSuffix(rpath, ".css")) && !strings.Contains(rpath, ".min.") {
+				ext := path.Ext(rpath)
+				if npath := strings.TrimSuffix(rpath, ext) + ".min" + ext; pack[npath] != nil {
+					rpath = npath
+				}
+			}
+
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
 				if len(resources) > 1 && !uncompress {
 					ucheck, usize := binary.LittleEndian.Uint32(pcontent[len(pcontent)-8:]), binary.LittleEndian.Uint32(pcontent[len(pcontent)-4:])
