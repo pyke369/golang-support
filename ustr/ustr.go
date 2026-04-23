@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-	"unsafe"
 )
 
 var (
@@ -83,7 +82,7 @@ func Int(in int, extra ...int) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 func Float(in float64, extra ...int) string {
@@ -138,7 +137,7 @@ func String(in string, extra ...int) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 func Truncate(in string, length int, ellipsis ...bool) (out string) {
@@ -190,7 +189,7 @@ func Hex(in []byte, extra ...byte) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 func HexInt(in uint64, size int) string {
@@ -218,7 +217,7 @@ func Pointer(in any) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 func Binary(dst []byte, src string) (i int, err error) {
@@ -230,7 +229,7 @@ func Binary(dst []byte, src string) (i int, err error) {
 }
 
 func Range(in string, extra ...int) (out []int) {
-	count, lower, upper := -1, -1, -1
+	count, lower, upper := 64<<10, -1, -1
 	if len(extra) > 0 {
 		count = max(1, extra[0])
 		if len(extra) > 1 {
@@ -253,9 +252,6 @@ func Range(in string, extra ...int) (out []int) {
 			}
 		}
 		if start >= 0 {
-			if count > 0 && len(list) >= count {
-				continue
-			}
 			if end < 0 {
 				if (lower < 0 || (lower >= 0 && start >= lower)) && (upper < 0 || (upper >= 0 && start <= upper)) {
 					list[start] = struct{}{}
@@ -263,14 +259,17 @@ func Range(in string, extra ...int) (out []int) {
 
 			} else {
 				for index := start; index <= end; index++ {
-					if count > 0 && len(list) >= count {
-						continue
+					if len(list) >= count {
+						break
 					}
 					if (lower < 0 || (lower >= 0 && index >= lower)) && (upper < 0 || (upper >= 0 && index <= upper)) {
 						list[index] = struct{}{}
 					}
 				}
 			}
+		}
+		if len(list) >= count {
+			break
 		}
 	}
 	for value := range list {
@@ -552,7 +551,7 @@ func Strftime(layout string, base time.Time) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 const (

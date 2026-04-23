@@ -10,9 +10,8 @@ import (
 
 func main() {
 	var (
-		options flag.FlagSet
-		usemain bool
-		usemin  bool
+		options  flag.FlagSet
+		minified bool
 	)
 
 	options = flag.FlagSet{Usage: func() {
@@ -24,7 +23,6 @@ func main() {
 	options.String("pkgname", "main", "the package name to use in the generated output")
 	options.String("funcname", "Resources", "the function name prefix to use in the generated output")
 	options.String("exclude", "", "an optionnal pattern of paths to exclude")
-	options.Bool("main", false, "whether to generate a main func or not")
 	options.Bool("minified", false, "wheter to auto-use minified versions of .js/.css files or not")
 	if err := options.Parse(os.Args[1:]); err != nil {
 		os.Exit(1)
@@ -33,18 +31,14 @@ func main() {
 		options.Usage()
 		os.Exit(1)
 	}
-	if options.Lookup("main").Value.String() == "true" {
-		usemain = true
-	}
 	if options.Lookup("minified").Value.String() == "true" {
-		usemin = true
+		minified = true
 	}
 	rpack.Pack(options.Arg(0),
 		options.Lookup("output").Value.String(),
 		options.Lookup("pkgname").Value.String(),
 		options.Lookup("funcname").Value.String(),
 		options.Lookup("exclude").Value.String(),
-		usemain,
-		usemin,
+		minified,
 	)
 }

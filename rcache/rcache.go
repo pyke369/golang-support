@@ -13,7 +13,9 @@ var (
 )
 
 func Get(expression string) *regexp.Regexp {
-	expression = strings.TrimSpace(expression)
+	if expression = strings.TrimSpace(expression); len(expression) > 256 {
+		return nomatch
+	}
 	mu.RLock()
 	if cache[expression] != nil {
 		defer mu.RUnlock()
@@ -23,8 +25,11 @@ func Get(expression string) *regexp.Regexp {
 	if regex, err := regexp.Compile(expression); err == nil {
 		mu.Lock()
 		defer mu.Unlock()
-		cache[expression] = regex
-		return cache[expression]
+		if len(cache) < 4<<10 {
+			cache[expression] = regex
+		}
+		return regex
 	}
+
 	return nomatch
 }

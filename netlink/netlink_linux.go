@@ -672,13 +672,14 @@ func Routes(filter ...string) (routes []map[string]any) {
 					return
 
 				case syscall.RTM_NEWROUTE:
-					rmsg := (*syscall.RtMsg)(unsafe.Pointer(&msg.Data[0]))
-					fmt.Printf("family:%d Dst_len:%d Src_len:%d Table:%d\n", rmsg.Family, rmsg.Dst_len, rmsg.Src_len, rmsg.Table)
-					if attrs, err := syscall.ParseNetlinkRouteAttr(&msg); err == nil {
-						for _, attr := range attrs {
-							fmt.Printf("- ATTR-%04x %v\n", attr.Attr.Type, attr.Value)
-						}
-					}
+					// TODO implement
+					// rmsg := (*syscall.RtMsg)(unsafe.Pointer(&msg.Data[0]))
+					// fmt.Printf("family:%d Dst_len:%d Src_len:%d Table:%d\n", rmsg.Family, rmsg.Dst_len, rmsg.Src_len, rmsg.Table)
+					// if attrs, err := syscall.ParseNetlinkRouteAttr(&msg); err == nil {
+					// 	for _, attr := range attrs {
+					// 		fmt.Printf("- ATTR-%04x %v\n", attr.Attr.Type, attr.Value)
+					// 	}
+					// }
 				}
 			}
 		}

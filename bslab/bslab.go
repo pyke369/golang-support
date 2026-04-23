@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
@@ -168,8 +167,12 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 				}
 
 			} else {
-				item := <-slab.queue
-				out = item[:0]
+				select {
+				case item := <-slab.queue:
+					out = item[:0]
+
+				default:
+				}
 			}
 		}
 		if out == nil {
@@ -342,5 +345,5 @@ func (i *Info) String() string {
 	out = append(out, ustr.String(hsize(lost), 29)...)
 	out = append(out, '\n')
 	out = append(out, "------------------------------------------------------------------------------\n"...)
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }

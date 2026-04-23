@@ -31,7 +31,7 @@ func (a TCPAddr) String() string {
 }
 
 type TCPOptions struct {
-	ReusePort   bool
+	Reuse       bool
 	ReadBuffer  int
 	WriteBuffer int
 	Callback    func(net.Conn)
@@ -67,12 +67,12 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 
 			if b[12] == 0x21 && c.options.Proxy != nil && c.options.Proxy(c) {
 				switch {
-				case b[13]&0xf0 == 0x10 && n >= offset+12: // ipv4
+				case b[13]&0xf0 == 0x10 && offset <= n-12: // ipv4
 					c.remote = &TCPAddr{addr: net.IPv4(b[16], b[17], b[18], b[19]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[24:])))}
 					c.local = &TCPAddr{addr: net.IPv4(b[20], b[21], b[22], b[23]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[26:])))}
 					offset += 12
 
-				case n >= offset+36: // ipv6
+				case offset <= n-36: // ipv6
 					c.remote = &TCPAddr{addr: net.IP(b[16:32]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[48:])))}
 					c.local = &TCPAddr{addr: net.IP(b[32:48]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[50:])))}
 					offset += 36
@@ -83,6 +83,10 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 				}
 
 				for offset <= size-3 { // tlvs
+					if offset+3 > n {
+						c.Close()
+						return 0, net.ErrClosed
+					}
 					key, length := int(b[offset]), int(binary.BigEndian.Uint16(b[offset+1:]))
 					if offset+3+length > size {
 						c.Close()
@@ -258,7 +262,7 @@ func NewTCPListener(network, address string, options *TCPOptions) (listener *TCP
 	config := net.ListenConfig{
 		Control: func(network, address string, conn syscall.RawConn) error {
 			conn.Control(func(handle uintptr) {
-				reuse(handle, options != nil && options.ReusePort)
+				reuse(handle, options != nil && options.Reuse)
 			})
 			return nil
 		}}

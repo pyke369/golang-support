@@ -14,8 +14,9 @@ func FQDN() (hostname, address string) {
 					for _, hostname := range hostnames {
 						if strings.Count(hostname, ".") > 1 {
 							hostname = strings.TrimSuffix(hostname, ".")
-							addresses, _ = net.LookupHost(hostname)
-							return hostname, addresses[0]
+							if addresses, err := net.LookupHost(hostname); err == nil && len(addresses) != 0 {
+								return hostname, addresses[0]
+							}
 						}
 					}
 				}

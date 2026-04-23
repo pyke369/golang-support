@@ -7,5 +7,7 @@ import (
 )
 
 func reuse(handle uintptr, port bool) {
-	syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	if port {
+		syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	}
 }

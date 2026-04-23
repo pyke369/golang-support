@@ -2,14 +2,11 @@ package uconfig
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"math"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -17,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/pyke369/golang-support/bslab"
 	j "github.com/pyke369/golang-support/jsonrpc"
@@ -515,41 +511,6 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							}
 							insert = append(insert, ']', ' ')
 
-						case '|': // command output
-							args := strings.Split(arg, " ")
-							ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-							if value, err := exec.CommandContext(ctx, args[0], strings.Join(args[1:], " ")).Output(); err == nil {
-								if len(value) > 0 {
-									insert = c.arena.Get(3 * len(value))
-									insert = append(insert, value...)
-									insert = expand(insert)
-								}
-								btrack = true
-							}
-							cancel()
-
-						case '@': // url content
-							client := http.Client{Timeout: 5 * time.Second}
-							if response, err := client.Get(arg); err == nil {
-								if response.StatusCode/100 == 2 {
-									if size := min(256<<10, int(response.ContentLength)); size > 0 {
-										insert = c.arena.Get(3 * size)
-										offset := 0
-										for {
-											read, err := response.Body.Read(insert[offset:size])
-											offset += read
-											if err != nil || read == 0 || offset >= size {
-												break
-											}
-										}
-										insert = insert[:offset]
-										insert = expand(insert)
-										btrack = true
-									}
-								}
-								response.Body.Close()
-							}
-
 						case '&': // environment value
 							value := strings.TrimSpace(os.Getenv(arg))
 							insert = c.arena.Get(3 + 2*len(value) + 2)
@@ -819,8 +780,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 	// decode JSON object as resulting configuration
 	if err := json.Unmarshal(payload, &config); err != nil {
 		if syntax, ok := err.(*json.SyntaxError); ok && syntax.Offset < int64(len(payload)) {
-			start, end := max(0, int(syntax.Offset)-30), min(len(payload), int(syntax.Offset)+30)
-			return errors.New("uconfig: " + syntax.Error() + " near '" + string(payload[start:end]) + "'")
+			return errors.New("uconfig: " + syntax.Error() + " at character " + strconv.Itoa(int(syntax.Offset)))
 		}
 		return errors.New("uconfig: " + err.Error())
 	}
@@ -886,7 +846,7 @@ func (c *UConfig) Path(in ...string) string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }
 
 func (c *UConfig) Base(path string) string {

@@ -3,7 +3,6 @@ package rpack
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -20,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -89,20 +90,22 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // 🔔 /SHAME! 🔔
 
-func Pack(root, out, pkgname, funcname, exclude string, usemain, usemin bool) {
-	var matcher *regexp.Regexp
+func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
+	var excluder *regexp.Regexp
 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
 		return
 	}
-	if pkgname == "" || usemain {
-		pkgname = "main"
+	matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	if !matcher.MatchString(pkgname) || !matcher.MatchString(funcname) {
+		return
 	}
+
 	if funcname == "" {
 		funcname = "Resources"
 	}
 	if exclude != "" {
-		matcher, _ = regexp.Compile(exclude)
+		excluder = rcache.Get(exclude)
 	}
 	entries := map[string]*RPACK{}
 	compressor, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
@@ -115,7 +118,7 @@ func Pack(root, out, pkgname, funcname, exclude string, usemain, usemin bool) {
 	}
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		rpath := strings.TrimPrefix(path, root+"/")
-		if matcher != nil && matcher.MatchString(rpath) {
+		if excluder != nil && excluder.MatchString(rpath) {
 			return nil
 		}
 		if info != nil && info.Mode().IsRegular() {
@@ -144,10 +147,8 @@ func Pack(root, out, pkgname, funcname, exclude string, usemain, usemin bool) {
 	})
 	os.Stderr.WriteString("\r" + ustr.String("", -120))
 	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ustr.Duration(time.Since(start)) + "\n")
-	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644); err == nil {
-		random := [8]byte{}
-		rand.Read(random[:])
-		uid := "rpack_" + ustr.Hex(random[:])
+	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600); err == nil {
+		uid := "rpack_" + uhash.RandKey(8)
 		handle.WriteString(`package ` + pkgname + `
 
 import (
@@ -167,7 +168,7 @@ var ` + uid + ` map[string]*rpack.RPACK = map[string]*rpack.RPACK{
 		}
 		length += 3
 		for path, entry := range entries {
-			handle.WriteString(`	` + ustr.String(`"`+path+`":`, -length) + ` &rpack.RPACK{Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
+			handle.WriteString(`	` + ustr.String(strconv.Quote(path)+`:`, -length) + ` &rpack.RPACK{Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
 		}
 		handle.WriteString(`}
 
@@ -177,18 +178,9 @@ func ` + funcname + `Get(path string) (content []byte, err error) {
 }
 
 func ` + funcname + `Handler(ttl time.Duration) http.Handler {
-	return rpack.Serve(` + uid + `, ttl, ` + map[bool]string{false: "false", true: "true"}[usemin] + `)
+	return rpack.Serve(` + uid + `, ttl, ` + map[bool]string{false: "false", true: "true"}[minified] + `)
 }
 `)
-		if usemain {
-			handle.WriteString(
-				`
-func main() {
-	http.Handle("/resources/", http.StripPrefix("/resources/", ` + funcname + `Handler(24*time.Hour)))
-	http.ListenAndServe(":8000", nil)
-}
-`)
-		}
 		handle.Close()
 	}
 }
@@ -211,7 +203,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	if uncompress {
 		decompressor := guzpool.Get().(*gzip.Reader)
 		decompressor.Reset(bytes.NewReader(pack[rpath].raw))
-		content, err = io.ReadAll(decompressor)
+		content, err = io.ReadAll(io.LimitReader(decompressor, 64<<20))
 		decompressor.Close()
 		guzpool.Put(decompressor)
 	}
@@ -219,7 +211,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	return
 }
 
-func Serve(pack map[string]*RPACK, ttl time.Duration, usemin bool) http.Handler {
+func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead && r.Method != http.MethodGet {
 			rw.WriteHeader(http.StatusMethodNotAllowed)
@@ -242,7 +234,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, usemin bool) http.Handler 
 		}
 		for index, resource := range resources {
 			rpath := strings.TrimPrefix(path.Join(prefix, resource), "/")
-			if usemin && pack != nil && (strings.HasSuffix(rpath, ".js") || strings.HasSuffix(rpath, ".css")) && !strings.Contains(rpath, ".min.") {
+			if minified && pack != nil && (strings.HasSuffix(rpath, ".js") || strings.HasSuffix(rpath, ".css")) && !strings.Contains(rpath, ".min.") {
 				ext := path.Ext(rpath)
 				if npath := strings.TrimSuffix(rpath, ext) + ".min" + ext; pack[npath] != nil {
 					rpath = npath

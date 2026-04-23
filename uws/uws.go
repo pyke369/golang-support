@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
@@ -20,12 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
-	"github.com/pyke369/golang-support/uuid"
 	"golang.org/x/net/http/httpproxy"
 )
 
@@ -64,6 +64,7 @@ type Config struct {
 	WriteTimeout    time.Duration
 	WriteBufferSize int
 	ReadBufferSize  int
+	OriginHandler   func(string) bool
 	OpenHandler     func(*Socket)
 	CloseHandler    func(*Socket, int)
 	MessageHandler  func(*Socket, int, []byte) bool
@@ -122,9 +123,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 	}
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	if eurl, err := url.Parse(endpoint); err == nil {
-		proxy, _ := config.Proxy(eurl)
+		rproxy, _ := config.Proxy(eurl)
 		if request, err := http.NewRequest("GET", endpoint, http.NoBody); err == nil {
-			nonce := uuid.New().String()
+			nonce := uhash.RandKey(16, "std")
 			request.Header.Add("User-Agent", "uws")
 			request.Header.Add("Connection", "Upgrade")
 			request.Header.Add("Upgrade", "websocket")
@@ -141,8 +142,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			}
 
 			start, scheme, address := time.Now(), eurl.Scheme, eurl.Host
-			if proxy != nil {
-				scheme, address = proxy.Scheme, proxy.Host
+			if rproxy != nil {
+				scheme, address = rproxy.Scheme, rproxy.Host
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), config.ConnectTimeout)
 			defer cancel()
@@ -171,7 +172,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						return nil, ustr.Wrap(err, "uws")
 					}
 				}
-				if proxy != nil {
+				if rproxy != nil {
 					host, port := eurl.Host, "0"
 					if value1, value2, err := net.SplitHostPort(host); err == nil {
 						host, port = value1, value2
@@ -185,9 +186,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						}
 					}
 					payload := "CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n"
-					if user := proxy.User; user != nil {
+					if user := rproxy.User; user != nil && scheme == "https" {
 						password, _ := user.Password()
-						payload += "Proxy-Authorization: basic " + base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)) + "\r\n"
+						payload += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)) + "\r\n"
 					}
 					payload += "\r\n"
 
@@ -322,6 +323,21 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 				return
 			}
 		}
+		origin := r.Header.Get("Origin")
+		if strings.EqualFold(origin, "null") {
+			origin = ""
+		}
+		if config.OriginHandler == nil {
+			if !strings.HasSuffix(origin, r.Host) {
+				rw.WriteHeader(http.StatusForbidden)
+				return
+			}
+
+		} else if !config.OriginHandler(origin) {
+			rw.WriteHeader(http.StatusForbidden)
+			return
+		}
+
 		skey := sha1.Sum([]byte(ckey + UUID))
 		rw.Header().Set("Connection", "Upgrade")
 		rw.Header().Set("Upgrade", "websocket")
@@ -354,10 +370,6 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 				if config.WriteBufferSize != 0 {
 					tconn.SetWriteBuffer(config.WriteBufferSize)
 				}
-			}
-			origin := r.Header.Get("Origin")
-			if strings.EqualFold(origin, "null") {
-				origin = ""
 			}
 			ws = &Socket{
 				Path:      r.URL.Path,
@@ -562,7 +574,12 @@ close:
 							size = -1
 							break readmore
 						}
-						size = int(binary.BigEndian.Uint64(buffer[roffset+2:]))
+						rsize := binary.BigEndian.Uint64(buffer[roffset+2:])
+						if rsize > uint64(s.config.MessageSize) {
+							code = ERROR_OVERSIZED
+							break close
+						}
+						size = int(rsize)
 						if !s.client {
 							copy(mask, buffer[roffset+10:])
 						}
@@ -703,6 +720,7 @@ close:
 func rmask() []byte {
 	value := []byte{0, 0, 0, 0}
 	rand.Read(value)
+
 	return value
 }
 
@@ -710,26 +728,17 @@ func cval(value, fallback, lowest, highest int) int {
 	if value == 0 {
 		value = fallback
 	}
+
 	return min(max(value, lowest), highest)
 }
 
-const xorsize = int(unsafe.Sizeof(uintptr(0)))
-
 func xor(mask, data []byte) {
-	offset, length := 0, len(data)
-	if length >= xorsize {
-		var value [xorsize]byte
-
-		for index := range value {
-			value[index] = mask[index%4]
-		}
-		xorer := *(*uintptr)(unsafe.Pointer(&value))
-		offset = (length / xorsize) * xorsize
-		for index := 0; index < offset; index += xorsize {
-			*(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(&data[0])) + uintptr(index))) ^= xorer
-		}
+	if len(mask) == 0 || len(data) == 0 {
+		return
 	}
-	for index := offset; index < length; index++ {
-		data[index] ^= mask[(index-offset)%4]
+
+	smask := bytes.Repeat(mask, max(len(mask), min(4<<10, len(data)))/len(mask))
+	for index := 0; index < len(data); index += len(smask) {
+		subtle.XORBytes(data[index:], data[index:], smask)
 	}
 }

@@ -22,7 +22,7 @@ func Self() string {
 	return ""
 }
 
-func Exec(command string, extra ...map[string]any) (lines []string) {
+func Exec(command string, params []string, extra ...map[string]any) (lines []string) {
 	var (
 		matcher *regexp.Regexp
 		content []byte
@@ -32,6 +32,12 @@ func Exec(command string, extra ...map[string]any) (lines []string) {
 	if command = strings.TrimSpace(command); command == "" {
 		return
 	}
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return
+	}
+	command = path
+
 	if len(extra) > 0 {
 		if value, ok := extra[0]["timeout"].(int); ok {
 			timeout = time.Duration(max(1, min(60, value))) * time.Second
@@ -41,10 +47,9 @@ func Exec(command string, extra ...map[string]any) (lines []string) {
 		}
 	}
 
-	parts := strings.Split(command, " ")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	cmd := exec.CommandContext(ctx, command, params...)
 
 	if len(extra) > 0 {
 		if value, ok := extra[0]["stdin"].(io.Reader); ok {
@@ -90,7 +95,7 @@ func Exec(command string, extra ...map[string]any) (lines []string) {
 		return strings.Split(string(content), "\n")
 	}
 
-	for _, line := range strings.Split(string(content), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(string(content), "\n"), "\n") {
 		line = ustr.Transform(line, options)
 		if line == "" && options&ustr.OptionEmpty != 0 {
 			continue

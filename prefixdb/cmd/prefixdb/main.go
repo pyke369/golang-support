@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -326,8 +327,7 @@ func mkasn() {
 
 func rlookup(remote, value string, out map[string]any) {
 	if remote != "" && value != "" && out != nil {
-		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+value, http.NoBody); err == nil {
-			request.Header.Add("X-Forwarded-For", value)
+		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+url.QueryEscape(value), http.NoBody); err == nil {
 			if response, err := client.Do(request); err == nil {
 				body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 				response.Body.Close()
@@ -500,29 +500,33 @@ func server() {
 		if value, err := netip.ParseAddrPort(remote); err == nil {
 			remote = value.Addr().String()
 		}
-		if value := r.Header.Get("X-Forwarded-For"); value != "" {
-			remote = strings.Split(value, ",")[0]
-		}
 		parameters := r.URL.Query()
 		if value := parameters.Get("remote"); value != "" {
 			remote = value
 		}
 		remote = strings.Split(remote, "/")[0]
+		if _, err := netip.ParseAddr(remote); err != nil {
+			rw.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		lookup := map[string]any{"ip": remote}
 		for _, database := range databases {
 			database.Lookup(remote, lookup)
 		}
 		data, _ := json.Marshal(lookup)
-		rw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		if r.TLS != nil {
+			rw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		rw.Write(data)
-		os.Stderr.WriteString("lookup   [" + remote + "] " + string(data) + "\n")
 	})
 	parts := strings.Split(os.Args[2], ",")
 	server := &http.Server{
-		Addr:           strings.TrimLeft(parts[0], "*"),
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxHeaderBytes: 4 << 10,
+		Addr:              strings.TrimLeft(parts[0], "*"),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		MaxHeaderBytes:    4 << 10,
 	}
 	os.Stderr.WriteString("listen   [" + os.Args[2] + "]\n")
 	for {

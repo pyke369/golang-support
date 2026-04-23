@@ -2,32 +2,53 @@ package uhash
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
+	"encoding/hex"
+	"math/big"
 	"strings"
 )
 
-func Rand(in int) (out int) {
+func RandInt(in int) (out int) {
 	if in > 0 {
-		value := make([]byte, 8)
-		rand.Read(value)
-		value[0] &= 0x7f
-		out = int(binary.BigEndian.Uint64(value)) % in
+		if value, err := rand.Int(rand.Reader, big.NewInt(int64(in))); err == nil {
+			out = int(value.Int64())
+		}
 	}
 
 	return
 }
-
-func Key(extra ...int) (out string) {
-	size := 64
-	if len(extra) > 0 && extra[0] > 0 && extra[0] <= 256 {
-		size = extra[0]
+func RandKey(size int, extra ...string) (out string) {
+	encoding := "hex"
+	if len(extra) != 0 {
+		encoding = strings.ToLower(extra[0])
 	}
-	value := make([]byte, size*2)
-	rand.Read(value)
-	out = strings.ReplaceAll(strings.ReplaceAll(base64.RawStdEncoding.EncodeToString(value), "/", ""), "+", "")
 
-	return out[:min(len(out), size)]
+	value := make([]byte, max(1, min(size, 256)))
+	rand.Read(value)
+	switch encoding {
+	case "std":
+		return base64.StdEncoding.EncodeToString(value)
+
+	case "url":
+		return base64.URLEncoding.EncodeToString(value)
+
+	default:
+		return hex.EncodeToString(value)
+	}
+}
+
+func Hash(in []byte) (out [16]byte) {
+	out = [16]byte{}
+	hash := sha256.Sum256(in)
+	for index := 0; index < 16; index++ {
+		out[index] = hash[index]
+	}
+	for index := 16; index < 32; index++ {
+		out[index-16] ^= hash[index]
+	}
+
+	return
 }
 
 func CRC16(inputs ...[]byte) uint16 {

@@ -206,7 +206,7 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= l.compressAge {
 									ok := false
 									if source, err := os.Open(path); err == nil {
-										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644); err == nil {
+										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600); err == nil {
 											gzwriter := gzip.NewWriter(target)
 											_, err := io.Copy(gzwriter, source)
 											gzwriter.Close()
@@ -434,6 +434,7 @@ func (l *ULog) Close() {
 }
 
 func (l *ULog) SetLevel(level string) {
+	l.mu.Lock()
 	level = strings.ToLower(level)
 	switch level {
 	case "error":
@@ -448,6 +449,7 @@ func (l *ULog) SetLevel(level string) {
 	case "debug":
 		l.level = LOG_DEBUG
 	}
+	l.mu.Unlock()
 }
 
 func (l *ULog) SetField(key string, value any) {
@@ -568,18 +570,24 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				encoder.SetEscapeHTML(false)
 				for _, key := range order {
 					if _, exists := structure[key]; exists {
-						buffer.WriteString(`"` + key + `":`)
-						encoder.Encode(structure[key])
-						buffer.Truncate(buffer.Len() - 1)
-						buffer.WriteByte(',')
+						if value, err := json.Marshal(key); err == nil {
+							buffer.Write(value)
+							buffer.WriteByte(':')
+							encoder.Encode(structure[key])
+							buffer.Truncate(buffer.Len() - 1)
+							buffer.WriteByte(',')
+						}
 					}
 				}
 				for _, key := range j.MapKeys(structure) {
 					if !slices.Contains(order, key) {
-						buffer.WriteString(`"` + key + `":`)
-						encoder.Encode(structure[key])
-						buffer.Truncate(buffer.Len() - 1)
-						buffer.WriteByte(',')
+						if value, err := json.Marshal(key); err == nil {
+							buffer.Write(value)
+							buffer.WriteByte(':')
+							encoder.Encode(structure[key])
+							buffer.Truncate(buffer.Len() - 1)
+							buffer.WriteByte(',')
+						}
 					}
 				}
 				buffer.Truncate(buffer.Len() - 1)
@@ -654,8 +662,8 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 
 		l.mu.Lock()
 		if _, exists := l.fileOutputs[path]; !exists {
-			os.MkdirAll(filepath.Dir(path), 0o755)
-			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o644); err == nil {
+			os.MkdirAll(filepath.Dir(path), 0o700)
+			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o600); err == nil {
 				l.fileOutputs[path] = &fileOutput{handle: handle}
 			}
 		}

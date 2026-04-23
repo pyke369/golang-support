@@ -3,7 +3,9 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -14,10 +16,15 @@ import (
 // see https://akkadia.org/drepper/SHA-crypt.txt
 var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 
-func Crypt512(in, salt string, rounds int) (out string) {
+func Crypt512(in, salt string, rounds int) (out string, err error) {
+	in, salt = strings.TrimSpace(in), strings.TrimSpace(salt)
+	if len(in) > 128 {
+		return "", errors.New("password too long")
+	}
+
 	out = "$6$"
 	if rounds == 0 {
-		rounds = 5000
+		rounds = 100000
 	}
 	rounds = max(1000, min(999999999, rounds))
 	if rounds != 5000 {
@@ -127,70 +134,76 @@ func Crypt512(in, salt string, rounds int) (out string) {
 		C[index], C[index+3] = C[index+3], C[index]
 		C[index+1], C[index+2] = C[index+2], C[index+1]
 	}
-	return out + string(C[:86])
+	return out + string(C[:86]), nil
 }
 
-func Password(in string, values []string, fallback bool) (match bool, entry string) {
-	if len(values) > 0 {
-		login, password := "", strings.TrimSpace(in)
-		if parts := strings.Split(in, ":"); len(parts) >= 2 {
-			login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-		}
-		for _, value := range values {
-			check := strings.TrimSpace(value)
-			if len(check) > 1 && check[0] == '@' {
-				if match, value := PasswordFile(in, strings.TrimSpace(check[1:]), fallback); match {
-					return true, value
-				}
+func Password(in string, values []string) (match bool, entry string) {
+	if len(values) == 0 {
+		return false, ""
+	}
 
-			} else {
-				if login != "" {
-					if parts := strings.Split(check, ":"); len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
-						continue
+	login, password := "", strings.TrimSpace(in)
+	if parts := strings.SplitN(in, ":", 2); len(parts) >= 2 {
+		login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	for _, value := range values {
+		check := strings.TrimSpace(value)
+		if len(check) > 1 && check[0] == '@' {
+			if match, value := PasswordFile(in, strings.TrimSpace(check[1:])); match {
+				return true, value
+			}
 
-					} else {
-						check = strings.TrimSpace(parts[1])
-					}
-				}
-				if check != "" && (check[0] == '!' || check[0] == '*') {
+		} else {
+			if login != "" {
+				if parts := strings.Split(check, ":"); len(parts) < 2 || subtle.ConstantTimeCompare([]byte(login), []byte(strings.TrimSpace(parts[0]))) == 0 {
 					continue
-				}
 
-				if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[1] == "6" && parts[2] != "" && parts[3] != "" {
+				} else {
+					check = strings.TrimSpace(parts[1])
+				}
+			}
+			if check != "" && (check[0] == '!' || check[0] == '*') {
+				continue
+			}
+
+			if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
+				switch parts[1] {
+				case "6":
 					rounds, salt := 5000, parts[2]
 					if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
 						rounds, _ = strconv.Atoi(parts[2][7:])
 						salt = parts[3]
 					}
-					if Crypt512(password, salt, rounds) == check {
-						return true, value
+					if encrypted, err := Crypt512(password, salt, rounds); err == nil {
+						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
+							return true, value
+						}
 					}
 
+				case "y":
 					// TODO add yescrypt support
-
-				} else if password == check {
-					return true, value
 				}
 			}
 		}
-		return false, ""
 	}
-	return fallback, ""
+
+	return false, ""
 }
 
-func PasswordConfig(in string, config *uconfig.UConfig, path string, fallback bool) (match bool, entry string) {
-	return Password(in, config.Strings(path), fallback)
+func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool, entry string) {
+	return Password(in, config.Strings(path))
 }
 
-func PasswordFile(in, path string, fallback bool) (match bool, entry string) {
+func PasswordFile(in, path string) (match bool, entry string) {
 	lines := []string{}
 	if content, err := os.ReadFile(path); err == nil {
 		for _, line := range strings.Split(string(content), "\n") {
 			line = strings.TrimSpace(line)
-			if (len(line) >= 1 && line[0] != '#') || (len(line) >= 2 && line[0] != '/' && line[1] != '/') {
+			if !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "//") {
 				lines = append(lines, line)
 			}
 		}
 	}
-	return Password(in, lines, fallback)
+
+	return Password(in, lines)
 }

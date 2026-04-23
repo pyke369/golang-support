@@ -2,7 +2,6 @@ package prefixdb
 
 import (
 	"bytes"
-	"crypto/md5"
 	"encoding/binary"
 	"errors"
 	"math"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pyke369/golang-support/uhash"
 )
 
 const VERSION = 0x00010000
@@ -180,7 +181,11 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 			for index, value := range cpairs {
 				binary.BigEndian.PutUint64(buffer[index*8:], value)
 			}
-			key := md5.Sum(buffer)
+
+			key, hash := [16]byte{}, uhash.Hash(buffer)
+			for index := 0; index < 16; index++ {
+				key[index] = hash[index]
+			}
 			index := 0
 			if _, exists := d.clusters[key]; !exists {
 				index = len(d.clusters)
@@ -515,8 +520,8 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 
 	// finalize header
 	d.tree, d.strings, d.numbers, d.pairs, d.clusters = node{}, map[string]*[3]int{}, map[float64]*[3]int{}, map[uint64]*[3]int{}, map[[16]byte]*cluster{}
-	hash := md5.Sum(d.data[24:])
-	copy(d.data[8:], hash[:])
+	hash := uhash.Hash(d.data[24:])
+	copy(d.data[8:24], hash[:16])
 	d.Total = len(d.data)
 
 	// save database
@@ -525,7 +530,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 			_, err = os.Stdout.Write(d.data)
 
 		} else {
-			err = os.WriteFile(path, d.data, 0o644)
+			err = os.WriteFile(path, d.data, 0o600)
 		}
 	}
 
@@ -538,77 +543,77 @@ func (d *PrefixDB) Load(path string) error {
 		return err
 
 	} else {
-		if len(data) < 8 || string(data[0:4]) != "PFDB" {
+		if len(data) < 24 || string(data[0:4]) != "PFDB" {
 			return errors.New(`prefixdb: invalid preamble`)
 		}
-		if version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7]); (version & 0xff0000) > (VERSION & 0xff0000) {
+		version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7])
+		if (version & 0xff0000) > (VERSION & 0xff0000) {
 			return errors.New("prefixdb: incompatible library and database major versions")
+		}
+		hash := uhash.Hash(data[24:])
+		if len(data) < 24 || slices.Compare(hash[:16], data[8:24]) != 0 {
+			return errors.New(`prefixdb: invalid checksum`)
+		}
+		d.mu.Lock()
+		d.data = data
+		d.Total = len(data)
+		d.Version = version
+		d.Path = path
+		offset := 24
 
-		} else {
-			hash := md5.Sum(data[24:])
-			if len(data) < 24 || slices.Compare(hash[:], data[8:24]) != 0 {
-				return errors.New(`prefixdb: checksum is invalid`)
-			}
-			d.mu.Lock()
-			d.data = data
-			d.Total = len(data)
-			d.Version = version
-			d.Path = path
-			offset := 24
-			if d.Total >= offset+4 && string(data[offset:offset+4]) == "DESC" {
-				offset += 4
-				if d.Total >= offset+20 {
-					index := 0
-					if index = bytes.Index(data[offset:offset+20], []byte{0}); index < 0 {
-						index = 20
-					}
-					d.Description = string(data[offset : offset+index])
-					offset += 20
-					if d.Total >= offset+4 && string(data[offset:offset+4]) == "STRS" {
-						offset += 4
-						if d.Total >= offset+9 {
-							d.Strings[3] = int(data[offset])
-							d.Strings[2] = offset + 9
-							d.Strings[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-							d.Strings[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-							offset += 9 + d.Strings[0]
-							if d.Total >= offset+4 && string(data[offset:offset+4]) == "NUMS" {
-								offset += 4
-								if d.Total >= offset+8 {
-									d.Numbers[2] = offset + 8
-									d.Numbers[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-									d.Numbers[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-									offset += 8 + d.Numbers[0]
-									if d.Total >= offset+4 && string(data[offset:offset+4]) == "PAIR" {
-										offset += 4
-										if d.Total >= offset+8 {
-											d.Pairs[2] = offset + 8
-											d.Pairs[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-											d.Pairs[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-											offset += 8 + d.Pairs[0]
-											if d.Total >= offset+4 && string(data[offset:offset+4]) == "CLUS" {
+		if offset <= d.Total-4 && string(data[offset:offset+4]) == "DESC" {
+			offset += 4
+			if offset <= d.Total-20 {
+				index := 0
+				if index = bytes.Index(data[offset:offset+20], []byte{0}); index < 0 {
+					index = 20
+				}
+				d.Description = string(data[offset : offset+index])
+				offset += 20
+				if offset <= d.Total-4 && string(data[offset:offset+4]) == "STRS" {
+					offset += 4
+					if offset <= d.Total-9 {
+						d.Strings[3] = int(data[offset])
+						d.Strings[2] = offset + 9
+						d.Strings[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+						d.Strings[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+						offset += 9 + d.Strings[0]
+						if offset <= d.Total-4 && string(data[offset:offset+4]) == "NUMS" {
+							offset += 4
+							if offset <= d.Total-8 {
+								d.Numbers[2] = offset + 8
+								d.Numbers[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+								d.Numbers[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+								offset += 8 + d.Numbers[0]
+								if offset <= d.Total-4 && string(data[offset:offset+4]) == "PAIR" {
+									offset += 4
+									if offset <= d.Total-8 {
+										d.Pairs[2] = offset + 8
+										d.Pairs[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+										d.Pairs[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+										offset += 8 + d.Pairs[0]
+										if offset <= d.Total-4 && string(data[offset:offset+4]) == "CLUS" {
+											offset += 4
+											d.Clusters[3] = int(data[offset])
+											d.Clusters[2] = offset + 9
+											d.Clusters[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+											d.Clusters[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+											offset += 9 + d.Clusters[0]
+											if offset <= d.Total-4 && string(data[offset:offset+4]) == "MAPS" {
 												offset += 4
-												d.Clusters[3] = int(data[offset])
-												d.Clusters[2] = offset + 9
-												d.Clusters[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-												d.Clusters[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-												offset += 9 + d.Clusters[0]
-												if d.Total >= offset+4 && string(data[offset:offset+4]) == "MAPS" {
-													offset += 4
-													if d.Total >= offset+8 {
-														d.Maps[2] = offset + 8
-														d.Maps[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-														d.Maps[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-														offset += 8 + d.Maps[0]
-														if d.Total >= offset+9 && string(data[offset:offset+4]) == "NODE" {
-															offset += 4
-															d.Nodes[3] = int(data[offset])
-															d.Nodes[2] = offset + 9
-															d.Nodes[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-															d.Nodes[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-															if offset+9+d.Nodes[0] != d.Total {
-																d.Nodes[2] = 0
-															}
+												if offset <= d.Total-8 {
+													d.Maps[2] = offset + 8
+													d.Maps[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
+													d.Maps[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
+													offset += 8 + d.Maps[0]
+													if offset <= d.Total-9 && string(data[offset:offset+4]) == "NODE" {
+														offset += 4
+														d.Nodes[3] = int(data[offset])
+														d.Nodes[2] = offset + 9
+														d.Nodes[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
+														d.Nodes[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
+														if offset+9+d.Nodes[0] != d.Total {
+															d.Nodes[2] = 0
 														}
 													}
 												}
@@ -621,10 +626,10 @@ func (d *PrefixDB) Load(path string) error {
 					}
 				}
 			}
-			d.mu.Unlock()
-			if d.Strings[2] == 0 || d.Numbers[2] == 0 || d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 {
-				return errors.New(`prefixdb: structure is invalid`)
-			}
+		}
+		d.mu.Unlock()
+		if d.Strings[2] == 0 || d.Numbers[2] == 0 || d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 {
+			return errors.New(`prefixdb: structure is invalid`)
 		}
 	}
 	return nil

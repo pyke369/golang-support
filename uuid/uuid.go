@@ -2,7 +2,6 @@ package uuid
 
 import (
 	"crypto/rand"
-	"unsafe"
 )
 
 type UUID [16]byte
@@ -99,5 +98,5 @@ func (u UUID) String() string {
 		}
 	}
 
-	return unsafe.String(unsafe.SliceData(out), len(out))
+	return string(out)
 }

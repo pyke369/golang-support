@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -17,8 +16,6 @@ import (
 	j "github.com/pyke369/golang-support/jsonrpc"
 	l "github.com/pyke369/golang-support/listener"
 	"github.com/pyke369/golang-support/ustr"
-
-	"encoding/hex"
 )
 
 const (
@@ -178,6 +175,7 @@ func Groups() (list []*Group) {
 		list = append(list, group)
 	}
 	mu.RUnlock()
+
 	return
 }
 
@@ -188,6 +186,7 @@ func Speakers() (list []*Speaker) {
 		list = append(list, speaker)
 	}
 	mu.RUnlock()
+
 	return
 }
 
@@ -198,6 +197,7 @@ func Peers() (peers []*Peer) {
 		peers = append(peers, group.Peers()...)
 	}
 	mu.RUnlock()
+
 	return nil
 }
 
@@ -332,6 +332,7 @@ func (g *Group) Peers() (peers []*Peer) {
 		peers = append(peers, peer)
 	}
 	g.mu.RUnlock()
+
 	return
 }
 
@@ -365,7 +366,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 		speaker.name = strings.TrimSpace(strings.ToLower(j.String(options[0]["name"])))
 	}
 	if port != "0" {
-		speaker.listener, err = l.NewTCPListener("tcp", net.JoinHostPort(host, port), &l.TCPOptions{ReusePort: true})
+		speaker.listener, err = l.NewTCPListener("tcp", net.JoinHostPort(host, port), &l.TCPOptions{Reuse: true})
 		if err != nil {
 			return nil, err
 		}
@@ -430,6 +431,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 		}(speaker)
 	}
 	speakers[speaker.key] = speaker
+
 	return
 }
 
@@ -470,6 +472,7 @@ func (s *Speaker) AddTemplate(remotes []string, localASN, peerASN string, option
 	s.mu.Lock()
 	s.templates[template] = struct{}{}
 	s.mu.Unlock()
+
 	return
 }
 
@@ -628,6 +631,7 @@ func (s *Speaker) Templates() (templates []*Template) {
 		templates = append(templates, template)
 	}
 	s.mu.RUnlock()
+
 	return
 }
 
@@ -638,6 +642,7 @@ func (s *Speaker) Peers() (peers []*Peer) {
 		peers = append(peers, peer)
 	}
 	s.mu.RUnlock()
+
 	return
 }
 
@@ -956,6 +961,7 @@ func (p *Peer) State() (state string) {
 	p.mu.RLock()
 	state = p.state
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -965,6 +971,7 @@ func (p *Peer) Duration() (duration time.Duration) {
 		duration = time.Since(p.established)
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -974,6 +981,7 @@ func (p *Peer) LocalAddr() (address string) {
 		address = p.conn.LocalAddr().String()
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -983,6 +991,7 @@ func (p *Peer) RemoteAddr() (address string) {
 		address = p.conn.RemoteAddr().String()
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -990,6 +999,7 @@ func (p *Peer) LocalASN() (asn int) {
 	p.mu.RLock()
 	asn = p.localASN
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -997,6 +1007,7 @@ func (p *Peer) PeerASN() (asn int) {
 	p.mu.RLock()
 	asn = p.peerASN
 	p.mu.RUnlock()
+
 	return
 }
 
@@ -1007,11 +1018,13 @@ func (p *Peer) LocalCapabilities() (list []Capability) {
 		list = append(list, capability)
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
 func (p *Peer) LocalCapability(in string) (capability Capability, exists bool) {
 	capability, exists = p.capabilities[capabilities[in]]
+
 	return
 }
 
@@ -1023,11 +1036,13 @@ func (p *Peer) PeerCapabilities() (list []Capability) {
 		}
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
 func (p *Peer) PeerCapability(in string) (capability Capability, exists bool) {
 	capability, exists = p.peerCapabilities[capabilities[in]]
+
 	return
 }
 
@@ -1037,11 +1052,13 @@ func (p *Peer) LocalFamilies() (list []Family) {
 		list = append(list, family)
 	}
 	p.mu.RUnlock()
+
 	return
 }
 
 func (p *Peer) LocalFamily(family Family) (exists bool) {
 	_, exists = p.families[family]
+
 	return
 }
 
@@ -1058,6 +1075,7 @@ func (p *Peer) PeerFamilies() (list []Family) {
 
 func (p *Peer) PeerFamily(family Family) (exists bool) {
 	_, exists = p.peerFamilies[family]
+
 	return
 }
 
@@ -1083,6 +1101,7 @@ func (p *Peer) LocalMultipath(family Family, direction int) (ok bool) {
 			return direction&value == direction
 		}
 	}
+
 	return
 }
 
@@ -1108,6 +1127,7 @@ func (p *Peer) PeerMultipath(family Family, direction int) (ok bool) {
 			return direction&value == direction
 		}
 	}
+
 	return
 }
 
@@ -1220,7 +1240,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 			// TODO layout attribute + use extended flag is len(value) > 255
 		}
 	}
-	fmt.Printf("%#v\n%s\n", in, hex.Dump(out))
+
 	return
 }
 
@@ -1336,17 +1356,18 @@ func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 				}
 				path := ""
 				if length != 0 {
-					count := int(in[offset+header+1])
-					width := (length - 2) / count
-					if width != 2 && width != 4 {
-						return out, 11
-					}
-					for index := 0; index < count; index++ {
-						if width == 2 {
-							path += " " + strconv.Itoa(int(binary.BigEndian.Uint16(in[offset+header+2+(index*width):])))
+					if count := int(in[offset+header+1]); count != 0 {
+						width := (length - 2) / count
+						if width != 2 && width != 4 {
+							return out, 11
+						}
+						for index := 0; index < count; index++ {
+							if width == 2 {
+								path += " " + strconv.Itoa(int(binary.BigEndian.Uint16(in[offset+header+2+(index*width):])))
 
-						} else {
-							path += " " + strconv.Itoa(int(binary.BigEndian.Uint32(in[offset+header+2+(index*width):])))
+							} else {
+								path += " " + strconv.Itoa(int(binary.BigEndian.Uint32(in[offset+header+2+(index*width):])))
+							}
 						}
 					}
 				}
@@ -1358,12 +1379,13 @@ func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 				}
 				path := ""
 				if length != 0 {
-					count := int(in[offset+header+1])
-					if (length-2)/count != 4 {
-						return out, 9
-					}
-					for index := 0; index < count; index++ {
-						path += " " + strconv.Itoa(int(binary.BigEndian.Uint32(in[offset+header+2+(index*4):])))
+					if count := int(in[offset+header+1]); count != 0 {
+						if (length-2)/count != 4 {
+							return out, 9
+						}
+						for index := 0; index < count; index++ {
+							path += " " + strconv.Itoa(int(binary.BigEndian.Uint32(in[offset+header+2+(index*4):])))
+						}
 					}
 				}
 				out[attribute] = strings.TrimSpace(path)
@@ -1437,6 +1459,7 @@ func (p *Peer) decodeAttributes(in []byte) (out map[string]any, code int) {
 
 		offset += header + length
 	}
+
 	return
 }
 
@@ -1505,9 +1528,11 @@ func (p *Peer) idle(remove ...bool) {
 			p.speaker.mu.Lock()
 			delete(p.speaker.peers, p.key)
 			p.speaker.mu.Unlock()
-			p.template.mu.Lock()
-			delete(p.template.peers, p.key)
-			p.template.mu.Unlock()
+			if p.template != nil {
+				p.template.mu.Lock()
+				delete(p.template.peers, p.key)
+				p.template.mu.Unlock()
+			}
 			p.removed, p.state, p.localASN, p.peerASN = true, stateUnconfigured, 0, 0
 		}
 		p.mu.Unlock()

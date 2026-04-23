@@ -1,7 +1,7 @@
 package file
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
@@ -60,7 +60,7 @@ func Write(path string, lines []string, extra ...string) {
 	if len(extra) > 0 {
 		extra[0] = strings.ToLower(strings.TrimSpace(extra[0]))
 		if strings.Contains(extra[0], "creat") {
-			os.MkdirAll(filepath.Dir(path), 0o755)
+			os.MkdirAll(filepath.Dir(path), 0o700)
 			options |= os.O_CREATE
 		}
 		if strings.Contains(extra[0], "append") {
@@ -70,8 +70,15 @@ func Write(path string, lines []string, extra ...string) {
 			options |= os.O_TRUNC
 		}
 	}
-	if handle, err := os.OpenFile(path, options, 0o644); err == nil {
+	if handle, err := os.OpenFile(path, options, 0o600); err == nil {
 		handle.WriteString(strings.Join(lines, "\n") + "\n")
+		handle.Close()
+	}
+}
+
+func Touch(path string) {
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	if handle, err := os.OpenFile(path, os.O_CREATE, 0o600); err == nil {
 		handle.Close()
 	}
 }
@@ -108,7 +115,7 @@ func Link(path string) (base string) {
 
 func Sum(path string) (sum string, size int64) {
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-		hasher := md5.New()
+		hasher := sha256.New()
 		if handle, err := os.Open(path); err == nil {
 			io.Copy(hasher, handle)
 			handle.Close()
@@ -135,7 +142,7 @@ func Copy(source, target string, extra ...bool) (err error) {
 	sinfo, _ := shandle.Stat()
 	ssize := sinfo.Size()
 
-	thandle, err := os.OpenFile(target, tflags, 0o644)
+	thandle, err := os.OpenFile(target, tflags, 0o600)
 	if err != nil {
 		return err
 	}

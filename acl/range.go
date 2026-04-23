@@ -38,12 +38,18 @@ func Ranges(in time.Time, values []string, fallback bool) (match bool, index int
 
 				} else if captures := matcher3.FindStringSubmatch(value); len(captures) == 7 {
 					hour, _ := strconv.ParseInt(captures[1], 10, 64)
+					hour = max(0, min(23, hour))
 					minute, _ := strconv.ParseInt(captures[2], 10, 64)
+					minute = max(0, min(59, minute))
 					second, _ := strconv.ParseInt(captures[3], 10, 64)
+					second = max(0, min(59, second))
 					entry.times[0] = int(hour)*3600 + int(minute)*60 + int(second)
 					hour, _ = strconv.ParseInt(captures[4], 10, 64)
+					hour = max(0, min(23, hour))
 					minute, _ = strconv.ParseInt(captures[5], 10, 64)
+					minute = max(0, min(59, minute))
 					second, _ = strconv.ParseInt(captures[6], 10, 64)
+					second = max(0, min(59, second))
 					entry.times[1] = int(hour)*3600 + int(minute)*60 + int(second)
 				}
 			}

@@ -1,12 +1,12 @@
 package chash
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"os"
 	"sort"
 	"strconv"
 	"sync"
+
+	"github.com/pyke369/golang-support/uhash"
 )
 
 const (
@@ -67,16 +67,6 @@ func murmur2(key []byte, keySize int) uint32 {
 	hash *= magic
 	hash ^= hash >> 15
 	return hash
-}
-
-func randn(in int) (out int) {
-	if in > 0 {
-		value := make([]byte, 8)
-		rand.Read(value)
-		value[0] &= 0x7f
-		out = int(binary.BigEndian.Uint64(value)) % in
-	}
-	return
 }
 
 func (c *CHash) freeze() {
@@ -209,7 +199,7 @@ func (c *CHash) Serialize() []byte {
 }
 
 func (c *CHash) FileSerialize(path string) bool {
-	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return false
 	}
@@ -335,13 +325,15 @@ func (c *CHash) Lookup(candidate string, count int) []string {
 		}
 	}
 	c.mu.RUnlock()
+
 	return result
 }
 
 func (c *CHash) LookupBalance(candidate string, count int) string {
 	result := c.Lookup(candidate, count)
 	if len(result) > 0 {
-		return result[randn(len(result))]
+		return result[uhash.RandInt(len(result))]
 	}
+
 	return ""
 }

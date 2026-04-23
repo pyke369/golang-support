@@ -67,27 +67,25 @@ func (d *DYNACERT) Get(match string) (public, private string) {
 }
 
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
+	d.mu.Lock()
 	if time.Since(d.last) >= 15*time.Second {
-		d.mu.Lock()
-		if time.Since(d.last) >= 15*time.Second {
-			var info os.FileInfo
+		var info os.FileInfo
 
-			d.last = time.Now()
-			for _, cert := range d.certs {
-				if cert.inline {
-					continue
-				}
-				if info, err = os.Stat(cert.public); err == nil {
-					if info.ModTime().Sub(cert.modified) != 0 {
-						if value, err := tls.LoadX509KeyPair(cert.public, cert.private); err == nil {
-							cert.cert, cert.modified = &value, info.ModTime()
-						}
+		d.last = time.Now()
+		for _, cert := range d.certs {
+			if cert.inline {
+				continue
+			}
+			if info, err = os.Stat(cert.public); err == nil {
+				if info.ModTime().Sub(cert.modified) != 0 {
+					if value, err := tls.LoadX509KeyPair(cert.public, cert.private); err == nil {
+						cert.cert, cert.modified = &value, info.ModTime()
 					}
 				}
 			}
 		}
-		d.mu.Unlock()
 	}
+	d.mu.Unlock()
 
 	d.mu.RLock()
 	defer d.mu.RUnlock()

@@ -118,7 +118,7 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 		request.Header.Set("Content-Type", "application/json")
 		client := &http.Client{Transport: options.Transport, Timeout: options.Timeout}
 		if response, err := client.Do(request); err == nil {
-			out, _ = io.ReadAll(response.Body)
+			out, _ = io.ReadAll(io.LimitReader(response.Body, 256<<10))
 			response.Body.Close()
 			if response.StatusCode/100 != 2 || len(out) == 0 {
 				return nil, errors.New("jsonrpc: HTTP error " + strconv.Itoa(response.StatusCode))
@@ -151,24 +151,26 @@ func Request(calls []*CALL) (payload []byte, err error) {
 		} else if call.Id == "" {
 			call.id = uuid.New().String()
 		}
-		payload = append(payload, `{"jsonrpc":"2.0","method":"`...)
-		payload = append(payload, call.Method...)
-		payload = append(payload, '"')
+		payload = append(payload, `{"jsonrpc":"2.0","method":`...)
+		if value, err := json.Marshal(call.Method); err == nil {
+			payload = append(payload, value...)
+		}
 		if !call.Notification {
-			payload = append(payload, `,"id":"`...)
-			payload = append(payload, call.id...)
-			payload = append(payload, '"')
+			payload = append(payload, `,"id":`...)
+			if value, err := json.Marshal(call.id); err == nil {
+				payload = append(payload, value...)
+			}
 		}
 		if call.Params != nil {
-			if marshaled, err := json.Marshal(call.Params); err == nil {
+			if value, err := json.Marshal(call.Params); err == nil {
 				payload = append(payload, `,"params":`...)
-				if marshaled[0] != '[' && marshaled[0] != '{' {
+				if value[0] != '[' && value[0] != '{' {
 					payload = append(payload, '[')
-					payload = append(payload, marshaled...)
+					payload = append(payload, value...)
 					payload = append(payload, ']')
 
 				} else {
-					payload = append(payload, marshaled...)
+					payload = append(payload, value...)
 				}
 			}
 		}
@@ -188,7 +190,9 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 	if payload == nil {
 		payload = []byte("[]")
 	}
-	payload = bytes.TrimSpace(payload)
+	if payload = bytes.TrimSpace(payload); len(payload) == 0 {
+		return nil, errors.New("jsonrpc: empty payload")
+	}
 	if payload[0] != '[' {
 		payload = append([]byte("["), payload...)
 		payload = append(payload, ']')
@@ -327,14 +331,7 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 					go func(request REQUEST) {
 						defer func() {
 							if r := recover(); r != nil {
-								err := errors.New("unknown")
-								if value, ok := r.(error); ok {
-									err = value
-								}
-								if value, ok := r.(string); ok {
-									err = errors.New(value)
-								}
-								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: ustr.Wrap(err, "jsonrpc").Error()}}
+								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE}}
 							}
 						}()
 
@@ -365,9 +362,10 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 	if response := responses[true]; response != nil && response.Error != nil {
 		out = append(out, `{"jsonrpc":"2.0","error":{"code":`...)
 		out = strconv.AppendInt(out, int64(response.Error.Code), 10)
-		out = append(out, `,"message":"`...)
-		out = append(out, response.Error.Message...)
-		out = append(out, '"')
+		if value, err := json.Marshal(response.Error.Message); err == nil {
+			out = append(out, `,"message":`...)
+			out = append(out, value...)
+		}
 		if response.Error.Data != nil {
 			if data, err := json.Marshal(response.Error.Data); err == nil {
 				out = append(out, `,"data":`...)
@@ -387,17 +385,18 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 			out = strconv.AppendInt(out, int64(value), 10)
 		}
 		if value, ok := id.(string); ok {
-			out = append(out, '"')
-			out = append(out, value...)
-			out = append(out, '"')
+			if value, err := json.Marshal(value); err == nil {
+				out = append(out, value...)
+			}
 		}
 		out = append(out, ',')
 		if response.Error != nil {
 			out = append(out, `"error":{"code":`...)
 			out = strconv.AppendInt(out, int64(response.Error.Code), 10)
-			out = append(out, `,"message":"`...)
-			out = append(out, response.Error.Message...)
-			out = append(out, '"')
+			if value, err := json.Marshal(response.Error.Message); err == nil {
+				out = append(out, `,"message":`...)
+				out = append(out, value...)
+			}
 			if response.Error.Data != nil {
 				if data, err := json.Marshal(response.Error.Data); err == nil {
 					out = append(out, `,"data":`...)

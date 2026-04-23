@@ -162,7 +162,7 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 		}
 		created = true
 	}
-	if chunk.handle, err = os.OpenFile(path, flags, 0o644); err != nil {
+	if chunk.handle, err = os.OpenFile(path, flags, 0o600); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
 	if err = chunk.handle.Truncate(size); err != nil {
@@ -207,7 +207,7 @@ func (s *Store) cleanup() {
 
 func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 	if len(readonly) == 0 || !readonly[0] {
-		os.MkdirAll(prefix, 0o755)
+		os.MkdirAll(prefix, 0o700)
 	}
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
@@ -248,7 +248,7 @@ func (s *Store) Rename(from, to string) error {
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
 	}
-	os.MkdirAll(filepath.Dir(to), 0o755)
+	os.MkdirAll(filepath.Dir(to), 0o700)
 	return os.Rename(from, to)
 }
 
@@ -318,12 +318,18 @@ func (m *metric) meta(create bool) error {
 		if len(m.columns) == 0 {
 			return errors.New("mstore: empty columns list")
 		}
-		os.MkdirAll(m.path, 0o755)
+		if len(m.columns) >= 64<<10 {
+			return errors.New("mstore: too many columns")
+		}
+		os.MkdirAll(m.path, 0o700)
 		if info, err := os.Stat(m.path); err != nil || !info.IsDir() {
 			return errors.New("mstore: invalid metric")
 		}
 		m.interval = int64(math.Round(float64(m.interval)/minInterval)) * minInterval
 		m.interval = max(minInterval, min(m.interval, maxInterval))
+		if m.interval >= 64<<10 {
+			return errors.New("mstore: oversized interval")
+		}
 		data := make([]byte, metaMaxSize)
 		binary.BigEndian.PutUint32(data[0:], magic)
 		binary.BigEndian.PutUint16(data[4:], uint16(m.interval))
@@ -344,7 +350,7 @@ func (m *metric) meta(create bool) error {
 		offset += 128
 		binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(data[:offset]))
 		offset += 4
-		if os.WriteFile(path, data[:offset], 0o644) != nil {
+		if os.WriteFile(path, data[:offset], 0o600) != nil {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.frozen = true
@@ -387,7 +393,7 @@ func (m *metric) mapping(column int, flush bool) error {
 				offset += 2 + length
 			}
 			binary.BigEndian.PutUint32(data[size-4:], crc32.ChecksumIEEE(data[:size-4]))
-			if os.WriteFile(path, data, 0o644) != nil {
+			if os.WriteFile(path, data, 0o600) != nil {
 				return errors.New("mstore: invalid mapping")
 			}
 		}
@@ -741,6 +747,7 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 		}
 	}
 	m.store.cleanup()
+
 	return err
 }
 

@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
 	"golang.org/x/crypto/ssh"
+	kh "golang.org/x/crypto/ssh/knownhosts"
 )
 
 type SSHCredentials struct {
@@ -32,6 +35,8 @@ type SSHOptions struct {
 	Pty            bool
 	Prompt         string
 	Filter         string
+	KnownHosts     string
+	AcceptHandler  func(string, net.Addr, ssh.PublicKey) bool
 }
 
 type SSHConn struct {
@@ -48,10 +53,10 @@ type SSHConn struct {
 
 func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions) (conn *SSHConn, err error) {
 	if remote == "" {
-		return nil, errors.New("ssh: invalid remote")
+		return nil, errors.New("expect: invalid remote")
 	}
 	if credentials == nil || credentials.Username == "" || (credentials.Password == "" && credentials.Key == "") {
-		return nil, errors.New("ssh: invalid credentials")
+		return nil, errors.New("expect: invalid credentials")
 	}
 	if options == nil {
 		options = &SSHOptions{Mode: TEXT}
@@ -73,7 +78,7 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 	options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
 
 	if options.SubSystem != "" && options.SubSystem != "netconf" {
-		return nil, errors.New("ssh: invalid subsystem")
+		return nil, errors.New("expect: invalid subsystem")
 	}
 	if _, err := netip.ParseAddrPort(remote); err != nil {
 		if options.SubSystem == "netconf" {
@@ -99,19 +104,19 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		}
 	}
 	if options.Prompt == "" {
-		return nil, errors.New("ssh: invalid prompt")
+		return nil, errors.New("expect: invalid prompt")
 	}
 	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
-		return nil, errors.New("ssh: invalid mode")
+		return nil, errors.New("expect: invalid mode")
 	}
 
 	auth := []ssh.AuthMethod{}
 	if credentials.Key != "" {
 		if private, err := os.ReadFile(credentials.Key); err != nil {
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 
 		} else if signer, err := ssh.ParsePrivateKey(private); err != nil {
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 
 		} else {
 			auth = append(auth, ssh.PublicKeys(signer))
@@ -125,10 +130,35 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		remote:  remote,
 		options: options,
 		config: &ssh.ClientConfig{
-			User:            credentials.Username,
-			Timeout:         options.ConnectTimeout,
-			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			Auth:            auth,
+			User:    credentials.Username,
+			Timeout: options.ConnectTimeout,
+			HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+				if options.KnownHosts == "" {
+					return errors.New("KnownHosts path not provided")
+				}
+				if options.AcceptHandler != nil {
+					file.Touch(options.KnownHosts)
+				}
+
+				accepted := false
+			retry:
+				value, err := kh.New(options.KnownHosts)
+				if err != nil {
+					return err
+				}
+
+				err = value(hostname, remote, key)
+				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !accepted && options.AcceptHandler != nil {
+					if options.AcceptHandler(hostname, remote, key) {
+						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "append")
+						accepted = true
+						goto retry
+					}
+				}
+
+				return err
+			},
+			Auth: auth,
 		},
 	}, nil
 }
@@ -231,10 +261,10 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 	var trace *os.File
 
 	if command == "" {
-		return nil, errors.New("ssh: invalid or missing parameter")
+		return nil, errors.New("expect: invalid or missing parameter")
 	}
 	if c.closed.Load() {
-		return nil, errors.New("ssh: connection closed")
+		return nil, errors.New("expect: connection closed")
 	}
 
 	timeout, prompt, filter, raw, empty := c.options.ExecTimeout, c.options.Prompt, c.options.Filter, false, false
@@ -264,54 +294,54 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		start := time.Now()
 		if c.client, err = ssh.Dial("tcp", c.remote, c.config); err != nil {
 			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 		}
 		if c.session, err = c.client.NewSession(); err != nil {
 			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 		}
 
 		if c.input, err = c.session.StdinPipe(); err != nil {
 			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 		}
 		if c.output, err = c.session.StdoutPipe(); err != nil {
 			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 		}
 		if c.options.SubSystem != "" {
 			if err = c.session.RequestSubsystem(c.options.SubSystem); err != nil {
 				c.Close()
-				return nil, ustr.Wrap(err, "ssh")
+				return nil, ustr.Wrap(err, "expect")
 			}
 
 		} else {
 			if c.options.Pty {
 				if err = c.session.RequestPty("xterm", 40, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
 					c.Close()
-					return nil, ustr.Wrap(err, "ssh")
+					return nil, ustr.Wrap(err, "expect")
 				}
 			}
 			if err = c.session.Shell(); err != nil {
 				c.Close()
-				return nil, ustr.Wrap(err, "ssh")
+				return nil, ustr.Wrap(err, "expect")
 			}
 		}
 
 		lines, err := c.readlines(c.options.ConnectTimeout-time.Since(start), prompt, filter, trace)
 		if err != nil {
 			c.Close()
-			return nil, ustr.Wrap(err, "ssh")
+			return nil, ustr.Wrap(err, "expect")
 		}
 
 		if c.options.SubSystem == "netconf" {
 			message := ParseXML(lines, map[string]any{"skip": false})
 			hello, exists := message["hello"]
 			if !exists {
-				return nil, errors.New("ssh: invalid netconf hello message")
+				return nil, errors.New("expect: invalid netconf hello message")
 			}
 			if _, exists := j.Map(hello)["session-id"]; !exists {
-				return nil, errors.New("ssh: invalid netconf hello message")
+				return nil, errors.New("expect: invalid netconf hello message")
 			}
 			if err := c.write(`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
   <capabilities>
@@ -320,7 +350,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
   </capabilities>
 </hello>
 ]]>]]>`, trace); err != nil {
-				return nil, ustr.Wrap(err, "ssh")
+				return nil, ustr.Wrap(err, "expect")
 			}
 		}
 
@@ -372,13 +402,13 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 	atomic.StoreInt64(&c.last, time.Now().Unix())
 	if err = c.write(command, trace); err != nil {
 		c.Close()
-		return nil, ustr.Wrap(err, "ssh")
+		return nil, ustr.Wrap(err, "expect")
 	}
 
 	lines, err = c.readlines(timeout, prompt, filter, trace)
 	if err != nil {
 		c.Close()
-		return nil, ustr.Wrap(err, "ssh")
+		return nil, ustr.Wrap(err, "expect")
 	}
 
 	if raw {
