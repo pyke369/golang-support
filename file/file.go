@@ -55,7 +55,7 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 	return
 }
 
-func Write(path string, lines []string, extra ...string) {
+func Write(path string, lines []string, extra ...string) error {
 	options := os.O_WRONLY
 	if len(extra) > 0 {
 		extra[0] = strings.ToLower(strings.TrimSpace(extra[0]))
@@ -70,10 +70,14 @@ func Write(path string, lines []string, extra ...string) {
 			options |= os.O_TRUNC
 		}
 	}
-	if handle, err := os.OpenFile(path, options, 0o600); err == nil {
-		handle.WriteString(strings.Join(lines, "\n") + "\n")
-		handle.Close()
+	handle, err := os.OpenFile(path, options, 0o600)
+	if err != nil {
+		return err
 	}
+	_, err = handle.WriteString(strings.Join(lines, "\n") + "\n")
+	handle.Close()
+
+	return err
 }
 
 func Touch(path string) {
