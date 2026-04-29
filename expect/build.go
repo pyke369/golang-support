@@ -50,7 +50,14 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 				b.WriteString("/>\n")
 
 			} else {
-				b.WriteString(">\n" + value + "\n</" + key + ">\n")
+				b.WriteString(">\n")
+				if len(parameters) > 2 && !strings.Contains(value, "</"+key+">") {
+					b.WriteString(value)
+
+				} else {
+					xml.EscapeText(&b, []byte(value))
+				}
+				b.WriteString("\n</" + key + ">\n")
 			}
 		}
 	}

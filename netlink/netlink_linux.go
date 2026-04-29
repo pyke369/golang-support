@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ func newAttr(cmd int, data []byte, attrs []*attr) *attr {
 			length += attr.size
 		}
 	}
+
 	return &attr{
 		header: &syscall.NlAttr{
 			Len:  uint16(length),
@@ -71,6 +73,7 @@ func newRequest(cmd, flags int, data []byte, attrs []*attr) *request {
 	for _, attr := range attrs {
 		length += attr.size
 	}
+
 	return &request{
 		header: &syscall.NlMsghdr{
 			Len:   uint32(length),
@@ -116,32 +119,35 @@ func (nr *request) marshal() []byte {
 	copy(nr.marshaled[16:], nr.data)
 	nr.offset = 16 + len(nr.data)
 	nr.marshalAttrs(nr.attrs, 0)
+
 	return nr.marshaled
 }
 
 func exec(request *request, trace ...bool) (err error) {
 	handle, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
 	if err != nil {
-		return err
-	}
-	address := &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}
-	if err := syscall.Bind(handle, address); err != nil {
-		return err
+		return ustr.Wrap(err, "netlink")
 	}
 	defer syscall.Close(handle)
+
+	address := &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}
+	if err := syscall.Bind(handle, address); err != nil {
+		return ustr.Wrap(err, "netlink")
+	}
 	out := request.marshal()
 	if len(trace) > 0 && trace[0] {
 		os.Stderr.WriteString("-- REQ --\n")
 		os.Stderr.WriteString(hex.Dump(out))
 	}
 	if err := syscall.Sendto(handle, out, 0, address); err != nil {
-		return err
+		return ustr.Wrap(err, "netlink")
 	}
 	in := make([]byte, syscall.Getpagesize())
 	for {
+		// TODO SO_RCVTIMEO
 		n, _, err := syscall.Recvfrom(handle, in, 0)
 		if err != nil {
-			return err
+			return ustr.Wrap(err, "netlink")
 		}
 		if n < syscall.NLMSG_HDRLEN {
 			return syscall.EINVAL
@@ -152,17 +158,17 @@ func exec(request *request, trace ...bool) (err error) {
 		}
 		msgs, err := syscall.ParseNetlinkMessage(in[:n])
 		if err != nil {
-			return err
+			return ustr.Wrap(err, "netlink")
 		}
 		for _, msg := range msgs {
 			switch msg.Header.Type {
 			case syscall.NLMSG_DONE:
-				return err
+				return ustr.Wrap(err, "netlink")
 
 			case syscall.NLMSG_ERROR:
 				if msg.Header.Len >= 4 {
 					if errno := -int32(binary.LittleEndian.Uint32(msg.Data)); errno != 0 {
-						return syscall.Errno(errno)
+						return ustr.Wrap(syscall.Errno(errno), "netlink")
 					}
 				}
 			}
@@ -181,6 +187,9 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 					break outer1
 
 				case syscall.RTM_NEWLINK:
+					if len(msg.Data) < int(unsafe.Sizeof(syscall.IfInfomsg{})) {
+						continue
+					}
 					imsg, flags := (*syscall.IfInfomsg)(unsafe.Pointer(&msg.Data[0])), []string{}
 					for key, value := range map[int]string{
 						syscall.IFF_UP:          "UP",
@@ -229,19 +238,29 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 								}
 
 							case syscall.IFLA_IFNAME:
-								itf["name"] = string(attr.Value[:len(attr.Value)-1])
+								if len(attr.Value) != 0 {
+									itf["name"] = string(attr.Value[:len(attr.Value)-1])
+								}
 
 							case syscall.IFLA_MTU:
-								itf["mtu"] = int(binary.LittleEndian.Uint32(attr.Value))
+								if len(attr.Value) >= 4 {
+									itf["mtu"] = int(binary.LittleEndian.Uint32(attr.Value))
+								}
 
 							case syscall.IFLA_LINK:
-								itf["link"] = int(binary.LittleEndian.Uint16(attr.Value))
+								if len(attr.Value) >= 4 {
+									itf["link"] = int(binary.LittleEndian.Uint16(attr.Value))
+								}
 
 							case syscall.IFLA_MASTER:
-								itf["master"] = int(binary.LittleEndian.Uint16(attr.Value))
+								if len(attr.Value) >= 4 {
+									itf["master"] = int(binary.LittleEndian.Uint16(attr.Value))
+								}
 
 							case syscall.IFLA_TXQLEN:
-								itf["qlen"] = int(binary.LittleEndian.Uint32(attr.Value))
+								if len(attr.Value) >= 4 {
+									itf["qlen"] = int(binary.LittleEndian.Uint32(attr.Value))
+								}
 
 							case syscall.IFLA_OPERSTATE:
 								if state := int(attr.Value[0]); state >= 1 && state <= 6 {
@@ -310,6 +329,9 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 					break outer2
 
 				case syscall.RTM_NEWADDR:
+					if len(msg.Data) < int(unsafe.Sizeof(syscall.IfAddrmsg{})) {
+						continue
+					}
 					amsg := (*syscall.IfAddrmsg)(unsafe.Pointer(&msg.Data[0]))
 					for _, itf := range itfs {
 						if int(j.Number(itf["index"])) == int(amsg.Index) {
@@ -352,6 +374,7 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 		}
 		itfs = itfs2
 	}
+
 	return
 }
 
@@ -359,6 +382,7 @@ func getOption(name string, options ...map[string]any) any {
 	if len(options) != 0 && options[0] != nil {
 		return options[0][name]
 	}
+
 	return nil
 }
 
@@ -389,11 +413,13 @@ func AddVlan(name string, vlan int, options ...map[string]any) error {
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
 func AddVirtualPair(name1, name2 string, options ...map[string]any) error {
 	imsg := [syscall.SizeofIfInfomsg]byte{}
+
 	return exec(newRequest(
 		syscall.RTM_NEWLINK,
 		syscall.NLM_F_CREATE|syscall.NLM_F_EXCL,
@@ -415,6 +441,7 @@ func AddVirtualPair(name1, name2 string, options ...map[string]any) error {
 func AddBridge(name string, options ...map[string]any) error {
 	imsg, value := [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
 	binary.LittleEndian.PutUint32(value[:], 1)
+
 	return exec(newRequest(
 		syscall.RTM_NEWLINK,
 		syscall.NLM_F_CREATE|syscall.NLM_F_EXCL,
@@ -434,6 +461,7 @@ func AddBridge(name string, options ...map[string]any) error {
 
 func AddBond(name string, options ...map[string]any) error {
 	imsg := [syscall.SizeofIfInfomsg]byte{}
+
 	return exec(newRequest(
 		syscall.RTM_NEWLINK,
 		syscall.NLM_F_CREATE|syscall.NLM_F_EXCL,
@@ -464,6 +492,7 @@ func RenameInterface(from, to string, options ...map[string]any) error {
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -482,6 +511,7 @@ func SetInterfaceNamespace(name string, pid int, options ...map[string]any) erro
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -490,7 +520,7 @@ func LinkInterface(master, slave string, options ...map[string]any) error {
 		return syscall.Errno(syscall.EINVAL)
 	}
 	imaster, islave, imsg, value := 0, 0, [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
-	for _, itf := range Interfaces("~^(" + master + "|" + slave + ")$") {
+	for _, itf := range Interfaces("~^(" + regexp.QuoteMeta(master) + "|" + regexp.QuoteMeta(slave) + ")$") {
 		if j.String(itf["name"]) == master {
 			imaster = int(j.Number(itf["index"]))
 		}
@@ -509,6 +539,7 @@ func LinkInterface(master, slave string, options ...map[string]any) error {
 				newAttr(syscall.IFLA_MASTER, value[:], nil),
 			}), j.Boolean(getOption("trace", options...)))
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -528,6 +559,7 @@ func RemoveInterface(name string, options ...map[string]any) error {
 				nil), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return nil
 }
 
@@ -547,6 +579,7 @@ func SetInterfaceState(name string, up bool, options ...map[string]any) error {
 				nil), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -567,6 +600,7 @@ func SetInterfaceHWAddress(name, address string, options ...map[string]any) erro
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -585,6 +619,7 @@ func SetInterfaceMTU(name string, mtu int, options ...map[string]any) error {
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -603,6 +638,7 @@ func SetInterfaceQueue(name string, qlen int, options ...map[string]any) error {
 				}), j.Boolean(getOption("trace", options...)))
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -631,6 +667,7 @@ func AddInterfaceAddress(name, address string, options ...map[string]any) error 
 			return syscall.Errno(syscall.EINVAL)
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -659,6 +696,7 @@ func RemoveInterfaceAddress(name, address string, options ...map[string]any) err
 			return syscall.Errno(syscall.EINVAL)
 		}
 	}
+
 	return syscall.Errno(syscall.ENODEV)
 }
 
@@ -672,6 +710,10 @@ func Routes(filter ...string) (routes []map[string]any) {
 					return
 
 				case syscall.RTM_NEWROUTE:
+					if len(msg.Data) < int(unsafe.Sizeof(syscall.RtMsg{})) {
+						continue
+					}
+
 					// TODO implement
 					// rmsg := (*syscall.RtMsg)(unsafe.Pointer(&msg.Data[0]))
 					// fmt.Printf("family:%d Dst_len:%d Src_len:%d Table:%d\n", rmsg.Family, rmsg.Dst_len, rmsg.Src_len, rmsg.Table)
@@ -684,6 +726,7 @@ func Routes(filter ...string) (routes []map[string]any) {
 			}
 		}
 	}
+
 	return
 }
 

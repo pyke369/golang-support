@@ -42,12 +42,8 @@ type Capability struct {
 type Family [2]int
 
 var (
-	marker           = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-	emptySlice       = []byte{}
-	emptyMap         = map[string]any{}
-	emptySliceMap    = map[string][]string{}
-	emptySliceMapMap = map[string]map[string][]string{}
-	ipv4Unicast      = NewFamily("ipv4 unicast")
+	marker      = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	ipv4Unicast = NewFamily("ipv4 unicast")
 	// ipv6Unicast      = NewFamily("ipv6 unicast")
 	messageNames = map[int]string{
 		1: "open",
@@ -209,7 +205,7 @@ func NewCapability(in string) (capability Capability) {
 				return
 			}
 			if parts[1][0] == 'x' {
-				if value, err := hex.DecodeString(strings.ReplaceAll(parts[1][1:], " ", "")); err == nil {
+				if value, err := hex.DecodeString(ustr.Strip(parts[1][1:], " ")); err == nil {
 					capability.Value = value
 					return
 				}
@@ -380,6 +376,10 @@ func (f Family) Valid() bool {
 }
 
 func EncodeNexthop(in string, family Family) (out []byte) {
+	if in == "" {
+		return
+	}
+
 	if family.Valid() {
 		parts := strings.Split(in, "|")
 		parts[0] = strings.ToLower(strings.TrimSpace(parts[0]))
@@ -403,7 +403,7 @@ func EncodeNexthop(in string, family Family) (out []byte) {
 
 		default:
 			if in[0] == 'x' {
-				if value, err := hex.DecodeString(strings.ReplaceAll(in[1:], " ", "")); err == nil {
+				if value, err := hex.DecodeString(ustr.Strip(in[1:], " ")); err == nil {
 					value = value[:min(255, len(value))]
 					out = append(out, byte(len(value)))
 					out = append(out, value...)
@@ -447,6 +447,10 @@ func EncodePrefix(in string, family Family, multipath bool) (out []byte) {
 			path, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
 		}
 		parts[0] = strings.ToLower(strings.TrimSpace(parts[0]))
+		if parts[0] == "" {
+			return
+		}
+
 		switch family[0] {
 		case afis["ipv4"], afis["ipv6"]:
 			if prefix, err := netip.ParsePrefix(parts[0]); err == nil {
@@ -462,7 +466,7 @@ func EncodePrefix(in string, family Family, multipath bool) (out []byte) {
 
 		default:
 			if parts[0][0] == 'x' {
-				if value, err := hex.DecodeString(strings.ReplaceAll(parts[0][1:], " ", "")); err == nil {
+				if value, err := hex.DecodeString(ustr.Strip(parts[0][1:], " ")); err == nil {
 					if multipath {
 						out = binary.BigEndian.AppendUint32(out, uint32(path))
 					}
@@ -495,7 +499,7 @@ func DecodePrefixes(in []byte, family Family, multipath bool) (out []string, cod
 			}
 			bits := int(in[offset])
 			length, prefix := int((bits+7)/8), ""
-			if offset+length >= len(in) {
+			if offset+length > len(in) {
 				return
 			}
 			offset++

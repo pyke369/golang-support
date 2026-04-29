@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"net"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,34 +31,41 @@ func (a TCPAddr) String() string {
 	return net.JoinHostPort(a.addr, a.port)
 }
 
+type ProxyState int
+
+const (
+	ProxyStart ProxyState = iota
+	ProxyAddr
+	ProxyAttr
+)
+
 type TCPOptions struct {
 	Reuse       bool
 	ReadBuffer  int
 	WriteBuffer int
 	Callback    func(net.Conn)
-	Proxy       func(*TCPConn) bool
+	Proxy       func(*TCPConn, ProxyState) bool
 	TLS         func(*TCPConn, string, []byte) bool
 }
 
 type TCPConn struct {
-	options     *TCPOptions
-	conn        *net.TCPConn
-	proxyParsed bool
-	tlsParsed   bool
-	hijacked    bool
-	local       *TCPAddr
-	remote      *TCPAddr
-	attrs       map[int][]byte
+	options  *TCPOptions
+	conn     *net.TCPConn
+	proxyed  atomic.Bool
+	tlsed    atomic.Bool
+	hijacked bool
+	local    *TCPAddr
+	remote   *TCPAddr
+	attrs    map[int][]byte
 }
 
 func (c *TCPConn) Read(b []byte) (n int, err error) {
 	n, err = c.conn.Read(b)
 	if err != nil {
-		return 0, err
+		return 0, ustr.Wrap(err, "listener")
 	}
 
-	if !c.proxyParsed {
-		c.proxyParsed = true
+	if !c.proxyed.Swap(true) {
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
 			if size < 16+12 || n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
@@ -65,7 +73,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 				return 0, net.ErrClosed
 			}
 
-			if b[12] == 0x21 && c.options.Proxy != nil && c.options.Proxy(c) {
+			if b[12] == 0x21 && c.options.Proxy != nil && c.options.Proxy(c, ProxyStart) {
 				switch {
 				case b[13]&0xf0 == 0x10 && offset <= n-12: // ipv4
 					c.remote = &TCPAddr{addr: net.IPv4(b[16], b[17], b[18], b[19]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[24:])))}
@@ -78,6 +86,10 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 					offset += 36
 
 				default:
+					c.Close()
+					return 0, net.ErrClosed
+				}
+				if !c.options.Proxy(c, ProxyAddr) {
 					c.Close()
 					return 0, net.ErrClosed
 				}
@@ -97,9 +109,9 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 							c.attrs = map[int][]byte{}
 						}
 						value := make([]byte, length)
-						copy(value, b[offset+3:])
+						copy(value, b[offset+3:offset+3+length])
 						c.attrs[key] = value
-						if key == 3 {
+						if key == 3 && length >= 4 {
 							copy(b[offset+3:], []byte{0, 0, 0, 0})
 						}
 					}
@@ -116,6 +128,10 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 						}
 					}
 				}
+				if !c.options.Proxy(c, ProxyAttr) {
+					c.Close()
+					return 0, net.ErrClosed
+				}
 			}
 
 			if n > size {
@@ -128,39 +144,35 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	if n == 0 {
 		n, err = c.conn.Read(b)
 		if err != nil {
-			return 0, err
+			return 0, ustr.Wrap(err, "listener")
 		}
 	}
 
-	if !c.tlsParsed {
-		c.tlsParsed = true
-
-		if c.options.TLS != nil {
-			if n >= 44 && b[0] == 0x16 && b[1] == 3 && b[2] >= 1 && b[5] == 1 && b[9] == 3 && b[10] >= 1 {
-				if offset := 44 + int(b[43]); offset < n-1 {
-					if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 {
-						offset += 2 + length
-						if offset < n {
-							offset += 1 + int(b[offset])
-							if offset < n-1 {
-								end := offset + 2 + int(binary.BigEndian.Uint16(b[offset:]))
-								offset += 2
-								end = min(end, n)
-								for offset <= end-4 {
-									key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
-									if offset+4+length < end {
-										if key == 0 && length >= 6 && b[offset+7] == 0 {
-											cb := make([]byte, n)
-											copy(cb, b[:n])
-											if c.options.TLS(c, string(b[offset+9:offset+4+length]), cb) {
-												c.hijacked = true
-												return 0, net.ErrClosed
-											}
-											break
+	if !c.tlsed.Swap(true) && c.options.TLS != nil {
+		if n >= 44 && b[0] == 0x16 && b[1] == 3 && b[2] >= 1 && b[5] == 1 && b[9] == 3 && b[10] >= 1 {
+			if offset := 44 + int(b[43]); offset < n-1 {
+				if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 {
+					offset += 2 + length
+					if offset < n {
+						offset += 1 + int(b[offset])
+						if offset < n-1 {
+							end := offset + 2 + int(binary.BigEndian.Uint16(b[offset:]))
+							offset += 2
+							end = min(end, n)
+							for offset <= end-4 {
+								key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
+								if offset+4+length < end {
+									if key == 0 && length >= 6 && b[offset+7] == 0 {
+										cb := make([]byte, n)
+										copy(cb, b[:n])
+										if c.options.TLS(c, string(b[offset+9:offset+4+length]), cb) {
+											c.hijacked = true
+											return 0, net.ErrClosed
 										}
+										break
 									}
-									offset += 4 + length
 								}
+								offset += 4 + length
 							}
 						}
 					}
@@ -169,7 +181,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 		}
 	}
 
-	return n, err
+	return n, ustr.Wrap(err, "listener")
 }
 
 func (c *TCPConn) Write(b []byte) (n int, err error) {
@@ -192,6 +204,7 @@ func (c *TCPConn) LocalAddr() net.Addr {
 	if c.local != nil {
 		return *c.local
 	}
+
 	return c.conn.LocalAddr()
 }
 
@@ -199,6 +212,7 @@ func (c *TCPConn) RemoteAddr() net.Addr {
 	if c.remote != nil {
 		return *c.remote
 	}
+
 	return c.conn.RemoteAddr()
 }
 
@@ -222,6 +236,7 @@ func (c *TCPConn) Attr(attr int) []byte {
 	if c.attrs != nil {
 		return c.attrs[attr]
 	}
+
 	return nil
 }
 
@@ -233,7 +248,7 @@ type TCPListener struct {
 func (l *TCPListener) Accept() (net.Conn, error) {
 	conn, err := l.listener.AcceptTCP()
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "listener")
 	}
 	conn.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3})
 	if l.options != nil {
@@ -247,6 +262,7 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 			l.options.Callback(conn)
 		}
 	}
+
 	return &TCPConn{options: l.options, conn: conn}, nil
 }
 
@@ -268,7 +284,8 @@ func NewTCPListener(network, address string, options *TCPOptions) (listener *TCP
 		}}
 	clistener, err := config.Listen(context.Background(), network, address)
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "listener")
 	}
+
 	return &TCPListener{options: options, listener: clistener.(*net.TCPListener)}, nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/pyke369/golang-support/bslab"
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type UConfig struct {
@@ -283,7 +284,7 @@ func New(in string, extra ...map[string]any) (config *UConfig, err error) {
 	config = &UConfig{size: 64 << 10, input: in, separator: ".", arena: arena}
 	err = config.Load(in, inline)
 
-	return config, err
+	return config, ustr.Wrap(err, "uconfig")
 }
 
 func (c *UConfig) SetSeparator(separator string) {
@@ -512,7 +513,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							insert = append(insert, ']', ' ')
 
 						case '&': // environment value
-							value := strings.TrimSpace(os.Getenv(arg))
+							value := ustr.Strip(os.Getenv(arg), ` "<>{}[]:,`)
 							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)
@@ -520,7 +521,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							insert = append(insert, '"', ' ')
 
 						case '!': // argument value
-							value := options[strings.ToLower(arg)]
+							value := ustr.Strip(options[strings.ToLower(arg)], ` "<>{}[]:,`)
 							insert = c.arena.Get(3 + 2*len(value) + 2)
 							insert = append(insert, ' ', ' ', '"')
 							insert = append(insert, value...)

@@ -141,8 +141,8 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 	}
 	content := strings.Join(in, "\n")
 	for _, tag := range raw {
-		content = rcache.Get(`(?i)(<`+strings.TrimSpace(tag)+`[^>]*>)`).ReplaceAllString(content, "${1}<![CDATA[")
-		content = rcache.Get(`(?i)(</`+strings.TrimSpace(tag)+`>)`).ReplaceAllString(content, "]]>${1}")
+		content = rcache.Get(`(?i)(<`+regexp.QuoteMeta(strings.TrimSpace(tag))+`[^>]*>)`).ReplaceAllString(content, "${1}<![CDATA[")
+		content = rcache.Get(`(?i)(</`+regexp.QuoteMeta(strings.TrimSpace(tag))+`>)`).ReplaceAllString(content, "]]>${1}")
 	}
 
 	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(content))

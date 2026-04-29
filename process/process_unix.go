@@ -57,8 +57,11 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 		}
 		if value, ok := extra[0]["environ"].(map[string]string); ok {
 			cmd.Env = cmd.Environ()
+			matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 			for key, value := range value {
-				cmd.Env = append(cmd.Env, key+"="+value)
+				if matcher.MatchString(key) {
+					cmd.Env = append(cmd.Env, key+"="+value)
+				}
 			}
 		}
 		if value, ok := extra[0]["dir"].(string); ok {

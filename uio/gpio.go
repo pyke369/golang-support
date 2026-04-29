@@ -15,7 +15,7 @@ func GPIOCount() int {
 }
 
 func GPIOOpen(index ...int) (gpio *GPIO, err error) {
-	return nil, errors.ErrUnsupported
+	return nil, unsupported
 }
 
 func (g *GPIO) Name() string {

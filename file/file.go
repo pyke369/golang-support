@@ -1,14 +1,15 @@
 package file
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
@@ -30,25 +31,33 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 		}
 	}
 
-	if content, err := os.ReadFile(path); err == nil {
-		for _, line := range strings.Split(string(content), "\n") {
-			line = ustr.Transform(line, options)
-			if line == "" && options&ustr.OptionEmpty != 0 {
+	handle, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer handle.Close()
+	reader := bufio.NewReader(handle)
+	for {
+		line, err := reader.ReadString('\n')
+		line = ustr.Transform(line, options)
+		if line == "" && options&ustr.OptionEmpty != 0 {
+			continue
+		}
+		if matcher != nil {
+			captures := matcher.FindStringSubmatch(line)
+			if captures == nil {
 				continue
 			}
-			if matcher != nil {
-				captures := matcher.FindStringSubmatch(line)
-				if captures == nil {
-					continue
-				}
-				if capture && len(captures) > 1 {
-					line = strings.Join(captures[1:], separator)
-				}
+			if capture && len(captures) > 1 {
+				line = strings.Join(captures[1:], separator)
 			}
-			lines = append(lines, line)
-			if len(lines) != 0 && options&ustr.OptionFirst != 0 {
-				return
-			}
+		}
+		lines = append(lines, line)
+		if len(lines) != 0 && options&ustr.OptionFirst != 0 {
+			return
+		}
+		if err != nil {
+			break
 		}
 	}
 
@@ -56,33 +65,43 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 }
 
 func Write(path string, lines []string, extra ...string) error {
-	options := os.O_WRONLY
+	flags := os.O_WRONLY | syscall.O_NOFOLLOW
 	if len(extra) > 0 {
 		extra[0] = strings.ToLower(strings.TrimSpace(extra[0]))
 		if strings.Contains(extra[0], "creat") {
-			os.MkdirAll(filepath.Dir(path), 0o700)
-			options |= os.O_CREATE
+			if strings.Contains(extra[0], "dir") {
+				os.MkdirAll(filepath.Dir(path), 0o700)
+			}
+			flags |= os.O_CREATE
 		}
 		if strings.Contains(extra[0], "append") {
-			options |= os.O_APPEND
+			flags |= os.O_APPEND
 
 		} else {
-			options |= os.O_TRUNC
+			flags |= os.O_TRUNC
 		}
 	}
-	handle, err := os.OpenFile(path, options, 0o600)
+	handle, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
-		return err
+		return ustr.Wrap(err, "file")
 	}
 	_, err = handle.WriteString(strings.Join(lines, "\n") + "\n")
-	handle.Close()
+	if err != nil {
+		handle.Close()
+		return ustr.Wrap(err, "file")
+	}
 
-	return err
+	return handle.Close()
 }
 
-func Touch(path string) {
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	if handle, err := os.OpenFile(path, os.O_CREATE, 0o600); err == nil {
+func Touch(path string, extra ...string) {
+	if len(extra) > 0 {
+		extra[0] = strings.ToLower(strings.TrimSpace(extra[0]))
+		if strings.Contains(extra[0], "dir") {
+			os.MkdirAll(filepath.Dir(path), 0o700)
+		}
+	}
+	if handle, err := os.OpenFile(path, os.O_CREATE|syscall.O_NOFOLLOW, 0o600); err == nil {
 		handle.Close()
 	}
 }
@@ -118,20 +137,26 @@ func Link(path string) (base string) {
 }
 
 func Sum(path string) (sum string, size int64) {
-	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-		hasher := sha256.New()
-		if handle, err := os.Open(path); err == nil {
-			io.Copy(hasher, handle)
-			handle.Close()
-		}
-		size, sum = info.Size(), ustr.Hex(hasher.Sum(nil))
+	handle, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer handle.Close()
+	info, err := handle.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return
 	}
 
-	return
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, handle); err != nil {
+		return
+	}
+
+	return ustr.Hex(hasher.Sum(nil)), info.Size()
 }
 
 func Copy(source, target string, extra ...bool) (err error) {
-	tflags := os.O_RDWR
+	tflags := os.O_RDWR | os.O_EXCL
 	if len(extra) > 0 {
 		if extra[0] {
 			tflags |= os.O_CREATE
@@ -140,29 +165,35 @@ func Copy(source, target string, extra ...bool) (err error) {
 
 	shandle, err := os.Open(source)
 	if err != nil {
-		return err
+		return ustr.Wrap(err, "file")
 	}
 	defer shandle.Close()
-	sinfo, _ := shandle.Stat()
+	sinfo, err := shandle.Stat()
+	if err != nil {
+		return ustr.Wrap(err, "file")
+	}
 	ssize := sinfo.Size()
 
 	thandle, err := os.OpenFile(target, tflags, 0o600)
 	if err != nil {
-		return err
+		return ustr.Wrap(err, "file")
 	}
 	defer thandle.Close()
-	tinfo, _ := thandle.Stat()
+	tinfo, err := thandle.Stat()
+	if err != nil {
+		return ustr.Wrap(err, "file")
+	}
 	tsize := tinfo.Size()
 	if tflags&os.O_CREATE == 0 && tinfo.Mode().IsRegular() && ssize > tsize {
-		return errors.New("source size " + strconv.FormatInt(ssize, 10) + " > target size " + strconv.FormatInt(tsize, 10))
+		return errors.New("file: source size > target size")
 	}
 
 	copied, err := io.Copy(thandle, shandle)
 	if err != nil {
-		return err
+		return ustr.Wrap(err, "file")
 	}
 	if copied < ssize {
-		return errors.New("truncated copy " + strconv.FormatInt(copied, 10) + " < " + strconv.FormatInt(ssize, 10))
+		return errors.New("file: truncated copy")
 	}
 
 	return

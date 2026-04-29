@@ -1,3 +1,5 @@
+//go:build go1.20
+
 package ustr
 
 import (
@@ -5,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,8 +29,11 @@ func Wrap(err error, msg string) error {
 	if err == nil {
 		return nil
 	}
+	if !strings.HasPrefix(err.Error(), msg+": ") {
+		return errors.New(msg + ": " + err.Error())
+	}
 
-	return errors.New(msg + ": " + err.Error())
+	return err
 }
 
 func Bool(in bool, extra ...int) (out string) {
@@ -223,19 +227,6 @@ func IPv4(in uint32) string {
 	binary.BigEndian.PutUint32(ip, in)
 
 	return ip.String()
-}
-
-func Pointer(in any) string {
-	address := uint64(uintptr(reflect.ValueOf(in).UnsafePointer()))
-	out := make([]byte, 0, 18)
-	out = append(out, '0', 'x')
-	for shift := 56; shift >= 0; shift -= 8 {
-		if value := byte(address >> shift); value != 0 || shift <= 24 {
-			out = append(out, htable[value>>4], htable[value&0x0f])
-		}
-	}
-
-	return string(out)
 }
 
 func Binary(dst []byte, src string) (i int, err error) {
@@ -573,13 +564,14 @@ func Strftime(layout string, base time.Time) string {
 }
 
 const (
-	OptionTrim  = 0x01
-	OptionSpace = 0x02
-	OptionLower = 0x04
-	OptionUpper = 0x08
-	OptionEmpty = 0x10
-	OptionFirst = 0x20
-	OptionJSON  = 0x40
+	OptionTrim    = 0x01
+	OptionSpace   = 0x02
+	OptionLower   = 0x04
+	OptionUpper   = 0x08
+	OptionComment = 0x10
+	OptionEmpty   = 0x20
+	OptionFirst   = 0x40
+	OptionJSON    = 0x80
 )
 
 func Options(in string) (out int) {
@@ -597,14 +589,14 @@ func Options(in string) (out int) {
 		if strings.HasPrefix("upper", value) {
 			out |= OptionUpper
 		}
+		if strings.HasPrefix("comment", value) {
+			out |= OptionComment
+		}
 		if strings.HasPrefix("empty", value) {
 			out |= OptionEmpty
 		}
 		if strings.HasPrefix("first", value) {
 			out |= OptionFirst
-		}
-		if strings.HasPrefix("json", value) {
-			out |= OptionJSON
 		}
 	}
 
@@ -616,13 +608,21 @@ func Transform(in string, options int) string {
 		in = strings.TrimSpace(in)
 	}
 	if options&OptionSpace != 0 {
-		in = strings.ReplaceAll(strings.ReplaceAll(in, " ", ""), "\t", "")
+		in = Strip(in, " \t\n")
 	}
 	if options&OptionLower != 0 {
 		in = strings.ToLower(in)
 	}
 	if options&OptionUpper != 0 {
 		in = strings.ToUpper(in)
+	}
+	if options&OptionComment != 0 {
+		if index := strings.Index(in, "#"); index >= 0 {
+			in = in[:index]
+		}
+		if index := strings.Index(in, "//"); index >= 0 {
+			in = in[:index]
+		}
 	}
 
 	return in

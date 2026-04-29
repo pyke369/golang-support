@@ -2,12 +2,16 @@
 
 package ulog
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/pyke369/golang-support/ustr"
+)
 
 type syslogWriter struct{}
 
 func dialSyslog(network, raddr string, priority int, tag string) (handle *syslogWriter, err error) {
-	return nil, errors.New("unsupported")
+	return nil, ustr.Wrap(errors.ErrUnsupported, "ulog")
 }
 
 func (s *syslogWriter) Close() {

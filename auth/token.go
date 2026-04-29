@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -17,208 +18,273 @@ import (
 	"strings"
 	"time"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/ustr"
 )
 
-func TokenEncode(claims map[string]any, expire time.Time, secret string, kid ...string) (token string, err error) {
-	var der *pem.Block
+type Alg string
 
-	alg := "HS256"
-	if len(kid) != 0 {
-		if der, _ = pem.Decode([]byte(secret)); der == nil {
-			return "", errors.New("token: invalid private key")
+const (
+	AlgHS256 Alg = "HS256"
+	AlgRS256 Alg = "RS256"
+	AlgPS256 Alg = "PS256"
+	AlgES256 Alg = "ES256"
+	AlgEDDSA Alg = "EdDSA"
+)
+
+var (
+	algs = map[string]Alg{
+		string(AlgHS256): AlgHS256,
+		string(AlgRS256): AlgRS256,
+		string(AlgPS256): AlgPS256,
+		string(AlgES256): AlgES256,
+		string(AlgEDDSA): AlgEDDSA,
+	}
+)
+
+func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, kid ...string) (out string, err error) {
+	var (
+		der   *pem.Block
+		token []byte
+	)
+
+	header := map[string]string{"typ": "JWT", "alg": string(alg)}
+	if alg == AlgHS256 {
+		if len(key) < 32 {
+			return "", errors.New("auth: invalid key")
 		}
-		switch der.Type {
-		case "RSA PRIVATE KEY":
-			alg = "RS256"
 
-		case "EC PRIVATE KEY":
-			alg = "ES256"
-
-		case "PRIVATE KEY":
-			alg = "EdDSA"
-
-		default:
-			return "", errors.New("token: invalid private key type")
+	} else {
+		if der, _ = pem.Decode([]byte(key)); der == nil {
+			return "", errors.New("auth: invalid private key")
+		}
+		if len(kid) != 0 {
+			if kid[0] == "" {
+				return "", errors.New("auth: invalid kid")
+			}
+			header["kid"] = kid[0]
 		}
 	}
-	if alg == "HS256" && len(secret) < 32 {
-		return "", errors.New("token: invalid secret")
-	}
 
-	token = `{"typ":"JWT","alg":"` + alg + `"`
-	if len(kid) != 0 {
-		if value, err := json.Marshal(kid[0]); err == nil {
-			token += `,"kid":` + string(value)
-		}
+	marshaled, err := json.Marshal(header)
+	if err != nil {
+		return "", ustr.Wrap(err, "auth")
 	}
-	token = base64.RawURLEncoding.EncodeToString([]byte(token+`}`)) + "."
-
+	token = base64.RawURLEncoding.AppendEncode(token, marshaled)
+	token = append(token, '.')
 	if claims == nil {
 		claims = map[string]any{}
 	}
-	claims["iat"], claims["exp"] = time.Now().Unix(), expire.Unix()
-	marshaled, err := json.Marshal(claims)
+	claims["iat"], claims["nbf"], claims["exp"] = time.Now().Unix(), time.Now().Unix(), expire.Unix()
+	marshaled, err = json.Marshal(claims)
 	if err != nil {
-		return "", err
+		return "", ustr.Wrap(err, "auth")
 	}
-	token += base64.RawURLEncoding.EncodeToString(marshaled)
+	token = base64.RawURLEncoding.AppendEncode(token, marshaled)
 
 	switch alg {
-	case "HS256":
-		signature := hmac.New(sha256.New, []byte(secret))
-		signature.Write([]byte(token))
-		token += "." + base64.RawURLEncoding.EncodeToString(signature.Sum(nil))
+	case AlgHS256:
+		signature := hmac.New(sha256.New, []byte(key))
+		signature.Write(token)
+		token = append(token, '.')
+		token = base64.RawURLEncoding.AppendEncode(token, signature.Sum(nil))
 
-	case "RS256":
-		key, err := x509.ParsePKCS1PrivateKey(der.Bytes)
-		if err != nil {
-			return "", ustr.Wrap(err, "token")
-		}
-		sum := sha256.Sum256([]byte(token))
-		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
-		if err != nil {
-			return "", ustr.Wrap(err, "token")
-		}
-		token += "." + base64.RawURLEncoding.EncodeToString(signature)
+	case AlgRS256, AlgPS256:
+		var signature []byte
 
-	case "ES256":
+		value, err := x509.ParsePKCS8PrivateKey(der.Bytes)
+		if err != nil {
+			return "", ustr.Wrap(err, "auth")
+		}
+		key, ok := value.(*rsa.PrivateKey)
+		if !ok {
+			return "", errors.New("auth: invalid RSA private key")
+		}
+		if key.N.BitLen() < 2048 {
+			return "", errors.New("auth: unsupported RSA private key size")
+		}
+		sum := sha256.Sum256(token)
+		if alg == AlgRS256 {
+			signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+
+		} else {
+			signature, err = rsa.SignPSS(rand.Reader, key, crypto.SHA256, sum[:], nil)
+		}
+		if err != nil {
+			return "", ustr.Wrap(err, "auth")
+		}
+		token = append(token, '.')
+		token = base64.RawURLEncoding.AppendEncode(token, signature)
+
+	case AlgES256:
 		var signature [64]byte
 
 		key, err := x509.ParseECPrivateKey(der.Bytes)
 		if err != nil {
-			return "", ustr.Wrap(err, "token")
+			return "", ustr.Wrap(err, "auth")
 		}
 		if key.Curve.Params().BitSize != 256 {
-			return "", errors.New("token: unsupported elliptic curve size")
+			return "", errors.New("auth: unsupported elliptic curve size")
 		}
-		sum := sha256.Sum256([]byte(token))
+		sum := sha256.Sum256(token)
 		r, s, err := ecdsa.Sign(rand.Reader, key, sum[:])
 		if err != nil {
-			return "", ustr.Wrap(err, "token")
+			return "", ustr.Wrap(err, "auth")
 		}
 		r.FillBytes(signature[:32])
 		s.FillBytes(signature[32:])
-		token += "." + base64.RawURLEncoding.EncodeToString(signature[:])
+		token = append(token, '.')
+		token = base64.RawURLEncoding.AppendEncode(token, signature[:])
 
-	case "EdDSA":
+	case AlgEDDSA:
 		value, err := x509.ParsePKCS8PrivateKey(der.Bytes)
 		if err != nil {
-			return "", ustr.Wrap(err, "token")
+			return "", ustr.Wrap(err, "auth")
 		}
 		key, ok := value.(ed25519.PrivateKey)
 		if !ok {
-			return "", errors.New("token: invalid EdDSA private key")
+			return "", errors.New("auth: invalid EdDSA private key")
 		}
-		signature := ed25519.Sign(key, []byte(token))
-		token += "." + base64.RawURLEncoding.EncodeToString(signature)
+		signature := ed25519.Sign(key, token)
+		token = append(token, '.')
+		token = base64.RawURLEncoding.AppendEncode(token, signature)
 	}
 
-	return
+	return string(token), nil
 }
 
-func TokenDecode(token string, secrets []string, extra ...time.Duration) (claims map[string]any, err error) {
+func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claims map[string]any, err error) {
+	if len(keys) == 0 {
+		return nil, errors.New("auth: no key provided")
+	}
+	if len(token) > 4<<10 {
+		return nil, errors.New("auth: size exceeded")
+	}
+
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("token: invalid format")
+		return nil, errors.New("auth: invalid format")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "auth")
 	}
 	header := map[string]string{}
 	if err := json.Unmarshal(decoded, &header); err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "auth")
 	}
-	if header["typ"] != "JWT" || (header["alg"] != "HS256" && header["alg"] != "RS256" && header["alg"] != "ES256" && header["alg"] != "EdDSA") {
-		return nil, errors.New("token: unsupported format")
+	if header["typ"] != "JWT" {
+		return nil, errors.New("auth: invalid token")
+	}
+	alg, exists := algs[header["alg"]]
+	if !exists {
+		return nil, errors.New("auth: invalid alg")
+	}
+	akeys, exists := keys[alg]
+	if !exists {
+		return nil, errors.New("auth: no key provided for alg")
 	}
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "auth")
 	}
 
-	pass := false
-	for _, secret := range secrets {
-		var der *pem.Block
+	pass, input := false, []byte(parts[0]+"."+parts[1])
+	if alg == AlgHS256 {
+		for _, key := range j.StringSlice(akeys, true) {
+			if len(key) < 32 {
+				continue
+			}
+			signature := hmac.New(sha256.New, []byte(key))
+			signature.Write(input)
+			if hmac.Equal(signature.Sum(nil), decoded) {
+				pass = true
+				break
+			}
+		}
 
-		if der, _ = pem.Decode([]byte(secret)); der != nil && der.Type == "PUBLIC KEY" {
-			if key, err := x509.ParsePKIXPublicKey(der.Bytes); err == nil {
-				switch key := key.(type) {
-				case *rsa.PublicKey:
-					if header["alg"] == "RS256" && len(decoded) == key.Size() {
-						sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-						pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
-					}
+	} else {
+		kid := header["kid"]
+		for id, key := range j.StringMap(akeys, true) {
+			if kid != "" && kid != id {
+				continue
+			}
 
-				case *ecdsa.PublicKey:
-					if header["alg"] == "ES256" && len(decoded) == 64 {
-						sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-						pass = ecdsa.Verify(key, sum[:], big.NewInt(0).SetBytes(decoded[:32]), big.NewInt(0).SetBytes(decoded[32:]))
-					}
+			if der, _ := pem.Decode([]byte(key)); der != nil {
+				if key, err := x509.ParsePKIXPublicKey(der.Bytes); err == nil {
+					switch alg {
+					case AlgRS256, AlgPS256:
+						if key, ok := key.(*rsa.PublicKey); ok && len(decoded) == key.Size() {
+							sum := sha256.Sum256(input)
+							if alg == AlgRS256 {
+								pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
 
-				case ed25519.PublicKey:
-					if header["alg"] == "EdDSA" && len(decoded) == 64 {
-						pass = ed25519.Verify(key, []byte(parts[0]+"."+parts[1]), decoded)
+							} else {
+								pass = rsa.VerifyPSS(key, crypto.SHA256, sum[:], decoded, nil) == nil
+							}
+						}
+
+					case AlgES256:
+						if key, ok := key.(*ecdsa.PublicKey); ok && key.Curve.Params().BitSize == 256 && len(decoded) == 64 {
+							sum := sha256.Sum256(input)
+							pass = ecdsa.Verify(key, sum[:], big.NewInt(0).SetBytes(decoded[:32]), big.NewInt(0).SetBytes(decoded[32:]))
+						}
+
+					case AlgEDDSA:
+						if key, ok := key.(ed25519.PublicKey); ok && len(decoded) == 64 {
+							pass = ed25519.Verify(key, input, decoded)
+						}
 					}
 				}
 			}
 
-		} else if header["alg"] == "HS256" {
-			signature := hmac.New(sha256.New, []byte(secret))
-			signature.Write([]byte(parts[0] + "." + parts[1]))
-			if hmac.Equal(signature.Sum(nil), decoded) {
-				pass = true
+			if kid != "" || pass {
+				break
 			}
 		}
-
-		if pass {
-			break
-		}
 	}
+
 	if !pass {
-		return nil, errors.New("token: invalid signature")
-	}
-
-	skew := 30 * time.Second
-	if len(extra) != 0 {
-		skew = extra[0]
+		return nil, errors.New("auth: invalid signature")
 	}
 
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "auth")
 	}
 	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "auth")
 	}
 
-	exp, exists := claims["exp"]
-	if !exists {
-		return nil, errors.New("token: no expiration claim")
-	}
-	value, ok := exp.(float64)
-	if !ok {
-		return nil, errors.New("token: invalid expiration claim format")
-	}
-	if time.Now().Add(skew).After(time.Unix(int64(value), 0)) {
-		return nil, errors.New("token: expired")
-	}
-
-	if value, exists := claims["iat"]; exists {
-		if value, ok := value.(float64); !ok {
-			return nil, errors.New("token: invalid issued-at claim format")
-
-		} else if time.Now().Add(-skew).Before(time.Unix(int64(value), 0)) {
-			return nil, errors.New("token: issued in future")
+	skew := 30 * time.Second
+	if len(extra) != 0 {
+		if value, ok := extra[0]["skew"].(time.Duration); ok {
+			skew = value
 		}
 	}
-	if value, exists := claims["nbf"]; exists {
-		if value, ok := value.(float64); !ok {
-			return nil, errors.New("token: invalid not-before claim format")
 
-		} else if time.Now().Add(-skew).Before(time.Unix(int64(value), 0)) {
-			return nil, errors.New("token: not yet valid")
+	value, ok := claims["exp"].(float64)
+	if !ok || time.Now().Add(-skew).After(time.Unix(int64(value), 0)) {
+		return nil, errors.New("auth: expired")
+	}
+
+	if value, ok := claims["iat"].(float64); ok {
+		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
+			return nil, errors.New("auth: issued in future")
+		}
+	}
+	if value, ok := claims["nbf"].(float64); ok {
+		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
+			return nil, errors.New("auth: not yet valid")
+		}
+	}
+	if len(extra) != 0 {
+		if value, ok := extra[0]["claims"].(map[string]string); ok {
+			for k, v := range value {
+				if value, ok := claims[k].(string); !ok || subtle.ConstantTimeCompare([]byte(value), []byte(v)) == 0 {
+					return nil, errors.New("auth: invalid claim")
+				}
+			}
 		}
 	}
 

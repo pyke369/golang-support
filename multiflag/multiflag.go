@@ -1,6 +1,8 @@
 package multiflag
 
-import "strings"
+import (
+	"strings"
+)
 
 type Multiflag [][2]string
 

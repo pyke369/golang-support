@@ -11,27 +11,27 @@ import (
 type serial struct{}
 
 func SerialProbe(path string) (active bool, err error) {
-	return false, errors.ErrUnsupported
+	return false, unsupported
 }
 
 func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string) (conn *serial, err error) {
-	return nil, errors.ErrUnsupported
+	return nil, unsupported
 }
 
 func (s *serial) Read(b []byte) (n int, err error) {
-	return 0, errors.ErrUnsupported
+	return 0, unsupported
 }
 
 func (s *serial) Write(b []byte) (n int, err error) {
-	return 0, errors.ErrUnsupported
+	return 0, unsupported
 }
 
 func (s *serial) Close() error {
-	return errors.ErrUnsupported
+	return unsupported
 }
 
 func (s *serial) Network() string {
-	return "unsupported"
+	return "serial"
 }
 
 func (s *serial) String() string {
@@ -47,25 +47,25 @@ func (s *serial) RemoteAddr() net.Addr {
 }
 
 func (s *serial) SetDeadline(t time.Time) error {
-	return errors.ErrUnsupported
+	return unsupported
 }
 
 func (s *serial) SetReadDeadline(t time.Time) error {
-	return errors.ErrUnsupported
+	return unsupported
 }
 
 func (s *serial) SetWriteDeadline(t time.Time) error {
-	return errors.ErrUnsupported
+	return unsupported
 }
 
 func (s *serial) GetControl() (control string, err error) {
-	return "", errors.ErrUnsupported
+	return "", unsupported
 }
 
 func (s *serial) SetControl(control string) (err error) {
-	return errors.ErrUnsupported
+	return unsupported
 }
 
 func (s *serial) ClearControl(control string) (err error) {
-	return errors.ErrUnsupported
+	return unsupported
 }

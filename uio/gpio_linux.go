@@ -2,12 +2,13 @@ package uio
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"unsafe"
+
+	"github.com/pyke369/golang-support/ustr"
 )
 
 const (
@@ -62,7 +63,7 @@ type _GPIO_LINEINFO struct {
 }
 
 type GPIO struct {
-	handle uintptr
+	handle *os.File
 	name   string
 	label  string
 	lines  int
@@ -85,20 +86,27 @@ func GPIOCount() int {
 func GPIOOpen(index ...int) (gpio *GPIO, err error) {
 	chip := 0
 	if len(index) > 0 {
-		chip = index[0]
+		chip = max(0, index[0])
 	}
 	handle, err := os.Open("/dev/gpiochip" + strconv.Itoa(chip))
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "uio")
 	}
 	info := _GPIO_CHIPINFO{}
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, handle.Fd(), _GPIO_GET_CHIPINFO, uintptr(unsafe.Pointer(&info))); errno != 0 {
-		return nil, errors.New("errno: " + strconv.Itoa(int(errno)))
+		return nil, ustr.Wrap(syscall.Errno(errno), "uio")
+	}
+	nindex, lindex := bytes.Index(info.name[:], []byte{0}), bytes.Index(info.label[:], []byte{0})
+	if nindex < 0 {
+		nindex = len(info.name)
+	}
+	if lindex < 0 {
+		lindex = len(info.label)
 	}
 	gpio = &GPIO{
-		handle: handle.Fd(),
-		name:   string(info.name[:bytes.Index(info.name[:], []byte{0})]),
-		label:  string(info.label[:bytes.Index(info.label[:], []byte{0})]),
+		handle: handle,
+		name:   string(info.name[:nindex]),
+		label:  string(info.label[:lindex]),
 		lines:  int(info.lines),
 	}
 	return
@@ -116,7 +124,7 @@ func (g *GPIO) Lines() (lines []*GPIOLINE) {
 	lines = []*GPIOLINE{}
 	for index := 0; index < g.lines; index++ {
 		info := _GPIO_LINEINFO{offset: uint32(index)}
-		if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, g.handle, _GPIO_GET_LINEINFO, uintptr(unsafe.Pointer(&info))); errno == 0 {
+		if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, g.handle.Fd(), _GPIO_GET_LINEINFO, uintptr(unsafe.Pointer(&info))); errno == 0 {
 			flags, debounce := []string{}, uint32(0)
 			for bit := 0; bit < 32; bit++ {
 				if info.flags&(1<<bit) != 0 {
@@ -141,9 +149,16 @@ func (g *GPIO) Lines() (lines []*GPIOLINE) {
 					debounce = uint32(info.attrs[attribute].value >> 32)
 				}
 			}
+			nindex, cindex := bytes.Index(info.name[:], []byte{0}), bytes.Index(info.consumer[:], []byte{0})
+			if nindex < 0 {
+				nindex = len(info.name)
+			}
+			if cindex < 0 {
+				cindex = len(info.consumer)
+			}
 			lines = append(lines, &GPIOLINE{
-				Name:     string(info.name[:bytes.Index(info.name[:], []byte{0})]),
-				Consumer: string(info.consumer[:bytes.Index(info.consumer[:], []byte{0})]),
+				Name:     string(info.name[:nindex]),
+				Consumer: string(info.consumer[:cindex]),
 				Flags:    flags,
 				Debounce: debounce,
 			})

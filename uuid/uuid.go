@@ -1,7 +1,10 @@
+//go:build go1.20
+
 package uuid
 
 import (
 	"crypto/rand"
+	"strings"
 )
 
 type UUID [16]byte
@@ -20,33 +23,19 @@ func New() (out UUID) {
 	return
 }
 
-func From(in []byte) (out UUID) {
-	out = New()
-	for index := 0; index < min(len(in), 16); index++ {
-		if in[index] != 0 {
-			out[index] = in[index]
-		}
-	}
-	out[6] = (out[6] & 0x0f) | 0x40
-	out[8] = (out[8] & 0x3f) | 0x80
-
-	return
-}
-
 func Check(in string) bool {
 	if len(in) != 36 {
 		return false
 	}
 
-	for part := 0; part < len(parts)-1; part++ {
-		if part > 0 && in[parts[part]-1] != '-' {
+	in = strings.ToLower(in)
+	if in[8] != '-' || in[13] != '-' || in[14] != '4' || in[18] != '-' || (in[19] != '8' && in[19] != '9' && in[19] != 'a' && in[19] != 'b') || in[23] != '-' {
+		return false
+	}
+
+	for _, char := range in {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || char == '-') {
 			return false
-		}
-		for offset := parts[part]; offset < parts[part+1]-1; offset++ {
-			char := in[offset]
-			if (char < '0' || char > 'f') || (char > '9' && char < 'A') || (char > 'F' && char < 'a') {
-				return false
-			}
 		}
 	}
 

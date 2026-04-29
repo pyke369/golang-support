@@ -7,9 +7,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 type cert struct {
@@ -23,23 +25,29 @@ type cert struct {
 
 type DYNACERT struct {
 	certs []*cert
-	last  time.Time
+	last  int64
 	mu    sync.RWMutex
 }
 
 func (d *DYNACERT) Add(match, public, private string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
 	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
-	d.last = time.Now().Add(-time.Minute)
+	d.last = time.Now().Add(-time.Minute).UnixNano()
 }
 
-func (d *DYNACERT) Inline(match string, public, private []byte) {
+func (d *DYNACERT) Inline(match string, public, private []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if value, err := tls.X509KeyPair(public, private); err == nil {
-		d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), inline: true, cert: &value})
+
+	value, err := tls.X509KeyPair(public, private)
+	if err != nil {
+		return ustr.Wrap(err, "dynacert")
 	}
+	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), inline: true, cert: &value})
+
+	return nil
 }
 
 func (d *DYNACERT) Clear() {
@@ -51,27 +59,30 @@ func (d *DYNACERT) Clear() {
 func (d *DYNACERT) Count() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
 	return len(d.certs)
 }
 
 func (d *DYNACERT) Get(match string) (public, private string) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
 	for _, cert := range d.certs {
 		if cert.match == match {
 			public, private = cert.public, cert.private
 			break
 		}
 	}
+
 	return
 }
 
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
-	d.mu.Lock()
-	if time.Since(d.last) >= 15*time.Second {
+	if time.Now().UnixNano()-atomic.LoadInt64(&d.last) >= int64(15*time.Second) {
 		var info os.FileInfo
 
-		d.last = time.Now()
+		d.mu.Lock()
+		d.last = time.Now().UnixNano()
 		for _, cert := range d.certs {
 			if cert.inline {
 				continue
@@ -84,15 +95,14 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 				}
 			}
 		}
+		d.mu.Unlock()
 	}
-	d.mu.Unlock()
 
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if len(d.certs) == 0 {
 		return nil, errors.New(`dynacert: no certificate loaded`)
 	}
-
 	if hello != nil && hello.ServerName != "" {
 		name := hello.ServerName
 		if value, _, err := net.SplitHostPort(name); err == nil {
@@ -104,7 +114,6 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 			}
 		}
 	}
-
 	for _, cert := range d.certs {
 		if (cert.match == "" || cert.match == "*") && cert.cert != nil {
 			return cert.cert, nil

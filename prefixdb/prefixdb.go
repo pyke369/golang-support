@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/uhash"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 const VERSION = 0x00010000
@@ -182,7 +183,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 				binary.BigEndian.PutUint64(buffer[index*8:], value)
 			}
 
-			key, hash := [16]byte{}, uhash.Hash(buffer)
+			key, hash := [16]byte{}, uhash.Hash128(buffer)
 			for index := 0; index < 16; index++ {
 				key[index] = hash[index]
 			}
@@ -520,7 +521,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 
 	// finalize header
 	d.tree, d.strings, d.numbers, d.pairs, d.clusters = node{}, map[string]*[3]int{}, map[float64]*[3]int{}, map[uint64]*[3]int{}, map[[16]byte]*cluster{}
-	hash := uhash.Hash(d.data[24:])
+	hash := uhash.Hash128(d.data[24:])
 	copy(d.data[8:24], hash[:16])
 	d.Total = len(d.data)
 
@@ -535,12 +536,12 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	}
 
 	d.mu.Unlock()
-	return d.data, err
+	return d.data, ustr.Wrap(err, "prefixdb")
 }
 
 func (d *PrefixDB) Load(path string) error {
 	if data, err := os.ReadFile(path); err != nil {
-		return err
+		return ustr.Wrap(err, "prefixdb")
 
 	} else {
 		if len(data) < 24 || string(data[0:4]) != "PFDB" {
@@ -550,7 +551,7 @@ func (d *PrefixDB) Load(path string) error {
 		if (version & 0xff0000) > (VERSION & 0xff0000) {
 			return errors.New("prefixdb: incompatible library and database major versions")
 		}
-		hash := uhash.Hash(data[24:])
+		hash := uhash.Hash128(data[24:])
 		if len(data) < 24 || slices.Compare(hash[:16], data[8:24]) != 0 {
 			return errors.New(`prefixdb: invalid checksum`)
 		}
@@ -632,10 +633,15 @@ func (d *PrefixDB) Load(path string) error {
 			return errors.New(`prefixdb: structure is invalid`)
 		}
 	}
+
 	return nil
 }
 
 func rpbits(data []byte) (section, index, size int, last bool) {
+	if len(data) == 0 {
+		return
+	}
+
 	section = int((data[0] & 0x70) >> 4)
 	if data[0]&0x80 != 0 || section == 0 {
 		last = true
@@ -643,6 +649,9 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 	if section == 1 || section == 2 || section == 6 || section == 7 {
 		if data[0]&0x08 != 0 {
 			size = int(data[0] & 0x07)
+			if len(data) < size+1 {
+				return
+			}
 			for nibble := 1; nibble <= size; nibble++ {
 				index |= int(data[nibble]) << (uint(size-nibble) * 8)
 			}
@@ -652,6 +661,7 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 		}
 	}
 	size++
+
 	return section, index, size, last
 }
 

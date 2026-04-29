@@ -1,3 +1,5 @@
+//go:build go1.20
+
 package auth
 
 import (
@@ -6,10 +8,10 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"os"
 	"strconv"
 	"strings"
 
+	"github.com/pyke369/golang-support/file"
 	"github.com/pyke369/golang-support/uconfig"
 )
 
@@ -19,20 +21,20 @@ var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg
 func Crypt512(in, salt string, rounds int) (out string, err error) {
 	in, salt = strings.TrimSpace(in), strings.TrimSpace(salt)
 	if len(in) > 128 {
-		return "", errors.New("password too long")
+		return "", errors.New("auth: password too long")
 	}
 
 	out = "$6$"
-	if rounds == 0 {
+	if rounds <= 0 {
 		rounds = 100000
 	}
-	rounds = max(1000, min(999999999, rounds))
 	if rounds != 5000 {
+		rounds = max(100000, min(1000000, rounds))
 		out += "rounds=" + strconv.Itoa(rounds) + "$"
 	}
 	salt = salt[:min(16, len(salt))]
 	if salt == "" {
-		value := make([]byte, 6)
+		value := make([]byte, 12)
 		rand.Read(value)
 		salt = cryptb64.EncodeToString(value)
 	}
@@ -142,47 +144,42 @@ func Password(in string, values []string) (match bool, entry string) {
 		return false, ""
 	}
 
-	login, password := "", strings.TrimSpace(in)
+	login, password := "", in
 	if parts := strings.SplitN(in, ":", 2); len(parts) >= 2 {
-		login, password = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		login, password = parts[0], parts[1]
 	}
 	for _, value := range values {
-		check := strings.TrimSpace(value)
-		if len(check) > 1 && check[0] == '@' {
-			if match, value := PasswordFile(in, strings.TrimSpace(check[1:])); match {
-				return true, value
-			}
-
-		} else {
-			if login != "" {
-				if parts := strings.Split(check, ":"); len(parts) < 2 || subtle.ConstantTimeCompare([]byte(login), []byte(strings.TrimSpace(parts[0]))) == 0 {
-					continue
-
-				} else {
-					check = strings.TrimSpace(parts[1])
-				}
-			}
-			if check != "" && (check[0] == '!' || check[0] == '*') {
+		check := value
+		if login != "" {
+			if parts := strings.Split(check, ":"); len(parts) < 2 || subtle.ConstantTimeCompare([]byte(login), []byte(parts[0])) == 0 {
 				continue
+
+			} else {
+				check = parts[1]
 			}
+		}
+		if check != "" && (check[0] == '!' || check[0] == '*') {
+			continue
+		}
 
-			if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
-				switch parts[1] {
-				case "6":
-					rounds, salt := 5000, parts[2]
-					if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
-						rounds, _ = strconv.Atoi(parts[2][7:])
-						salt = parts[3]
+		if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
+			switch parts[1] {
+			case "6":
+				rounds, salt := 0, parts[2]
+				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
+					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
+						rounds = value
 					}
-					if encrypted, err := Crypt512(password, salt, rounds); err == nil {
-						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-							return true, value
-						}
-					}
-
-				case "y":
-					// TODO add yescrypt support
+					salt = parts[3]
 				}
+				if encrypted, err := Crypt512(password, salt, rounds); err == nil {
+					if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
+						return true, value
+					}
+				}
+
+			case "y":
+				// TODO add yescrypt support
 			}
 		}
 	}
@@ -195,14 +192,9 @@ func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool
 }
 
 func PasswordFile(in, path string) (match bool, entry string) {
-	lines := []string{}
-	if content, err := os.ReadFile(path); err == nil {
-		for _, line := range strings.Split(string(content), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "//") {
-				lines = append(lines, line)
-			}
-		}
+	lines := file.Read(path, map[string]any{"options": "trim comment"})
+	if len(lines) == 0 {
+		return false, ""
 	}
 
 	return Password(in, lines)

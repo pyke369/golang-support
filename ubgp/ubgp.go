@@ -20,7 +20,7 @@ import (
 
 const (
 	Receive = 1
-	Send    = 1
+	Send    = 2
 )
 
 type Group struct {
@@ -122,8 +122,12 @@ var (
 			messages:   make(chan *message, 64<<10),
 		},
 	}
-	speakers   = map[string]*Speaker{}
-	processors = map[*Processor]struct{}{}
+	speakers         = map[string]*Speaker{}
+	processors       = map[*Processor]struct{}{}
+	emptySlice       = []byte{}
+	emptyMap         = map[string]any{}
+	emptySliceMap    = map[string][]string{}
+	emptySliceMapMap = map[string]map[string][]string{}
 )
 
 func AddProcessor(processor *Processor) {
@@ -198,7 +202,7 @@ func Peers() (peers []*Peer) {
 	}
 	mu.RUnlock()
 
-	return nil
+	return
 }
 
 func init() {
@@ -347,7 +351,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 	}
 	address, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "ugbp")
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -368,7 +372,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 	if port != "0" {
 		speaker.listener, err = l.NewTCPListener("tcp", net.JoinHostPort(host, port), &l.TCPOptions{Reuse: true})
 		if err != nil {
-			return nil, err
+			return nil, ustr.Wrap(err, "ubgp")
 		}
 		go func(s *Speaker) {
 			for {
@@ -439,11 +443,11 @@ func (s *Speaker) AddTemplate(remotes []string, localASN, peerASN string, option
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
-		return nil, errors.New("closed speaker")
+		return nil, errors.New("ubgp: closed speaker")
 	}
 	if s.listener == nil {
 		s.mu.RUnlock()
-		return nil, errors.New("non-listening speaker")
+		return nil, errors.New("ubgp: non-listening speaker")
 	}
 	s.mu.RUnlock()
 
@@ -461,7 +465,7 @@ func (s *Speaker) AddTemplate(remotes []string, localASN, peerASN string, option
 		}
 	}
 	if len(template.prefixes) == 0 {
-		return nil, errors.New("no valid prefix")
+		return nil, errors.New("ubgp: no valid prefix")
 	}
 	if len(options) != 0 {
 		template.name = strings.TrimSpace(strings.ToLower(j.String(options[0]["name"])))
@@ -480,7 +484,7 @@ func (s *Speaker) AddPeer(remote, localASN, peerASN string, options ...map[strin
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
-		return nil, errors.New("closed speaker")
+		return nil, errors.New("ubgp: closed speaker")
 	}
 	s.mu.RUnlock()
 	mu.RLock()
@@ -515,10 +519,10 @@ func (s *Speaker) AddPeer(remote, localASN, peerASN string, options ...map[strin
 		return nil, ustr.Wrap(err, "invalid peer address "+remote)
 	}
 	if peer.localASN, err = strconv.Atoi(strings.TrimPrefix(localASN, "AS")); err != nil || peer.localASN <= 0 || peer.localASN >= (1<<32) {
-		return nil, errors.New("invalid local ASN " + localASN)
+		return nil, errors.New("ubgp: invalid local AS number")
 	}
 	if peer.peerASN, err = strconv.Atoi(strings.TrimPrefix(peerASN, "AS")); err != nil || peer.peerASN <= 0 || peer.peerASN >= (1<<32) {
-		return nil, errors.New("invalid peer ASN " + peerASN)
+		return nil, errors.New("ubgp: invalid peer AS number")
 	}
 
 	peer.key = s.local.String() + "|" + localASN + "|" + peer.remote.String() + "|" + peerASN

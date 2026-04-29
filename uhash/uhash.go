@@ -1,12 +1,15 @@
+//go:build go1.20
+
 package uhash
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"math/big"
 	"strings"
+
+	"github.com/zeebo/blake3"
 )
 
 func RandInt(in int) (out int) {
@@ -38,14 +41,16 @@ func RandKey(size int, extra ...string) (out string) {
 	}
 }
 
-func Hash(in []byte) (out [16]byte) {
+func Hash128(in []byte) (out [16]byte) {
 	out = [16]byte{}
-	hash := sha256.Sum256(in)
+
+	hasher := blake3.New()
+	hasher.Write(in)
+	digest := hasher.Digest()
+	hash := make([]byte, 16)
+	digest.Read(hash)
 	for index := 0; index < 16; index++ {
 		out[index] = hash[index]
-	}
-	for index := 16; index < 32; index++ {
-		out[index-16] ^= hash[index]
 	}
 
 	return

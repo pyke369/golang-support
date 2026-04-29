@@ -9,9 +9,6 @@ A collection of Go utility/support libraries.
 - bslab:
   Byte-slice slab allocator / memory pool. Manages power-of-two sized byte slices (256B to 64MB) via buffered channels. Supports per-arena instances, tracing by caller/size, and statistics.
 
-- chash:
-  Consistent hashing ring using Murmur2. Supports weighted targets, serialization/deserialization to binary format, and randomized load balancing across top-N results.
-
 - dynacert:
   Dynamic TLS certificate loader. Watches certificate files for modification (every 15 seconds), supports inline in-memory certs, SNI-based matching via regex, and produces a tls.Config with GetCertificate hook. Forces TLS 1.3 minimum.
 

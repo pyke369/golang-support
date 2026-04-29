@@ -184,6 +184,7 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 	}
 	chunk.last = time.Now()
 	s.chunks[path] = chunk
+
 	return chunk.data, nil
 }
 
@@ -212,11 +213,12 @@ func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
 	}
+
 	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
 }
 
 func (s *Store) Metric(name string) *metric {
-	if name == "" {
+	if name == "" || strings.ContainsAny(name, `/\`) {
 		return nil
 	}
 	s.mu.Lock()
@@ -225,10 +227,16 @@ func (s *Store) Metric(name string) *metric {
 		return metric
 	}
 	s.metrics[name] = &metric{store: s, name: name}
+
 	return s.metrics[name]
 }
 
 func (s *Store) List(prefix string) (names []string) {
+	prefix = filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(prefix)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
+		return
+	}
+
 	names = []string{}
 	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
@@ -236,19 +244,27 @@ func (s *Store) List(prefix string) (names []string) {
 		}
 		return nil
 	})
+
 	return
 }
 
 func (s *Store) Rename(from, to string) error {
 	from = filepath.Join(s.prefix, strings.ReplaceAll(from, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(from)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
+		return errors.New("mstore: path traversal detected")
+	}
 	if info, err := os.Stat(from); err != nil || !info.IsDir() {
 		return errors.New("mstore: invalid source metric")
 	}
 	to = filepath.Join(s.prefix, strings.ReplaceAll(to, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(to)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
+		return errors.New("mstore: path traversal detected")
+	}
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
 	}
 	os.MkdirAll(filepath.Dir(to), 0o700)
+
 	return os.Rename(from, to)
 }
 
@@ -276,17 +292,22 @@ func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]i
 		}
 		for count > 0 {
 			entry := <-queue
+			// TODO cast?
 			result[entry[0].(string)] = entry[1]
 			count--
 		}
 		close(queue)
 	}
+
 	return
 }
 
 func (m *metric) meta(create bool) error {
 	if m.path == "" {
 		m.path = filepath.Join(m.store.prefix, strings.ReplaceAll(m.name, ".", string(filepath.Separator)))
+		if !strings.HasPrefix(filepath.Clean(m.path)+string(filepath.Separator), filepath.Clean(m.store.prefix)+string(filepath.Separator)) {
+			return errors.New("mstore: path traversal detected")
+		}
 	}
 	if m.size != 0 {
 		return nil
@@ -297,15 +318,26 @@ func (m *metric) meta(create bool) error {
 		if size < metaMinSize || size > metaMaxSize || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:size-4]) != binary.BigEndian.Uint32(data[size-4:]) {
 			return errors.New("mstore: invalid metadata")
 		}
+		columns := int(binary.BigEndian.Uint16(data[6:]))
+		if 8+(columns*38)+128+4 > size {
+			return errors.New("mstore: invalid metadata")
+		}
 		m.interval, m.columns, m.size = int64(binary.BigEndian.Uint16(data[4:])), []*Column{}, 1
+		if m.interval < minInterval {
+			return errors.New("mstore: invalid interval")
+		}
 		if m.interval > 120 {
 			m.size = 2
 		}
 		offset := 8
-		for column := 0; column < int(binary.BigEndian.Uint16(data[6:])); column++ {
+		for column := 0; column < columns; column++ {
+			size := int64(binary.BigEndian.Uint16(data[offset+4:]))
+			if size != 1 && size != 2 && size != 4 && size != 8 {
+				return errors.New("mstore: invalid column size")
+			}
 			m.columns = append(m.columns, &Column{
 				Mode:        int64(binary.BigEndian.Uint32(data[offset:])),
-				Size:        int64(binary.BigEndian.Uint16(data[offset+4:])),
+				Size:        size,
 				Description: string(bytes.Trim(data[offset+6:offset+38], "\x00")),
 			})
 			m.size += m.columns[column].Size
@@ -318,7 +350,7 @@ func (m *metric) meta(create bool) error {
 		if len(m.columns) == 0 {
 			return errors.New("mstore: empty columns list")
 		}
-		if len(m.columns) >= 64<<10 {
+		if len(m.columns) > MaxColumns {
 			return errors.New("mstore: too many columns")
 		}
 		os.MkdirAll(m.path, 0o700)
@@ -366,6 +398,7 @@ func (m *metric) chunk(atime time.Time, create bool) (data []byte, offset, delta
 	slots := (atime.Unix() - start.Unix()) / m.interval
 	offset, delta = 4+slots*m.size, atime.Unix()-start.Unix()-(slots*m.interval)
 	data, err = m.store.chunk(filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
+
 	return
 }
 
@@ -406,7 +439,13 @@ func (m *metric) mapping(column int, flush bool) error {
 			return errors.New("mstore: invalid mapping")
 		}
 		for index := 1; index <= int(binary.BigEndian.Uint16(data[4:])); index++ {
+			if offset+2 > size-4 {
+				return errors.New("mstore: invalid mapping")
+			}
 			length := int(binary.BigEndian.Uint16(data[offset:]))
+			if offset+2+length > size-4 {
+				return errors.New("mstore: invalid mapping")
+			}
 			entry := &entry{index: index, value: make([]byte, length)}
 			copy(entry.value, data[offset+2:offset+2+length])
 			m.columns[column].mapping[0][int(crc32.ChecksumIEEE(entry.value))] = entry
@@ -414,6 +453,7 @@ func (m *metric) mapping(column int, flush bool) error {
 			offset += 2 + length
 		}
 	}
+
 	return nil
 }
 
@@ -473,6 +513,7 @@ func (m *metric) WithDescription(description string) *metric {
 	if !m.frozen {
 		m.description = description
 	}
+
 	return m
 }
 
@@ -480,6 +521,7 @@ func (m *metric) WithInterval(interval int64) *metric {
 	if !m.frozen {
 		m.interval = interval
 	}
+
 	return m
 }
 
@@ -505,6 +547,7 @@ func (m *metric) WithColumn(mode, size int64, description string) *metric {
 			}
 		}
 	}
+
 	return m
 }
 
@@ -512,12 +555,13 @@ func (m *metric) WithColumns(columns []*Column) *metric {
 	for _, column := range columns {
 		m.WithColumn(column.Mode, column.Size, column.Description)
 	}
+
 	return m
 }
 
 func (m *metric) Metadata() (metadata map[string]any, err error) {
 	if err := m.meta(false); err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	columns, names, first, last := []map[string]any{}, []string{}, int64(-1), int64(-1)
 	for index, column := range m.columns {
@@ -598,7 +642,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 func (m *metric) Export() (export map[string]any, err error) {
 	metadata, err := m.Metadata()
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	last := int64(j.Number(metadata["last"]))
 	start, end := time.Unix(int64(j.Number(metadata["first"])), 0), time.Unix(last, 0)
@@ -626,6 +670,7 @@ func (m *metric) Export() (export map[string]any, err error) {
 			start = start.Add(time.Duration(m.interval*maxSamples) * time.Second)
 		}
 	}
+
 	return map[string]any{"metadata": metadata, "values": values}, nil
 }
 
@@ -659,15 +704,16 @@ func (m *metric) Import(in map[string]any) error {
 			if err != nil {
 				value := int64(j.Number(entry[0]))
 				if value == 0 {
-					return err
+					return ustr.Wrap(err, "mstore")
 				}
 				at = time.Unix(value, 0).UTC()
 			}
 			if err := m.PutAt(at, entry[1:]...); err != nil {
-				return err
+				return ustr.Wrap(err, "mstore")
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -682,7 +728,7 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 		return errors.New("mstore: metric time in future")
 	}
 	if err := m.meta(true); err != nil {
-		return err
+		return ustr.Wrap(err, "mstore")
 	}
 	data, offset, delta, err := m.chunk(atime, true)
 	if err == nil {
@@ -748,14 +794,14 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 	}
 	m.store.cleanup()
 
-	return err
+	return ustr.Wrap(err, "mstore")
 }
 
 func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, prepend ...bool) (result map[string]any, err error) {
 	m.Lock()
 	defer m.Unlock()
 	if err := m.meta(false); err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "mstore")
 	}
 	result = map[string]any{"range": []int64{0, 0}, "columns": [][]any{}, "values": []any{}}
 	mapping, duplicates := [][]int64{}, map[int64]bool{}
@@ -778,6 +824,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		}
 		if _, exists := duplicates[(column[0]<<8)+aggregate]; !exists {
 			duplicates[(column[0]<<8)+aggregate] = true
+			// TODO cast?
 			result["columns"] = append(result["columns"].([][]any), []any{column[0], ModeNames[m.columns[column[0]].Mode], AggregateNames[aggregate], m.columns[column[0]].Description})
 			offset := int64(1)
 			if m.interval > 120 {
@@ -789,6 +836,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			mapping = append(mapping, []int64{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate, lowest, highest})
 		}
 	}
+	// TODO cast?
 	if len(result["columns"].([][]any)) == 0 {
 		return nil, errors.New("mstore: empty columns list")
 	}
@@ -807,6 +855,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		if seconds/interval > maxSamples {
 			interval = int64(math.Ceil((float64(seconds)/float64(maxSamples))/float64(m.interval)) * float64(m.interval))
 		}
+		// TODO cast?
 		result["range"].([]int64)[0], result["range"].([]int64)[1] = start.Unix(), int64(interval)
 
 		var data []byte
@@ -862,37 +911,49 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 								if item[6] != int64(math.MaxInt64) && item[6] > 0 && value < 0 {
 									value /= item[6]
 								}
-								values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+								if cast, ok := values[index].(map[string]int); ok {
+									cast[strconv.FormatInt(value, 10)]++
+								}
 
 							case item[4] == AggregatePercentile:
 								if item[5] > 0 {
 									value /= item[5]
 								}
-								values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+								if cast, ok := values[index].(map[string]int); ok {
+									cast[strconv.FormatInt(value, 10)]++
+								}
 
 							case value >= item[5] && value <= item[6]:
 								switch item[4] {
 								case AggregateMinimum:
-									if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
-										values[index] = value
+									if cast, ok := values[index].(int64); ok {
+										if cast == math.MinInt64 || value < cast {
+											values[index] = value
+										}
 									}
 
 								case AggregateMaximum:
-									if value > values[index].(int64) {
-										values[index] = value
+									if cast, ok := values[index].(int64); ok {
+										if value > cast {
+											values[index] = value
+										}
 									}
 
 								case AggregateAverage, AggregateSum:
-									if values[index].(int64) == math.MinInt64 {
-										values[index] = value
+									if cast, ok := values[index].(int64); ok {
+										if cast == math.MinInt64 {
+											values[index] = value
 
-									} else {
-										values[index] = values[index].(int64) + value
+										} else {
+											values[index] = cast + value
+										}
 									}
 
 								case AggregateFirst:
-									if values[index].(int64) == math.MinInt64 {
-										values[index] = value
+									if cast, ok := values[index].(int64); ok {
+										if cast == math.MinInt64 {
+											values[index] = value
+										}
 									}
 
 								case AggregateLast, AggregateRaw:
@@ -924,7 +985,9 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 								}
 								if pvalue >= 0 {
 									msteps[index]++
-									value = (value - pvalue) / int64(m.interval+delta-pdelta)
+									if divisor := int64(m.interval + delta - pdelta); divisor != 0 {
+										value = (value - pvalue) / divisor
+									}
 
 								} else {
 									value = 0
@@ -942,37 +1005,49 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 									if item[6] != int64(math.MaxInt64) && item[6] > 0 && value < 0 {
 										value /= item[6]
 									}
-									values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+									if cast, ok := values[index].(map[string]int); ok {
+										cast[strconv.FormatInt(value, 10)]++
+									}
 
 								case item[4] == AggregatePercentile:
 									if item[5] > 0 {
 										value /= item[5]
 									}
-									values[index].(map[string]int)[strconv.FormatInt(value, 10)]++
+									if cast, ok := values[index].(map[string]int); ok {
+										cast[strconv.FormatInt(value, 10)]++
+									}
 
 								case value >= item[5] && value <= item[6]:
 									switch item[4] {
 									case AggregateMinimum:
-										if values[index].(int64) == math.MinInt64 || value < values[index].(int64) {
-											values[index] = value
+										if cast, ok := values[index].(int64); ok {
+											if cast == math.MinInt64 || value < cast {
+												values[index] = value
+											}
 										}
 
 									case AggregateMaximum:
-										if value > values[index].(int64) {
-											values[index] = value
+										if cast, ok := values[index].(int64); ok {
+											if value > cast {
+												values[index] = value
+											}
 										}
 
 									case AggregateAverage, AggregateSum:
-										if values[index].(int64) == math.MinInt64 {
-											values[index] = value
+										if cast, ok := values[index].(int64); ok {
+											if cast == math.MinInt64 {
+												values[index] = value
 
-										} else {
-											values[index] = values[index].(int64) + value
+											} else {
+												values[index] = cast + value
+											}
 										}
 
 									case AggregateFirst:
-										if values[index].(int64) == math.MinInt64 {
-											values[index] = value
+										if cast, ok := values[index].(int64); ok {
+											if cast == math.MinInt64 {
+												values[index] = value
+											}
 										}
 
 									case AggregateLast:
@@ -990,31 +1065,35 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 											if item[1] == ModeBinary {
 												value = base64.StdEncoding.EncodeToString(entry.value)
 											}
-											values[index].(map[string]int)[value]++
+											if cast, ok := values[index].(map[string]int); ok {
+												cast[value]++
+											}
 
 										} else {
-											length := len(values[index].([]byte))
-											switch item[4] {
-											case AggregateMinimum:
-												if length == 0 || len(entry.value) < length {
+											if cast, ok := values[index].([]byte); ok {
+												length := len(cast)
+												switch item[4] {
+												case AggregateMinimum:
+													if length == 0 || len(entry.value) < length {
+														values[index] = entry.value
+													}
+
+												case AggregateMaximum:
+													if len(entry.value) > length {
+														values[index] = entry.value
+													}
+
+												case AggregateSum:
+													values[index] = append(cast, entry.value...)
+
+												case AggregateFirst:
+													if length == 0 {
+														values[index] = entry.value
+													}
+
+												case AggregateAverage, AggregateLast, AggregateRaw:
 													values[index] = entry.value
 												}
-
-											case AggregateMaximum:
-												if len(entry.value) > length {
-													values[index] = entry.value
-												}
-
-											case AggregateSum:
-												values[index] = append(values[index].([]byte), entry.value...)
-
-											case AggregateFirst:
-												if length == 0 {
-													values[index] = entry.value
-												}
-
-											case AggregateAverage, AggregateLast, AggregateRaw:
-												values[index] = entry.value
 											}
 										}
 									}
@@ -1035,15 +1114,18 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 				if len(values) == len(mapping) {
 					for index, item := range mapping {
 						if item[4] == AggregateAverage && (item[1] == ModeGauge || item[1] == ModeCounter || item[1] == ModeIncrement) && msteps[index] > 0 {
-							if values[index].(int64) == math.MinInt64 {
-								values[index] = int64(0)
+							if cast, ok := values[index].(int64); ok {
+								if cast == math.MinInt64 {
+									values[index] = int64(0)
 
-							} else {
-								values[index] = values[index].(int64) / int64(msteps[index])
+								} else {
+									values[index] = cast / int64(msteps[index])
+								}
 							}
 						}
 						if item[4] == AggregatePercentile {
 							if item[1] == ModeGauge || item[1] == ModeCounter || item[1] == ModeIncrement {
+								// TODO cast?
 								list, total := make([][2]int64, 0, len(values[index].(map[string]int))), 0
 								for key, count := range values[index].(map[string]int) {
 									if value, err := strconv.ParseInt(key, 10, 64); err == nil {
@@ -1081,6 +1163,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 							}
 
 						} else if item[4] != AggregateHistogram {
+							// TODO cast?
 							if item[1] == ModeText {
 								values[index] = string(values[index].([]byte))
 
@@ -1091,9 +1174,11 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 					}
 				}
 				if len(prepend) != 0 && prepend[0] {
+					// TODO cast?
 					result["values"] = append(result["values"].([]any), append([]any{ptime}, values...))
 
 				} else {
+					// TODO cast?
 					result["values"] = append(result["values"].([]any), values)
 				}
 				values, msteps, step = []any{}, make([]int, len(mapping)), 0

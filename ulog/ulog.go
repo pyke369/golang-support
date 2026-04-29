@@ -505,7 +505,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	}
 	l.mu.RUnlock()
 
-	structured, content := false, l.arena.Get(1<<10, nil)
+	structured, content := false, l.arena.Get(1<<10)
 	defer l.arena.Put(content)
 
 	templates := map[string]any{
@@ -561,7 +561,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		}
 
 		if value, ok := templates["payload"].(string); ok {
-			content = append(content, value...)
+			content = append(content, ustr.Strip(value, "\n\r\t")...)
 
 		} else {
 			buffer := bytes.NewBuffer([]byte{'{'})
@@ -596,10 +596,13 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			content = append(content, buffer.Bytes()...)
 		}
 		l.mu.RUnlock()
-	}
 
+	}
 	if layout, ok := in.(string); ok {
 		content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
+		content = bytes.ReplaceAll(content, []byte("\n"), []byte{})
+		content = bytes.ReplaceAll(content, []byte("\r"), []byte{})
+		content = bytes.ReplaceAll(content, []byte("\t"), []byte{})
 	}
 
 	if l.syslog {

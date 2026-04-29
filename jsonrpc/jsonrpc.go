@@ -95,7 +95,10 @@ func init() {
 }
 
 func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
-	options := tcontext.(TRANSPORT_OPTIONS)
+	options, ok := tcontext.(TRANSPORT_OPTIONS)
+	if !ok {
+		return nil, errors.New(`jsonrpc: invalid context`)
+	}
 	if options.URL == "" {
 		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
 	}
@@ -246,11 +249,11 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 	}
 	in, err := Request(calls)
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "jsonrpc")
 	}
 	out, err := transport(in, tcontext)
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "jsonrpc")
 	}
 
 	return Response(out, calls)
@@ -274,11 +277,11 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 		} else {
-			if len(requests) == 0 || len(requests) > 1024 || requests[0].JSONRPC == "" {
+			if len(requests) == 0 || len(requests) > 64 || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 
 			} else {
-				running, sink := 0, make(chan *RESPONSE, 1024)
+				running, sink := 0, make(chan *RESPONSE, 64)
 				for _, request := range requests {
 					_, ok1 := request.Id.(string)
 					_, ok2 := request.Id.(float64)
@@ -617,7 +620,7 @@ func Slice(in any) (out []any) {
 
 func SliceItem(in any, index int) any {
 	sin := Slice(in)
-	if index >= len(sin) {
+	if index < 0 || index >= len(sin) {
 		return nil
 	}
 
@@ -658,7 +661,7 @@ func StringSlice(in any, extra ...bool) (out []string) {
 
 func StringSliceItem(in any, index int) string {
 	ssin := StringSlice(in)
-	if index >= len(ssin) {
+	if index < 0 || index >= len(ssin) {
 		return ""
 	}
 
@@ -693,7 +696,7 @@ func NumberSlice(in any, extra ...bool) (out []float64) {
 
 func NumberSliceItem(in any, index int) float64 {
 	nsin := NumberSlice(in)
-	if index >= len(nsin) {
+	if index < 0 || index >= len(nsin) {
 		return 0.0
 	}
 

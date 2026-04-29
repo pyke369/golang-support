@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/pyke369/golang-support/ustr"
 	"golang.org/x/sys/unix"
 )
 
@@ -84,25 +86,45 @@ type serial struct {
 	wdeadline time.Time
 }
 
+func serialPath(path string) error {
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return ustr.Wrap(err, "uio")
+	}
+	if !strings.HasPrefix(target, "/dev/tty") && !strings.HasPrefix(target, "/dev/serial/") {
+		return errors.New("uio: invalid device path")
+	}
+
+	return nil
+}
+
 func SerialProbe(path string) (active bool, err error) {
+	if err := serialPath(path); err != nil {
+		return false, ustr.Wrap(err, "uio")
+	}
+
 	handle, err := unix.Open(path, os.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return false, err
+		return false, ustr.Wrap(err, "uio")
 	}
 	defer unix.Close(handle)
 
 	state, err := unix.IoctlGetInt(handle, unix.TIOCMGET)
 	if err != nil {
-		return false, err
+		return false, ustr.Wrap(err, "uio")
 	}
 
 	return state&unix.TIOCM_CTS != 0, nil
 }
 
 func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string) (conn *serial, err error) {
+	if err := serialPath(path); err != nil {
+		return nil, ustr.Wrap(err, "uio")
+	}
+
 	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "uio")
 	}
 
 	if speed >= 0 {
@@ -125,7 +147,7 @@ func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string)
 		termios.Cc[unix.VMIN] = 1
 		if err := unix.IoctlSetTermios(handle, unix.TCSETS, &termios); err != nil {
 			unix.Close(handle)
-			return nil, err
+			return nil, ustr.Wrap(err, "uio")
 		}
 	}
 
@@ -147,7 +169,7 @@ func (s *serial) String() string {
 
 func (s *serial) Read(b []byte) (n int, err error) {
 	if s.control {
-		return 0, errors.ErrUnsupported
+		return 0, unsupported
 	}
 
 	set, timeout := []unix.PollFd{unix.PollFd{Fd: int32(s.handle), Events: unix.EPOLLIN}}, -1
@@ -171,7 +193,7 @@ func (s *serial) Read(b []byte) (n int, err error) {
 
 func (s *serial) Write(b []byte) (n int, err error) {
 	if s.control {
-		return 0, errors.ErrUnsupported
+		return 0, unsupported
 	}
 
 	set, timeout := []unix.PollFd{unix.PollFd{Fd: int32(s.handle), Events: unix.EPOLLOUT}}, -1
@@ -219,7 +241,7 @@ func (s *serial) SetWriteDeadline(t time.Time) error {
 func (s *serial) GetControl() (control string, err error) {
 	value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
 	if err != nil {
-		return "", err
+		return "", ustr.Wrap(err, "uio")
 	}
 	if value&unix.TIOCM_CTS != 0 {
 		control += " CTS"
@@ -243,7 +265,7 @@ func (s *serial) SetControl(control string) (err error) {
 	if rts || dtr {
 		value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
 		if err != nil {
-			return err
+			return ustr.Wrap(err, "uio")
 		}
 		if rts {
 			value |= unix.TIOCM_RTS
@@ -263,7 +285,7 @@ func (s *serial) ClearControl(control string) (err error) {
 	if rts || dtr {
 		value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
 		if err != nil {
-			return err
+			return ustr.Wrap(err, "uio")
 		}
 		if rts {
 			value &= ^unix.TIOCM_RTS

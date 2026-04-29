@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,10 @@ type SSHConn struct {
 	input   io.WriteCloser
 	output  io.Reader
 }
+
+var (
+	mu sync.Mutex
+)
 
 func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions) (conn *SSHConn, err error) {
 	if remote == "" {
@@ -134,13 +139,17 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 			Timeout: options.ConnectTimeout,
 			HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 				if options.KnownHosts == "" {
-					return errors.New("KnownHosts path not provided")
+					return errors.New("expect: known_hosts path not provided")
 				}
+
+				mu.Lock()
+				defer mu.Unlock()
+
 				if options.AcceptHandler != nil {
 					file.Touch(options.KnownHosts)
 				}
 
-				accepted := false
+				appended := false
 			retry:
 				value, err := kh.New(options.KnownHosts)
 				if err != nil {
@@ -148,10 +157,10 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 				}
 
 				err = value(hostname, remote, key)
-				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !accepted && options.AcceptHandler != nil {
+				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !appended && options.AcceptHandler != nil {
 					if options.AcceptHandler(hostname, remote, key) {
 						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "append")
-						accepted = true
+						appended = true
 						goto retry
 					}
 				}
@@ -190,6 +199,9 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 		data, offset, prompt, filter, lines := make([]byte, 64<<10), 0, rcache.Get(prompt), rcache.Get(filter), []string{}
 	done:
 		for {
+			if offset == cap(data) {
+				return
+			}
 			n, err := c.output.Read(data[offset:])
 			if err != nil {
 				return
@@ -446,7 +458,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 func (c *SSHConn) Map(command string, mapping map[string]string, extra ...map[string]any) (result map[string]any, err error) {
 	run, err := c.Run(command, extra...)
 	if err != nil {
-		return nil, err
+		return nil, ustr.Wrap(err, "expect")
 	}
 
 	return Mapper(nil, run, mapping), nil

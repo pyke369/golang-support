@@ -11,6 +11,7 @@ import (
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/mstore"
 	"github.com/pyke369/golang-support/rcache"
+	"github.com/pyke369/golang-support/ustr"
 )
 
 func usage(status int) {
@@ -35,7 +36,7 @@ func usage(status int) {
 
 func bail(err error, status int) {
 	if err != nil {
-		os.Stderr.WriteString(err.Error() + "\n")
+		os.Stderr.WriteString(ustr.Wrap(err, "mstore").Error() + "\n")
 		os.Exit(status)
 	}
 }
@@ -80,7 +81,7 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 		}
 		return
 	}
-	return time.Unix(0, 0), errors.New("no match")
+	return time.Unix(0, 0), errors.New("mstore: no match")
 }
 
 func main() {
@@ -157,7 +158,7 @@ func main() {
 							values = append(values, strconv.FormatInt(int64(j.Number(value)), 10))
 
 						case "text", "binary":
-							values = append(values, `"`+j.String(value)+`"`)
+							values = append(values, `"`+ustr.Strip(j.String(value), `"=+-@"`)+`"`)
 						}
 					}
 				}
@@ -237,13 +238,13 @@ func main() {
 			parts := strings.Split(value, "@")
 			parts[0] = strings.ToLower(strings.TrimSpace(parts[0]))
 			if mstore.ModeIndexes[parts[0]] == 0 {
-				bail(errors.New("invalid column type "+parts[0]), 5)
+				bail(errors.New("mstore: invalid column type "+parts[0]), 5)
 			}
 			size, description := 0, ""
 			if len(parts) > 1 {
 				size, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
 				if size != 1 && size != 2 && size != 4 && size != 8 {
-					bail(errors.New("invalid column size "+strconv.Itoa(size)), 5)
+					bail(errors.New("mstore: invalid column size "+strconv.Itoa(size)), 5)
 				}
 				if len(parts) > 2 {
 					description = strings.TrimSpace(parts[2])
@@ -278,28 +279,28 @@ func main() {
 			start = value
 		}
 		if end.Before(start) {
-			bail(errors.New("invalid timerange [ "+start.Format(time.DateTime)+" - "+end.Format(time.DateTime)+" ]"), 4)
+			bail(errors.New("mstore: invalid timerange [ "+start.Format(time.DateTime)+" - "+end.Format(time.DateTime)+" ]"), 4)
 		}
 		interval, _ := strconv.ParseInt(os.Args[6], 10, 64)
 		if interval <= 0 {
 			interval = int64(end.Sub(start) / time.Second)
 		}
 		if interval <= 0 {
-			bail(errors.New("invalid interval "+strconv.FormatInt(interval, 10)), 5)
+			bail(errors.New("mstore: invalid interval "+strconv.FormatInt(interval, 10)), 5)
 		}
 		columns := [][]int64{}
 		for _, value := range strings.Split(os.Args[7], ",") {
 			value = strings.TrimSpace(value)
 			parts := strings.Split(value, "@")
 			if len(parts) < 2 {
-				bail(errors.New("invalid aggregate format "+value), 6)
+				bail(errors.New("mstore: invalid aggregate format "+value), 6)
 			}
 			index, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
 			bail(err, 7)
 			value = strings.ToLower(strings.TrimSpace(parts[1]))
 			mode := mstore.AggregateIndexes[value]
 			if mode == 0 {
-				bail(errors.New("invalid aggregate mode "+value), 8)
+				bail(errors.New("mstore: invalid aggregate mode "+value), 8)
 			}
 			column := []int64{index, mode}
 			if len(parts) > 2 {
@@ -315,7 +316,7 @@ func main() {
 			columns = append(columns, column)
 		}
 		if len(columns) == 0 {
-			bail(errors.New("no valid aggregate specified"), 11)
+			bail(errors.New("mstore: no valid aggregate specified"), 11)
 		}
 		watch := time.Now()
 		result, err := metrics.Metric(os.Args[3]).Get(start, end, interval, columns, true)

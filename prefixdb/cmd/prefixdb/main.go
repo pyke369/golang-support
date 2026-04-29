@@ -68,9 +68,10 @@ func mkjson() {
 					if fields := jsonMatcher.FindStringSubmatch(strings.TrimSpace(line)); fields != nil {
 						if prefix, err := netip.ParsePrefix(fields[1]); err == nil {
 							data := map[string]any{}
-							json.Unmarshal([]byte(fields[2]), &data)
-							pfdb.Add(prefix, data, [][]string{[]string{"key1", "key2"}})
-							count++
+							if json.Unmarshal([]byte(fields[2]), &data) == nil {
+								pfdb.Add(prefix, data, [][]string{[]string{"key1", "key2"}})
+								count++
+							}
 						}
 					}
 				}
@@ -333,10 +334,11 @@ func rlookup(remote, value string, out map[string]any) {
 				response.Body.Close()
 				if err == nil && len(body) < 4<<10 {
 					data := map[string]any{}
-					json.Unmarshal(body, &data)
-					for key, value := range data {
-						if _, exists := out[key]; !exists {
-							out[key] = value
+					if json.Unmarshal(body, &data) == nil {
+						for key, value := range data {
+							if _, exists := out[key]; !exists {
+								out[key] = value
+							}
 						}
 					}
 				}
@@ -423,7 +425,12 @@ done:
 				column, _ = strconv.Atoi(parts[1])
 			}
 			if parts[0] != "-" {
-				in, _ = os.Open(parts[0])
+				value, err := os.Open(parts[0])
+				if err != nil {
+					os.Stderr.WriteString("csv      [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
+					break done
+				}
+				in = value
 			}
 			reader, writer, cache := csv.NewReader(in), csv.NewWriter(os.Stdout), map[string]map[string]any{}
 			reader.Comment = '#'
@@ -530,7 +537,7 @@ func server() {
 	}
 	os.Stderr.WriteString("listen   [" + os.Args[2] + "]\n")
 	for {
-		if len(parts) > 1 {
+		if len(parts) > 2 {
 			if err := server.ListenAndServeTLS(parts[1], parts[2]); err != nil {
 				os.Stderr.WriteString("listen   [" + os.Args[2] + "] failed (" + err.Error() + ")\n")
 			}

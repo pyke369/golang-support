@@ -8,6 +8,8 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
+	"io/fs"
+	"math"
 	"mime"
 	"net/http"
 	"os"
@@ -32,6 +34,7 @@ type RPACK struct {
 }
 
 var (
+	mu       sync.Mutex
 	x2ntable [32]uint32
 	guzpool  = sync.Pool{
 		New: func() any {
@@ -116,12 +119,20 @@ func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
 			root = value
 		}
 	}
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		rpath := strings.TrimPrefix(path, root+"/")
+	filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rpath := strings.Trim(strings.TrimPrefix(path, root), "/")
+
 		if excluder != nil && excluder.MatchString(rpath) {
 			return nil
 		}
-		if info != nil && info.Mode().IsRegular() {
+		if entry.Type().IsRegular() {
+			info, err := entry.Info()
+			if err != nil {
+				return nil
+			}
 			for _, part := range strings.Split(rpath, "/") {
 				if part != "" && part[0] == '.' {
 					return nil
@@ -131,20 +142,23 @@ func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
 			if value := mime.TypeByExtension(filepath.Ext(rpath)); value != "" {
 				pack.Mime = value
 			}
-			content, _ := os.ReadFile(path)
-			compressed := bytes.Buffer{}
-			compressor.Reset(&compressed)
-			compressor.Write(content)
-			compressor.Flush()
-			compressor.Close()
-			pack.Content = base64.StdEncoding.EncodeToString(compressed.Bytes())
-			entries[rpath] = pack
-			os.Stderr.WriteString("\r" + ustr.String(rpath, -120))
-			count++
-			size += info.Size()
+			if content, err := os.ReadFile(path); err == nil {
+				compressed := bytes.Buffer{}
+				compressor.Reset(&compressed)
+				compressor.Write(content)
+				compressor.Flush()
+				compressor.Close()
+				pack.Content = base64.StdEncoding.EncodeToString(compressed.Bytes())
+				entries[rpath] = pack
+				os.Stderr.WriteString("\r" + ustr.String(rpath, -120))
+				count++
+				size += info.Size()
+			}
 		}
+
 		return nil
 	})
+
 	os.Stderr.WriteString("\r" + ustr.String("", -120))
 	os.Stderr.WriteString("\rpacked " + strconv.Itoa(count) + " file(s) " + strconv.FormatInt(size, 10) + " byte(s) in " + ustr.Duration(time.Since(start)) + "\n")
 	if handle, err := os.OpenFile(out, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600); err == nil {
@@ -168,7 +182,7 @@ var ` + uid + ` map[string]*rpack.RPACK = map[string]*rpack.RPACK{
 		}
 		length += 3
 		for path, entry := range entries {
-			handle.WriteString(`	` + ustr.String(strconv.Quote(path)+`:`, -length) + ` &rpack.RPACK{Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: "` + entry.Mime + `", Content: "` + entry.Content + "\"},\n")
+			handle.WriteString(`	` + ustr.String(strconv.Quote(path)+`:`, -length) + ` &rpack.RPACK{Modified: ` + strconv.FormatInt(entry.Modified, 10) + `, Mime: ` + strconv.Quote(entry.Mime) + `, Content: "` + entry.Content + "\"},\n")
 		}
 		handle.WriteString(`}
 
@@ -190,14 +204,17 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 		rpath += ".html"
 	}
 	if pack == nil || pack[rpath] == nil {
-		err = errors.New("rpack: resource not found")
-		return
+		return nil, "", 0, errors.New("rpack: resource not found")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if pack[rpath].raw == nil {
-		if pack[rpath].raw, err = base64.StdEncoding.DecodeString(pack[rpath].Content); err != nil {
-			return
+		value, err := base64.StdEncoding.DecodeString(pack[rpath].Content)
+		if err != nil {
+			return nil, "", 0, ustr.Wrap(err, "rpack")
 		}
+		pack[rpath].raw = value
 	}
 	content, ctype, modified = pack[rpath].raw, pack[rpath].Mime, pack[rpath].Modified
 	if uncompress {
@@ -226,6 +243,9 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			r.URL.Path += "index"
 		}
 		prefix, resources := path.Dir(r.URL.Path), strings.Split(path.Base(r.URL.Path), "+")
+		if len(resources) > 32 {
+			resources = resources[:32]
+		}
 
 		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && r.Header.Get("Range") == "" {
@@ -243,8 +263,16 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
 				if len(resources) > 1 && !uncompress {
+					if len(pcontent) < 18 {
+						rw.WriteHeader(http.StatusInternalServerError)
+						return
+					}
 					ucheck, usize := binary.LittleEndian.Uint32(pcontent[len(pcontent)-8:]), binary.LittleEndian.Uint32(pcontent[len(pcontent)-4:])
 					check = combine(check, ucheck, usize)
+					if math.MaxUint32-size < usize {
+						rw.WriteHeader(http.StatusInternalServerError)
+						return
+					}
 					size += usize
 					if index == 0 {
 						content = append(content, []byte{0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff}...)
@@ -262,7 +290,15 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 				} else {
 					content = append(content, pcontent...)
 				}
-				ctype = pmime
+
+				if ctype == "" {
+					ctype = pmime
+
+				} else if pmime != ctype {
+					rw.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+
 				if pmodified > modified {
 					modified = pmodified
 				}
@@ -273,6 +309,9 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			}
 		}
 
+		rw.Header().Set("X-Content-Type-Options", "nosniff")
+		rw.Header().Set("X-Frame-Options", "DENY")
+		rw.Header().Set("Content-Security-Policy", "default-src 'none'")
 		rw.Header().Set("Content-Type", ctype)
 		rw.Header().Set("Content-Length", strconv.Itoa(len(content)))
 		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))
