@@ -167,6 +167,24 @@ func Truncate(in string, length int, ellipsis ...bool) (out string) {
 	return
 }
 
+func Strip(in, charset string) string {
+	for _, strip := range charset {
+		if strings.ContainsRune(in, strip) {
+			in = strings.ReplaceAll(in, string(strip), "")
+		}
+	}
+
+	return in
+}
+
+func Replace(in string, pairs [][2]string) string {
+	for _, pair := range pairs {
+		in = strings.ReplaceAll(in, pair[0], pair[1])
+	}
+
+	return in
+}
+
 func Hex(in []byte, extra ...byte) string {
 	length, pad := len(in), byte(0)
 	if length == 0 {
