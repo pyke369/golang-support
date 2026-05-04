@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"maps"
 	"math/big"
 	"strings"
 	"time"
@@ -44,10 +45,17 @@ var (
 
 func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, kid ...string) (out string, err error) {
 	var (
-		der   *pem.Block
-		token []byte
+		der     *pem.Block
+		token   []byte
+		rclaims = map[string]any{}
 	)
 
+	if expire.Before(time.Now()) {
+		return "", errors.New("auth: expire must be in the future")
+	}
+	if expire.After(time.Now().Add(time.Hour * 24 * 365)) {
+		return "", errors.New("auth: expire must be less than a year")
+	}
 	header := map[string]string{"typ": "JWT", "alg": string(alg)}
 	if alg == AlgHS256 {
 		if len(key) < 32 {
@@ -72,11 +80,11 @@ func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, k
 	}
 	token = base64.RawURLEncoding.AppendEncode(token, marshaled)
 	token = append(token, '.')
-	if claims == nil {
-		claims = map[string]any{}
+	if claims != nil {
+		rclaims = maps.Clone(claims)
 	}
-	claims["iat"], claims["nbf"], claims["exp"] = time.Now().Unix(), time.Now().Unix(), expire.Unix()
-	marshaled, err = json.Marshal(claims)
+	rclaims["iat"], rclaims["nbf"], rclaims["exp"] = time.Now().Unix(), time.Now().Unix(), expire.Unix()
+	marshaled, err = json.Marshal(rclaims)
 	if err != nil {
 		return "", ustr.Wrap(err, "auth")
 	}
@@ -214,7 +222,7 @@ func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claim
 				if key, err := x509.ParsePKIXPublicKey(der.Bytes); err == nil {
 					switch alg {
 					case AlgRS256, AlgPS256:
-						if key, ok := key.(*rsa.PublicKey); ok && len(decoded) == key.Size() {
+						if key, ok := key.(*rsa.PublicKey); ok && key.N.BitLen() >= 2048 && len(decoded) == key.Size() {
 							sum := sha256.Sum256(input)
 							if alg == AlgRS256 {
 								pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
@@ -259,7 +267,7 @@ func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claim
 	skew := 30 * time.Second
 	if len(extra) != 0 {
 		if value, ok := extra[0]["skew"].(time.Duration); ok {
-			skew = value
+			skew = max(0, min(2*time.Minute, value))
 		}
 	}
 
@@ -272,11 +280,17 @@ func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claim
 		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
 			return nil, errors.New("auth: issued in future")
 		}
+
+	} else {
+		return nil, errors.New("auth: invalid iat")
 	}
 	if value, ok := claims["nbf"].(float64); ok {
 		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
 			return nil, errors.New("auth: not yet valid")
 		}
+
+	} else {
+		return nil, errors.New("auth: invalid nbf")
 	}
 	if len(extra) != 0 {
 		if value, ok := extra[0]["claims"].(map[string]string); ok {

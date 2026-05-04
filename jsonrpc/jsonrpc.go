@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -92,6 +93,7 @@ func init() {
 	httpDefaultTransport.MaxIdleConnsPerHost = 64
 	httpDefaultTransport.IdleConnTimeout = 60 * time.Second
 	httpDefaultTransport.DisableCompression = true
+	httpDefaultTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 }
 
 func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
@@ -99,8 +101,8 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 	if !ok {
 		return nil, errors.New(`jsonrpc: invalid context`)
 	}
-	if options.URL == "" {
-		return nil, errors.New(`jsonrpc: missing URL in default transport options`)
+	if !strings.HasPrefix(options.URL, "http://") && !strings.HasPrefix(options.URL, "https://") {
+		return nil, errors.New(`jsonrpc: invalid URL in default transport options`)
 	}
 	if options.Timeout == 0 {
 		options.Timeout = 10 * time.Second
@@ -121,10 +123,13 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 		request.Header.Set("Content-Type", "application/json")
 		client := &http.Client{Transport: options.Transport, Timeout: options.Timeout}
 		if response, err := client.Do(request); err == nil {
-			out, _ = io.ReadAll(io.LimitReader(response.Body, 256<<10))
+			out, err = io.ReadAll(io.LimitReader(response.Body, 256<<10))
 			response.Body.Close()
-			if response.StatusCode/100 != 2 || len(out) == 0 {
-				return nil, errors.New("jsonrpc: HTTP error " + strconv.Itoa(response.StatusCode))
+			if err != nil {
+				return nil, ustr.Wrap(err, "jsonrpc")
+			}
+			if response.StatusCode/100 != 2 {
+				return nil, errors.New("jsonrpc: HTTP error")
 			}
 
 		} else {

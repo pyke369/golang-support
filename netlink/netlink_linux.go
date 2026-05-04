@@ -2,10 +2,8 @@ package netlink
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -123,7 +121,7 @@ func (nr *request) marshal() []byte {
 	return nr.marshaled
 }
 
-func exec(request *request, trace ...bool) (err error) {
+func exec(request *request) (err error) {
 	handle, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_ROUTE)
 	if err != nil {
 		return ustr.Wrap(err, "netlink")
@@ -135,26 +133,20 @@ func exec(request *request, trace ...bool) (err error) {
 		return ustr.Wrap(err, "netlink")
 	}
 	out := request.marshal()
-	if len(trace) > 0 && trace[0] {
-		os.Stderr.WriteString("-- REQ --\n")
-		os.Stderr.WriteString(hex.Dump(out))
-	}
 	if err := syscall.Sendto(handle, out, 0, address); err != nil {
 		return ustr.Wrap(err, "netlink")
 	}
 	in := make([]byte, syscall.Getpagesize())
 	for {
-		// TODO SO_RCVTIMEO
+		if err := syscall.SetsockoptTimeval(handle, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &syscall.Timeval{Sec: 10}); err != nil {
+			return ustr.Wrap(err, "netlink")
+		}
 		n, _, err := syscall.Recvfrom(handle, in, 0)
 		if err != nil {
 			return ustr.Wrap(err, "netlink")
 		}
 		if n < syscall.NLMSG_HDRLEN {
 			return syscall.EINVAL
-		}
-		if len(trace) > 0 && trace[0] {
-			os.Stderr.WriteString("-- ACK --\n")
-			os.Stderr.WriteString(hex.Dump(in[:n]))
 		}
 		msgs, err := syscall.ParseNetlinkMessage(in[:n])
 		if err != nil {
@@ -166,7 +158,7 @@ func exec(request *request, trace ...bool) (err error) {
 				return ustr.Wrap(err, "netlink")
 
 			case syscall.NLMSG_ERROR:
-				if msg.Header.Len >= 4 {
+				if len(msg.Data) >= 4 {
 					if errno := -int32(binary.LittleEndian.Uint32(msg.Data)); errno != 0 {
 						return ustr.Wrap(syscall.Errno(errno), "netlink")
 					}
@@ -249,12 +241,12 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 
 							case syscall.IFLA_LINK:
 								if len(attr.Value) >= 4 {
-									itf["link"] = int(binary.LittleEndian.Uint16(attr.Value))
+									itf["link"] = int(binary.LittleEndian.Uint32(attr.Value))
 								}
 
 							case syscall.IFLA_MASTER:
 								if len(attr.Value) >= 4 {
-									itf["master"] = int(binary.LittleEndian.Uint16(attr.Value))
+									itf["master"] = int(binary.LittleEndian.Uint32(attr.Value))
 								}
 
 							case syscall.IFLA_TXQLEN:
@@ -263,13 +255,17 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 								}
 
 							case syscall.IFLA_OPERSTATE:
-								if state := int(attr.Value[0]); state >= 1 && state <= 6 {
-									itf["state"] = []string{"", "NOTPRESENT", "DOWN", "LOWERLAYERDOWN", "TESTING", "DORMANT", "UP"}[state]
+								if len(attr.Value) > 0 {
+									if state := int(attr.Value[0]); state >= 1 && state <= 6 {
+										itf["state"] = []string{"", "NOTPRESENT", "DOWN", "LOWERLAYERDOWN", "TESTING", "DORMANT", "UP"}[state]
+									}
 								}
 
 							case 0x21: // IFLA_CARRIER
-								if attr.Value[0] == 0 {
-									flags = append(flags, "NO-CARRIER")
+								if len(attr.Value) > 0 {
+									if attr.Value[0] == 0 {
+										flags = append(flags, "NO-CARRIER")
+									}
 								}
 							}
 						}
@@ -378,14 +374,6 @@ func Interfaces(filter ...string) (itfs []map[string]any) {
 	return
 }
 
-func getOption(name string, options ...map[string]any) any {
-	if len(options) != 0 && options[0] != nil {
-		return options[0][name]
-	}
-
-	return nil
-}
-
 func AddDummy(name string, options ...map[string]any) error {
 	// TODO support dummy interfaces
 	return nil
@@ -410,7 +398,7 @@ func AddVlan(name string, vlan int, options ...map[string]any) error {
 							newAttr(1 /*IFLA_VLAN_ID*/, value2[:], nil),
 						}),
 					}),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
@@ -435,7 +423,7 @@ func AddVirtualPair(name1, name2 string, options ...map[string]any) error {
 					}),
 				}),
 			}),
-		}), j.Boolean(getOption("trace", options...)))
+		}))
 }
 
 func AddBridge(name string, options ...map[string]any) error {
@@ -456,7 +444,7 @@ func AddBridge(name string, options ...map[string]any) error {
 				//  TODO 1 /*IFLA_BR_FORWARD_DELAY*/ = 2 secs (instead of default 15 secs)
 				// }),
 			}),
-		}), j.Boolean(getOption("trace", options...)))
+		}))
 }
 
 func AddBond(name string, options ...map[string]any) error {
@@ -475,7 +463,7 @@ func AddBond(name string, options ...map[string]any) error {
 				// }),
 				// TODO mode option
 			}),
-		}), j.Boolean(getOption("trace", options...)))
+		}))
 }
 
 func RenameInterface(from, to string, options ...map[string]any) error {
@@ -489,26 +477,26 @@ func RenameInterface(from, to string, options ...map[string]any) error {
 				imsg[:],
 				[]*attr{
 					newAttr(syscall.IFLA_IFNAME, []byte(to+"\000"), nil),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
 	return syscall.Errno(syscall.ENODEV)
 }
 
-func SetInterfaceNamespace(name string, pid int, options ...map[string]any) error {
+func SetInterfaceNamespace(name string, pid uint32, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
 			imsg, value := [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
 			binary.LittleEndian.PutUint32(imsg[4:], index)
-			binary.LittleEndian.PutUint32(value[:], uint32(pid))
+			binary.LittleEndian.PutUint32(value[:], pid)
 			return exec(newRequest(
 				syscall.RTM_NEWLINK,
 				0,
 				imsg[:],
 				[]*attr{
 					newAttr(syscall.IFLA_NET_NS_PID, value[:], nil),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
@@ -537,7 +525,7 @@ func LinkInterface(master, slave string, options ...map[string]any) error {
 			imsg[:],
 			[]*attr{
 				newAttr(syscall.IFLA_MASTER, value[:], nil),
-			}), j.Boolean(getOption("trace", options...)))
+			}))
 	}
 
 	return syscall.Errno(syscall.ENODEV)
@@ -556,7 +544,7 @@ func RemoveInterface(name string, options ...map[string]any) error {
 				syscall.RTM_DELLINK,
 				0,
 				imsg[:],
-				nil), j.Boolean(getOption("trace", options...)))
+				nil))
 		}
 	}
 
@@ -576,7 +564,7 @@ func SetInterfaceState(name string, up bool, options ...map[string]any) error {
 				syscall.RTM_NEWLINK,
 				0,
 				imsg[:],
-				nil), j.Boolean(getOption("trace", options...)))
+				nil))
 		}
 	}
 
@@ -597,45 +585,45 @@ func SetInterfaceHWAddress(name, address string, options ...map[string]any) erro
 				imsg[:],
 				[]*attr{
 					newAttr(syscall.IFLA_ADDRESS, value[:], nil),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
 	return syscall.Errno(syscall.ENODEV)
 }
 
-func SetInterfaceMTU(name string, mtu int, options ...map[string]any) error {
+func SetInterfaceMTU(name string, mtu uint32, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
 			imsg, value := [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
 			binary.LittleEndian.PutUint32(imsg[4:], index)
-			binary.LittleEndian.PutUint32(value[:], uint32(mtu))
+			binary.LittleEndian.PutUint32(value[:], mtu)
 			return exec(newRequest(
 				syscall.RTM_NEWLINK,
 				0,
 				imsg[:],
 				[]*attr{
 					newAttr(syscall.IFLA_MTU, value[:], nil),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
 	return syscall.Errno(syscall.ENODEV)
 }
 
-func SetInterfaceQueue(name string, qlen int, options ...map[string]any) error {
+func SetInterfaceQueue(name string, length uint32, options ...map[string]any) error {
 	if itfs := Interfaces(name); len(itfs) == 1 {
 		if index := uint32(j.Number(itfs[0]["index"])); index != 0 {
 			imsg, value := [syscall.SizeofIfInfomsg]byte{}, [4]byte{}
 			binary.LittleEndian.PutUint32(imsg[4:], index)
-			binary.LittleEndian.PutUint32(value[:], uint32(qlen))
+			binary.LittleEndian.PutUint32(value[:], length)
 			return exec(newRequest(
 				syscall.RTM_NEWLINK,
 				0,
 				imsg[:],
 				[]*attr{
 					newAttr(syscall.IFLA_TXQLEN, value[:], nil),
-				}), j.Boolean(getOption("trace", options...)))
+				}))
 		}
 	}
 
@@ -662,7 +650,7 @@ func AddInterfaceAddress(name, address string, options ...map[string]any) error 
 					[]*attr{
 						newAttr(syscall.IFA_LOCAL, address[:], nil),
 						newAttr(syscall.IFA_ADDRESS, address[:], nil),
-					}), j.Boolean(getOption("trace", options...)))
+					}))
 			}
 			return syscall.Errno(syscall.EINVAL)
 		}
@@ -691,7 +679,7 @@ func RemoveInterfaceAddress(name, address string, options ...map[string]any) err
 					[]*attr{
 						newAttr(syscall.IFA_LOCAL, address[:], nil),
 						newAttr(syscall.IFA_ADDRESS, address[:], nil),
-					}), j.Boolean(getOption("trace", options...)))
+					}))
 			}
 			return syscall.Errno(syscall.EINVAL)
 		}

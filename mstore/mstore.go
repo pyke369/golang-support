@@ -191,6 +191,7 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 func (s *Store) cleanup() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	now := time.Now()
 	if now.Sub(s.last) >= time.Minute {
 		s.last = now
@@ -208,7 +209,9 @@ func (s *Store) cleanup() {
 
 func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 	if len(readonly) == 0 || !readonly[0] {
-		os.MkdirAll(prefix, 0o700)
+		if err := os.MkdirAll(prefix, 0o700); err != nil {
+			return nil, ustr.Wrap(err, "mstore")
+		}
 	}
 	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
@@ -218,7 +221,7 @@ func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 }
 
 func (s *Store) Metric(name string) *metric {
-	if name == "" || strings.ContainsAny(name, `/\`) {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Trim(name, ".") == "" || strings.Contains(name, "..") {
 		return nil
 	}
 	s.mu.Lock()
@@ -263,9 +266,11 @@ func (s *Store) Rename(from, to string) error {
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
 	}
-	os.MkdirAll(filepath.Dir(to), 0o700)
+	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+		return ustr.Wrap(err, "mstore")
+	}
 
-	return os.Rename(from, to)
+	return ustr.Wrap(os.Rename(from, to), "mstore")
 }
 
 func (s *Store) Trim(name string, start, end time.Time) error {
@@ -282,7 +287,12 @@ func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]i
 		queue := make(chan []any)
 		for name, columns := range names {
 			go func(name string, columns [][]int64) {
-				if value, err := s.Metric(name).Get(start, end, interval, columns); err == nil {
+				m := s.Metric(name)
+				if m == nil {
+					queue <- []any{name, map[string]string{"error": "invalid name"}}
+					return
+				}
+				if value, err := m.Get(start, end, interval, columns); err == nil {
 					queue <- []any{name, value}
 
 				} else {
@@ -292,8 +302,9 @@ func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]i
 		}
 		for count > 0 {
 			entry := <-queue
-			// TODO cast?
-			result[entry[0].(string)] = entry[1]
+			if value, ok := entry[0].(string); ok {
+				result[value] = entry[1]
+			}
 			count--
 		}
 		close(queue)
@@ -353,7 +364,9 @@ func (m *metric) meta(create bool) error {
 		if len(m.columns) > MaxColumns {
 			return errors.New("mstore: too many columns")
 		}
-		os.MkdirAll(m.path, 0o700)
+		if err := os.MkdirAll(m.path, 0o700); err != nil {
+			return ustr.Wrap(err, "mstore")
+		}
 		if info, err := os.Stat(m.path); err != nil || !info.IsDir() {
 			return errors.New("mstore: invalid metric")
 		}
@@ -388,6 +401,7 @@ func (m *metric) meta(create bool) error {
 		m.frozen = true
 		return nil
 	}
+
 	return errors.New("mstore: invalid metric")
 }
 
@@ -628,6 +642,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 			}
 		}
 	}
+
 	return map[string]any{
 		"store":       m.store.prefix,
 		"name":        m.name,
@@ -824,8 +839,9 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		}
 		if _, exists := duplicates[(column[0]<<8)+aggregate]; !exists {
 			duplicates[(column[0]<<8)+aggregate] = true
-			// TODO cast?
-			result["columns"] = append(result["columns"].([][]any), []any{column[0], ModeNames[m.columns[column[0]].Mode], AggregateNames[aggregate], m.columns[column[0]].Description})
+			if _, ok := result["columns"].([][]any); ok {
+				result["columns"] = append(result["columns"].([][]any), []any{column[0], ModeNames[m.columns[column[0]].Mode], AggregateNames[aggregate], m.columns[column[0]].Description})
+			}
 			offset := int64(1)
 			if m.interval > 120 {
 				offset++
@@ -836,8 +852,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 			mapping = append(mapping, []int64{column[0], m.columns[column[0]].Mode, m.columns[column[0]].Size, offset, aggregate, lowest, highest})
 		}
 	}
-	// TODO cast?
-	if len(result["columns"].([][]any)) == 0 {
+	if value, ok := result["columns"].([][]any); !ok || len(value) == 0 {
 		return nil, errors.New("mstore: empty columns list")
 	}
 	if end.IsZero() || end.After(time.Now()) {
@@ -855,8 +870,9 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		if seconds/interval > maxSamples {
 			interval = int64(math.Ceil((float64(seconds)/float64(maxSamples))/float64(m.interval)) * float64(m.interval))
 		}
-		// TODO cast?
-		result["range"].([]int64)[0], result["range"].([]int64)[1] = start.Unix(), int64(interval)
+		if value, ok := result["range"].([]int64); ok && len(value) >= 2 {
+			value[0], value[1] = start.Unix(), int64(interval)
+		}
 
 		var data []byte
 		current, values, steps, msteps, step, offset, ptime := start, []any{}, interval/m.interval, make([]int, len(mapping)), int64(0), int64(0), int64(0)

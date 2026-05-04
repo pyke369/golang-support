@@ -499,7 +499,7 @@ func DecodePrefixes(in []byte, family Family, multipath bool) (out []string, cod
 			}
 			bits := int(in[offset])
 			length, prefix := int((bits+7)/8), ""
-			if offset+length > len(in) {
+			if offset+1+length > len(in) {
 				return
 			}
 			offset++

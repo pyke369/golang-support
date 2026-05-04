@@ -362,7 +362,7 @@ func lookup() {
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
 
-		case strings.HasPrefix(os.Args[index], `http`):
+		case strings.HasPrefix(os.Args[index], `http://`) || strings.HasPrefix(os.Args[index], `https://`):
 			lookup := map[string]any{}
 			rlookup(os.Args[index], "8.8.8.8", lookup)
 			if len(lookup) != 0 {
@@ -405,7 +405,7 @@ done:
 				os.Stderr.WriteString("database [" + os.Args[index] + "] failed (" + err.Error() + ")\n")
 			}
 
-		case strings.HasPrefix(os.Args[index], `http`):
+		case strings.HasPrefix(os.Args[index], `http://`) || strings.HasPrefix(os.Args[index], `https://`):
 			lookup := map[string]any{}
 			rlookup(os.Args[index], "8.8.8.8", lookup)
 			if len(lookup) != 0 {
@@ -533,6 +533,7 @@ func server() {
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       15 * time.Second,
 		MaxHeaderBytes:    4 << 10,
 	}
 	os.Stderr.WriteString("listen   [" + os.Args[2] + "]\n")

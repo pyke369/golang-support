@@ -380,6 +380,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 				if err != nil {
 					break
 				}
+
 				go func(remote net.Conn) {
 					address, reason := remote.RemoteAddr().String(), ""
 					if value, _, err := net.SplitHostPort(address); err == nil {
@@ -1027,7 +1028,9 @@ func (p *Peer) LocalCapabilities() (list []Capability) {
 }
 
 func (p *Peer) LocalCapability(in string) (capability Capability, exists bool) {
+	p.mu.RLock()
 	capability, exists = p.capabilities[capabilities[in]]
+	p.mu.RUnlock()
 
 	return
 }
@@ -1045,7 +1048,9 @@ func (p *Peer) PeerCapabilities() (list []Capability) {
 }
 
 func (p *Peer) PeerCapability(in string) (capability Capability, exists bool) {
+	p.mu.RLock()
 	capability, exists = p.peerCapabilities[capabilities[in]]
+	p.mu.RUnlock()
 
 	return
 }
@@ -1061,7 +1066,9 @@ func (p *Peer) LocalFamilies() (list []Family) {
 }
 
 func (p *Peer) LocalFamily(family Family) (exists bool) {
+	p.mu.RLock()
 	_, exists = p.families[family]
+	p.mu.RUnlock()
 
 	return
 }
@@ -1078,7 +1085,9 @@ func (p *Peer) PeerFamilies() (list []Family) {
 }
 
 func (p *Peer) PeerFamily(family Family) (exists bool) {
+	p.mu.RLock()
 	_, exists = p.peerFamilies[family]
+	p.mu.RUnlock()
 
 	return
 }
@@ -1494,12 +1503,15 @@ func (p *Peer) to(state string) {
 	p.mu.Lock()
 	from := p.state
 	p.state = state
-	p.mu.Unlock()
 	if state == stateEstablished && from != stateEstablished {
 		p.established = time.Now()
+		p.mu.Unlock()
 		if _, ok := p.LocalCapability("graceful-restart"); ok && p.eor {
 			p.EOR()
 		}
+
+	} else {
+		p.mu.Unlock()
 	}
 	p.dispatch("state", map[string]any{"from": from, "to": state, "reason": p.reason})
 	if state == stateIdle {
@@ -1517,10 +1529,11 @@ func (p *Peer) idle(remove ...bool) {
 		p.conn.Close()
 		p.conn = nil
 	}
-	p.mu.Unlock()
 	p.last, p.sent, p.received = time.Now(), time.Time{}, time.Time{}
 	p.peerCapabilities, p.peerFamilies, p.peerMultipath = map[int]Capability{}, map[Family]struct{}{}, map[Family]int{}
 	p.peerHold, p.peerASN4 = 0, 0
+	p.mu.Unlock()
+
 	p.to(stateIdle)
 	if p.template != nil || (len(remove) != 0 && remove[0]) {
 		p.mu.Lock()
@@ -1677,16 +1690,16 @@ bailout:
 		}
 
 		if !bytes.Equal(data[:16], marker) {
-			p.notification(notificationHeader, 1, "invalid marker x"+ustr.Hex(data[:16], ' '))
+			p.notification(notificationHeader, 1, "invalid marker")
 			break bailout
 		}
 		length, message := int(binary.BigEndian.Uint16(data[16:])), int(data[18])
 		if length < 19 {
-			p.notification(notificationHeader, 2, "invalid length "+strconv.Itoa(length))
+			p.notification(notificationHeader, 2, "invalid length")
 			break bailout
 		}
 		if message < messageOpen || message > messageRefresh {
-			p.notification(notificationHeader, 3, "invalid type "+strconv.Itoa(message))
+			p.notification(notificationHeader, 3, "invalid type")
 			break bailout
 		}
 		if length > 19 {

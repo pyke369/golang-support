@@ -194,7 +194,7 @@ func main() {
 					line += strconv.FormatInt(int64(j.Number(value)), 10)
 
 				case "text", "binary":
-					line += `"` + j.String(value) + `"`
+					line += `"` + ustr.Strip(j.String(value), `"\`+"\n\r") + `"`
 				}
 				if vindex < len(values)-2 {
 					line += ","

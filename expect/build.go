@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/rcache"
 )
 
@@ -51,7 +52,13 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 
 			} else {
 				b.WriteString(">\n")
-				if len(parameters) > 2 && !strings.Contains(value, "</"+key+">") {
+				raw := false
+				if len(parameters) > 2 {
+					if value, ok := parameters[2]["raw"]; ok && j.Boolean(value) {
+						raw = true
+					}
+				}
+				if raw && !strings.Contains(value, "</"+key+">") {
 					b.WriteString(value)
 
 				} else {

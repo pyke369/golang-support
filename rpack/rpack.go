@@ -30,11 +30,11 @@ type RPACK struct {
 	Modified int64
 	Mime     string
 	Content  string
+	mu       sync.Mutex
 	raw      []byte
 }
 
 var (
-	mu       sync.Mutex
 	x2ntable [32]uint32
 	guzpool  = sync.Pool{
 		New: func() any {
@@ -203,24 +203,29 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	if path.Ext(rpath) == "" {
 		rpath += ".html"
 	}
-	if pack == nil || pack[rpath] == nil {
+	if pack == nil {
+		return nil, "", 0, errors.New("rpack: resource not found")
+	}
+	entry := pack[rpath]
+	if entry == nil {
 		return nil, "", 0, errors.New("rpack: resource not found")
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if pack[rpath].raw == nil {
-		value, err := base64.StdEncoding.DecodeString(pack[rpath].Content)
+	entry.mu.Lock()
+	if entry.raw == nil {
+		value, err := base64.StdEncoding.DecodeString(entry.Content)
 		if err != nil {
 			return nil, "", 0, ustr.Wrap(err, "rpack")
 		}
-		pack[rpath].raw = value
+		entry.raw = value
 	}
-	content, ctype, modified = pack[rpath].raw, pack[rpath].Mime, pack[rpath].Modified
+	entry.mu.Unlock()
+
+	content, ctype, modified = entry.raw, entry.Mime, entry.Modified
 	if uncompress {
 		decompressor := guzpool.Get().(*gzip.Reader)
-		decompressor.Reset(bytes.NewReader(pack[rpath].raw))
-		content, err = io.ReadAll(io.LimitReader(decompressor, 64<<20))
+		decompressor.Reset(bytes.NewReader(entry.raw))
+		content, err = io.ReadAll(io.LimitReader(decompressor, 4<<20))
 		decompressor.Close()
 		guzpool.Put(decompressor)
 	}
@@ -243,8 +248,8 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			r.URL.Path += "index"
 		}
 		prefix, resources := path.Dir(r.URL.Path), strings.Split(path.Base(r.URL.Path), "+")
-		if len(resources) > 32 {
-			resources = resources[:32]
+		if len(resources) > 10 {
+			resources = resources[:10]
 		}
 
 		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
@@ -253,7 +258,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			uncompress = false
 		}
 		for index, resource := range resources {
-			rpath := strings.TrimPrefix(path.Join(prefix, resource), "/")
+			rpath := strings.TrimPrefix(path.Clean(path.Join(prefix, resource)), "/")
 			if minified && pack != nil && (strings.HasSuffix(rpath, ".js") || strings.HasSuffix(rpath, ".css")) && !strings.Contains(rpath, ".min.") {
 				ext := path.Ext(rpath)
 				if npath := strings.TrimSuffix(rpath, ext) + ".min" + ext; pack[npath] != nil {
@@ -310,8 +315,6 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 		}
 
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
-		rw.Header().Set("X-Frame-Options", "DENY")
-		rw.Header().Set("Content-Security-Policy", "default-src 'none'")
 		rw.Header().Set("Content-Type", ctype)
 		rw.Header().Set("Content-Length", strconv.Itoa(len(content)))
 		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))

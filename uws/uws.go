@@ -1,4 +1,4 @@
-//go:build go1.20
+//go:build go1.24
 
 package uws
 
@@ -79,7 +79,8 @@ type Socket struct {
 	Context                               any
 	config                                *Config
 	conn                                  net.Conn
-	connected, client, closing, errored   bool
+	connected, errored                    atomic.Bool
+	client, closing                       bool
 	wlock, slock, clock                   sync.Mutex
 	slast, rlast                          int64
 }
@@ -191,15 +192,19 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 							port = "80"
 						}
 					}
-					payload := "CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n"
+
+					request, err := http.NewRequest(http.MethodConnect, host+":"+port, http.NoBody)
+					if err != nil {
+						conn.Close()
+						return nil, ustr.Wrap(err, "uws")
+					}
 					if user := rproxy.User; user != nil {
 						password, _ := user.Password()
-						payload += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(user.Username()+":"+password)) + "\r\n"
+						request.SetBasicAuth(user.Username(), password)
 					}
-					payload += "\r\n"
 
 					conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start)))
-					if _, err := conn.Write([]byte(payload)); err != nil {
+					if err := request.Write(conn); err != nil {
 						conn.Close()
 						return nil, ustr.Wrap(err, "uws")
 					}
@@ -208,7 +213,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						response.Body.Close()
 						if response.StatusCode != 200 {
 							conn.Close()
-							return nil, errors.New("uws: proxy connection http status " + strconv.Itoa(response.StatusCode))
+							return nil, errors.New("uws: invalid proxy connection http status")
 						}
 
 					} else {
@@ -258,16 +263,16 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 						return nil, errors.New(`uws: could not negotiate sub-protocol with server`)
 					}
 					ws = &Socket{
-						Path:      path,
-						Origin:    origin,
-						Remote:    conn.RemoteAddr().String(),
-						Protocol:  protocol,
-						Context:   config.Context,
-						config:    config,
-						conn:      conn,
-						client:    true,
-						connected: true,
+						Path:     path,
+						Origin:   origin,
+						Remote:   conn.RemoteAddr().String(),
+						Protocol: protocol,
+						Context:  config.Context,
+						config:   config,
+						conn:     conn,
+						client:   true,
 					}
+					ws.connected.Store(true)
 					if config.OpenHandler != nil {
 						config.OpenHandler(ws)
 					}
@@ -294,6 +299,9 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 }
 
 func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bool, ws *Socket) {
+	if config == nil {
+		config = &Config{}
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") && strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
 		handled = true
 		if r.Method != http.MethodGet {
@@ -343,12 +351,12 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 				host = value
 			}
 			value, err := url.Parse(origin)
-			if err != nil || value.Hostname() != host {
+			if err != nil || !strings.EqualFold(value.Hostname(), host) {
 				rw.WriteHeader(http.StatusForbidden)
 				return
 			}
 
-		} else if !config.OriginHandler(origin) {
+		} else if origin == "" || !config.OriginHandler(origin) {
 			rw.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -387,16 +395,16 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 				}
 			}
 			ws = &Socket{
-				Path:      r.URL.Path,
-				Origin:    origin,
-				Agent:     r.Header.Get("User-Agent"),
-				Remote:    conn.RemoteAddr().String(),
-				Protocol:  protocol,
-				Context:   config.Context,
-				config:    config,
-				conn:      conn,
-				connected: true,
+				Path:     r.URL.Path,
+				Origin:   origin,
+				Agent:    r.Header.Get("User-Agent"),
+				Remote:   conn.RemoteAddr().String(),
+				Protocol: protocol,
+				Context:  config.Context,
+				config:   config,
+				conn:     conn,
 			}
+			ws.connected.Store(true)
 			if config.OpenHandler != nil {
 				config.OpenHandler(ws)
 			}
@@ -468,7 +476,7 @@ func (s *Socket) Close(code int) {
 		if s.config != nil && s.config.CloseHandler != nil {
 			s.config.CloseHandler(s, code)
 		}
-		if !s.errored {
+		if !s.errored.Load() {
 			payload := net.Buffers{[]byte{FIN | OPCODE_CLOSE, 0}}
 			if s.client {
 				payload[0][1] |= MASK
@@ -484,7 +492,7 @@ func (s *Socket) Close(code int) {
 			}
 			s.send(payload)
 		}
-		s.connected = false
+		s.connected.Store(false)
 		s.conn.Close()
 		return
 	}
@@ -494,7 +502,7 @@ func (s *Socket) Close(code int) {
 func (s *Socket) send(payload net.Buffers) (err error) {
 	s.slock.Lock()
 	defer s.slock.Unlock()
-	if !s.connected || s.errored {
+	if !s.connected.Load() || s.errored.Load() {
 		return errors.New(`uws: not connected`)
 	}
 	now := atomic.LoadInt64(&gnow)
@@ -503,7 +511,7 @@ func (s *Socket) send(payload net.Buffers) (err error) {
 		s.conn.SetWriteDeadline(time.UnixMicro(now / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
 	}
 	if _, err = payload.WriteTo(s.conn); err != nil {
-		s.errored = true
+		s.errored.Store(true)
 		s.Close(ERROR_ABNORMAL)
 	}
 	return

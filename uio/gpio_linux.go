@@ -133,7 +133,7 @@ func (g *GPIO) Lines() (lines []*GPIOLINE) {
 					}
 				}
 			}
-			for attribute := 0; attribute < int(info.num_attrs); attribute++ {
+			for attribute := 0; attribute < min(int(info.num_attrs), len(info.attrs)); attribute++ {
 				switch info.attrs[attribute].id {
 				case 1:
 					flags = []string{}

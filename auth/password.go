@@ -1,4 +1,4 @@
-//go:build go1.20
+//go:build go1.24
 
 package auth
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/pyke369/golang-support/file"
 	"github.com/pyke369/golang-support/uconfig"
+	"github.com/pyke369/golang-support/uhash"
 )
 
 // see https://akkadia.org/drepper/SHA-crypt.txt
@@ -139,19 +140,19 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 	return out + string(C[:86]), nil
 }
 
-func Password(in string, values []string) (match bool, entry string) {
+func Password(in string, values []string) bool {
 	if len(values) == 0 {
-		return false, ""
+		return false
 	}
 
-	login, password := "", in
+	login, password, checked := "", in, false
 	if parts := strings.SplitN(in, ":", 2); len(parts) >= 2 {
 		login, password = parts[0], parts[1]
 	}
 	for _, value := range values {
 		check := value
 		if login != "" {
-			if parts := strings.Split(check, ":"); len(parts) < 2 || subtle.ConstantTimeCompare([]byte(login), []byte(parts[0])) == 0 {
+			if parts := strings.Split(check, ":"); len(parts) < 2 || login != parts[0] {
 				continue
 
 			} else {
@@ -163,9 +164,10 @@ func Password(in string, values []string) (match bool, entry string) {
 		}
 
 		if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
+			checked = true
 			switch parts[1] {
 			case "6":
-				rounds, salt := 0, parts[2]
+				rounds, salt := 5000, parts[2]
 				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
 					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
 						rounds = value
@@ -174,27 +176,36 @@ func Password(in string, values []string) (match bool, entry string) {
 				}
 				if encrypted, err := Crypt512(password, salt, rounds); err == nil {
 					if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-						return true, value
+						return true
 					}
 				}
 
+			case "2", "2a":
+				// TODO add bcrypt support
+
 			case "y":
 				// TODO add yescrypt support
+
+			case "?":
+				// TODO add argon2 support
 			}
 		}
 	}
+	if !checked {
+		Crypt512(password, uhash.RandKey(16), 0)
+	}
 
-	return false, ""
+	return false
 }
 
-func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool, entry string) {
+func PasswordConfig(in string, config *uconfig.UConfig, path string) bool {
 	return Password(in, config.Strings(path))
 }
 
-func PasswordFile(in, path string) (match bool, entry string) {
+func PasswordFile(in, path string) bool {
 	lines := file.Read(path, map[string]any{"options": "trim comment"})
 	if len(lines) == 0 {
-		return false, ""
+		return false
 	}
 
 	return Password(in, lines)

@@ -2,9 +2,9 @@ package uconfig
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"hash/crc32"
 	"math"
 	"os"
 	"path/filepath"
@@ -25,7 +25,7 @@ type UConfig struct {
 	size      int
 	input     string
 	separator string
-	hash      uint32
+	hash      [32]byte
 	prefix    string
 	name      string
 	top       string
@@ -47,56 +47,9 @@ const (
 )
 
 var (
-	psep    = string(filepath.Separator)
-	esep    = []byte{'\n', ' ', '"', '>', '{', '}', '[', ']', ','}
-	options = map[string]string{}
+	psep = string(filepath.Separator)
+	esep = []byte{'\n', ' ', '"', '>', '{', '}', '[', ']', ','}
 )
-
-func init() {
-done:
-	for aindex, arg := range os.Args {
-		if aindex == 0 || arg == "-" || (arg != "" && arg[0] != '-') {
-			continue
-		}
-		if arg == "--" {
-			break
-		}
-		parts, index, negate := strings.Split(arg, "-"), 1, false
-		for index < len(parts) {
-			if parts[index] == "" {
-				index++
-				if index > 2 {
-					break done
-				}
-				continue
-			}
-			if strings.EqualFold(parts[index], "no") {
-				index++
-				negate = true
-				continue
-			}
-			sparts := strings.Split(parts[index], "=")
-			name := strings.ToLower(sparts[0])
-			if len(sparts) == 1 {
-				if !negate && aindex < len(os.Args)-1 && (os.Args[aindex+1] == "" || os.Args[aindex+1][0] != '-') {
-					options[name] = os.Args[aindex+1]
-
-				} else {
-					if negate {
-						options[name] = "false"
-
-					} else {
-						options[name] = "true"
-					}
-				}
-
-			} else {
-				options[name] = sparts[1]
-			}
-			break
-		}
-	}
-}
 
 func mode(char byte) int {
 	switch char {
@@ -512,33 +465,6 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							}
 							insert = append(insert, ']', ' ')
 
-						case '&': // environment value
-							value := ustr.Strip(os.Getenv(arg), ` "<>{}[]:,`)
-							insert = c.arena.Get(3 + 2*len(value) + 2)
-							insert = append(insert, ' ', ' ', '"')
-							insert = append(insert, value...)
-							insert = escape(insert, 3)
-							insert = append(insert, '"', ' ')
-
-						case '!': // argument value
-							value := ustr.Strip(options[strings.ToLower(arg)], ` "<>{}[]:,`)
-							insert = c.arena.Get(3 + 2*len(value) + 2)
-							insert = append(insert, ' ', ' ', '"')
-							insert = append(insert, value...)
-							insert = escape(insert, 3)
-							insert = append(insert, '"', ' ')
-
-						case '-': // program subname
-							value := ""
-							if index := strings.Index(os.Args[0], "-"); index >= 0 {
-								value = os.Args[0][index+1:]
-							}
-							insert = c.arena.Get(3 + 2*len(value) + 2)
-							insert = append(insert, ' ', ' ', '"')
-							insert = append(insert, value...)
-							insert = escape(insert, 3)
-							insert = append(insert, '"', ' ')
-
 						case '+', '*': // paths
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
@@ -756,7 +682,7 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 
 	// compute hash
 	defer c.arena.Put(payload)
-	source, hasher := c.arena.Get(1<<10), crc32.NewIEEE()
+	source, hasher := c.arena.Get(1<<10), sha256.New()
 	for _, char := range payload {
 		if char != ' ' {
 			if len(source) < cap(source) {
@@ -772,7 +698,8 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		hasher.Write(source)
 	}
 	c.arena.Put(source)
-	if hasher.Sum32() == c.hash {
+	hash := hasher.Sum(nil)
+	if bytes.Equal(hash, c.hash[:]) {
 		return nil
 	}
 
@@ -785,37 +712,63 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		}
 		return errors.New("uconfig: " + err.Error())
 	}
-	c.config, c.name, c.top, c.hash, c.cache = config, name, top, hasher.Sum32(), map[string]any{}
+	c.mu.Lock()
+	c.config, c.name, c.top = config, name, top
+	for index := 0; index < 32; index++ {
+		c.hash[index] = hash[index]
+	}
+	c.cache = map[string]any{}
+	c.mu.Unlock()
 
 	return nil
 }
 
 func (c *UConfig) Reload() (changed bool, err error) {
-	hash := c.hash
+	var hash [32]byte
+
+	c.mu.RLock()
+	for index := 0; index < 32; index++ {
+		hash[index] = c.hash[index]
+	}
+	c.mu.RUnlock()
 	if err = c.Load(c.input); err != nil {
 		return
 	}
 
-	return hash != c.hash, nil
+	return !bytes.Equal(hash[:], c.hash[:]), nil
 }
 
 func (c *UConfig) Loaded() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	return c.config != nil
 }
 
 func (c *UConfig) Name() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	return c.name
 }
 
 func (c *UConfig) Top() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	return c.top
 }
 
-func (c *UConfig) Hash() uint32 {
-	return c.hash
+func (c *UConfig) Hash() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return ustr.Hex(c.hash[:])
 }
 
 func (c *UConfig) Dump() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.config != nil {
 		config := &bytes.Buffer{}
 		encoder := json.NewEncoder(config)
@@ -860,6 +813,9 @@ func (c *UConfig) Base(path string) string {
 
 func (c *UConfig) Paths(path string) (paths []string) {
 	current := c.config
+	if current == nil {
+		return
+	}
 	if c.prefix != "" {
 		if path == "" {
 			path = c.prefix
@@ -867,9 +823,6 @@ func (c *UConfig) Paths(path string) (paths []string) {
 		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
 			path = prefix + path
 		}
-	}
-	if current == nil {
-		return
 	}
 
 	c.mu.RLock()
@@ -885,7 +838,9 @@ func (c *UConfig) Paths(path string) (paths []string) {
 		if part == "" {
 			continue
 		}
-
+		if current == nil {
+			return
+		}
 		switch reflect.TypeOf(current).Kind() {
 		case reflect.Slice:
 			index, err := strconv.Atoi(part)
@@ -934,6 +889,9 @@ func (c *UConfig) Paths(path string) (paths []string) {
 
 func (c *UConfig) Copy(path string) (out any) {
 	current := c.config
+	if current == nil {
+		return
+	}
 	if c.prefix != "" {
 		if path == "" {
 			path = c.prefix
@@ -942,11 +900,14 @@ func (c *UConfig) Copy(path string) (out any) {
 			path = prefix + path
 		}
 	}
-	if current == nil {
-		return
-	}
 
 	for _, part := range strings.Split(path, c.separator) {
+		if part == "" {
+			continue
+		}
+		if current == nil {
+			return
+		}
 		switch reflect.TypeOf(current).Kind() {
 		case reflect.Slice:
 			index, err := strconv.Atoi(part)
@@ -998,6 +959,9 @@ func (c *UConfig) value(path string) (out string, exists bool) {
 	c.mu.RUnlock()
 
 	for _, part := range strings.Split(path, c.separator) {
+		if current == nil {
+			return
+		}
 		switch reflect.TypeOf(current).Kind() {
 		case reflect.Slice:
 			index, err := strconv.Atoi(part)

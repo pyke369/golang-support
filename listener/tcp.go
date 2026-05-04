@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/crc32"
+	"maps"
 	"net"
 	"sync/atomic"
 	"syscall"
@@ -53,7 +54,7 @@ type TCPConn struct {
 	conn     *net.TCPConn
 	proxyed  atomic.Bool
 	tlsed    atomic.Bool
-	hijacked bool
+	hijacked atomic.Bool
 	local    *TCPAddr
 	remote   *TCPAddr
 	attrs    map[int][]byte
@@ -65,24 +66,37 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 		return 0, ustr.Wrap(err, "listener")
 	}
 
-	if !c.proxyed.Swap(true) {
+	// PROXYv2
+	if c.options.Proxy != nil && !c.proxyed.Swap(true) {
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
-			if size < 16+12 || n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
+			if n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
 				c.Close()
 				return 0, net.ErrClosed
 			}
 
-			if b[12] == 0x21 && c.options.Proxy != nil && c.options.Proxy(c, ProxyStart) {
+			if b[12] == 0x21 && c.options.Proxy(c, ProxyStart) {
 				switch {
-				case b[13]&0xf0 == 0x10 && offset <= n-12: // ipv4
-					c.remote = &TCPAddr{addr: net.IPv4(b[16], b[17], b[18], b[19]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[24:])))}
-					c.local = &TCPAddr{addr: net.IPv4(b[20], b[21], b[22], b[23]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[26:])))}
+				case b[13] == 0x11 && offset <= size-12: // ipv4
+					c.remote = &TCPAddr{
+						addr: net.IPv4(b[offset], b[offset+1], b[offset+2], b[offset+3]).String(),
+						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+8:]))),
+					}
+					c.local = &TCPAddr{
+						addr: net.IPv4(b[offset+4], b[offset+5], b[offset+6], b[offset+7]).String(),
+						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+10:]))),
+					}
 					offset += 12
 
-				case offset <= n-36: // ipv6
-					c.remote = &TCPAddr{addr: net.IP(b[16:32]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[48:])))}
-					c.local = &TCPAddr{addr: net.IP(b[32:48]).String(), port: ustr.Int(int(binary.BigEndian.Uint16(b[50:])))}
+				case b[13] == 0x21 && offset <= size-36: // ipv6
+					c.remote = &TCPAddr{
+						addr: net.IP(b[offset : offset+16]).String(),
+						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+32:]))),
+					}
+					c.local = &TCPAddr{
+						addr: net.IP(b[offset+16 : offset+32]).String(),
+						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+34:]))),
+					}
 					offset += 36
 
 				default:
@@ -95,7 +109,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 				}
 
 				for offset <= size-3 { // tlvs
-					if offset+3 > n {
+					if offset+3 > size {
 						c.Close()
 						return 0, net.ErrClosed
 					}
@@ -104,22 +118,21 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 						c.Close()
 						return 0, net.ErrClosed
 					}
-					if key != 4 {
+					if key != 4 { // NOOP
 						if c.attrs == nil {
 							c.attrs = map[int][]byte{}
 						}
 						value := make([]byte, length)
 						copy(value, b[offset+3:offset+3+length])
 						c.attrs[key] = value
-						if key == 3 && length >= 4 {
+						if key == 3 && length == 4 { // CRC32C
 							copy(b[offset+3:], []byte{0, 0, 0, 0})
 						}
 					}
 					offset += 3 + length
 				}
-
 				if c.attrs != nil {
-					if value, exists := c.attrs[3]; exists {
+					if value, exists := c.attrs[3]; exists { // CRC32C
 						delete(c.attrs, 3)
 						if crc32.Checksum(b[:size], proxyTable) != binary.BigEndian.Uint32(value) {
 							c.local, c.remote, c.attrs = nil, nil, nil
@@ -128,6 +141,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 						}
 					}
 				}
+
 				if !c.options.Proxy(c, ProxyAttr) {
 					c.Close()
 					return 0, net.ErrClosed
@@ -148,31 +162,43 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 		}
 	}
 
+	// TLS
 	if !c.tlsed.Swap(true) && c.options.TLS != nil {
-		if n >= 44 && b[0] == 0x16 && b[1] == 3 && b[2] >= 1 && b[5] == 1 && b[9] == 3 && b[10] >= 1 {
-			if offset := 44 + int(b[43]); offset < n-1 {
-				if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 {
-					offset += 2 + length
-					if offset < n {
-						offset += 1 + int(b[offset])
-						if offset < n-1 {
-							end := offset + 2 + int(binary.BigEndian.Uint16(b[offset:]))
-							offset += 2
-							end = min(end, n)
-							for offset <= end-4 {
-								key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
-								if offset+4+length < end {
-									if key == 0 && length >= 6 && b[offset+7] == 0 {
-										cb := make([]byte, n)
-										copy(cb, b[:n])
-										if c.options.TLS(c, string(b[offset+9:offset+4+length]), cb) {
-											c.hijacked = true
-											return 0, net.ErrClosed
+		if n >= 44 && b[0] == 0x16 && b[1] == 3 && b[2] >= 1 { // TLS1.0+ handshake
+			if b[5] == 1 { // ClientHello message
+				if b[9] == 3 && b[10] >= 1 { // TLS1.0+ client
+					offset := 43
+					if length := int(b[43]); offset+1+length < n-1 { // ignore session-id
+						offset += 1 + length
+						if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 && offset+2+length < n { // ignore cyphers
+							offset += 2 + length
+							if length := int(b[offset]); offset+1+length < n-1 { // ignore compression
+								offset += 1 + length
+								end := min(offset+2+int(binary.BigEndian.Uint16(b[offset:])), n)
+								offset += 2
+								for offset < end-4 { // extensions
+									key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
+									if key == 0x0000 { // SNI
+										if offset+4+length < end {
+											offset += 4
+											if int(binary.BigEndian.Uint16(b[offset:])) == length-2 {
+												offset += 2
+												if b[offset] == 0 { // DNS hostname
+													offset++
+													if int(binary.BigEndian.Uint16(b[offset:])) == length-5 {
+														offset += 2
+														if c.options.TLS(c, string(b[offset:offset+length-5]), b[:n]) {
+															c.hijacked.Store(true)
+															return 0, net.ErrClosed
+														}
+													}
+												}
+											}
 										}
 										break
 									}
+									offset += 4 + length
 								}
-								offset += 4 + length
 							}
 						}
 					}
@@ -189,7 +215,7 @@ func (c *TCPConn) Write(b []byte) (n int, err error) {
 }
 
 func (c *TCPConn) Close() error {
-	if c.hijacked {
+	if c.hijacked.Load() {
 		return nil
 	}
 
@@ -229,7 +255,7 @@ func (c *TCPConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *TCPConn) Attrs() map[int][]byte {
-	return c.attrs
+	return maps.Clone(c.attrs)
 }
 
 func (c *TCPConn) Attr(attr int) []byte {

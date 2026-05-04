@@ -40,7 +40,7 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 
 	if len(extra) > 0 {
 		if value, ok := extra[0]["timeout"].(int); ok {
-			timeout = time.Duration(max(1, min(60, value))) * time.Second
+			timeout = time.Duration(max(1, min(20, value))) * time.Second
 		}
 		if value, ok := extra[0]["combined"].(bool); ok {
 			combined = value
@@ -79,10 +79,14 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 	}
 
 	if combined {
-		content, _ = cmd.CombinedOutput()
+		if content, err = cmd.CombinedOutput(); err != nil {
+			return
+		}
 
 	} else {
-		content, _ = cmd.Output()
+		if content, err = cmd.Output(); err != nil {
+			return
+		}
 	}
 
 	if options&ustr.OptionJSON != 0 {

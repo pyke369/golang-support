@@ -31,10 +31,9 @@ type DYNACERT struct {
 
 func (d *DYNACERT) Add(match, public, private string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
-	d.last = time.Now().Add(-time.Minute).UnixNano()
+	d.mu.Unlock()
+	atomic.StoreInt64(&d.last, time.Now().Add(-time.Minute).UnixNano())
 }
 
 func (d *DYNACERT) Inline(match string, public, private []byte) error {
@@ -63,26 +62,12 @@ func (d *DYNACERT) Count() int {
 	return len(d.certs)
 }
 
-func (d *DYNACERT) Get(match string) (public, private string) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	for _, cert := range d.certs {
-		if cert.match == match {
-			public, private = cert.public, cert.private
-			break
-		}
-	}
-
-	return
-}
-
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
 	if time.Now().UnixNano()-atomic.LoadInt64(&d.last) >= int64(15*time.Second) {
 		var info os.FileInfo
 
+		atomic.StoreInt64(&d.last, time.Now().UnixNano())
 		d.mu.Lock()
-		d.last = time.Now().UnixNano()
 		for _, cert := range d.certs {
 			if cert.inline {
 				continue
@@ -128,7 +113,7 @@ func (d *DYNACERT) TLSConfig(in ...*tls.Config) (out *tls.Config) {
 		out = in[0].Clone()
 
 	} else {
-		out = &tls.Config{MinVersion: tls.VersionTLS13}
+		out = &tls.Config{}
 	}
 	out.MinVersion, out.GetCertificate = tls.VersionTLS13, d.GetCertificate
 	return

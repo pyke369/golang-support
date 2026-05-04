@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pyke369/golang-support/ustr"
@@ -103,7 +104,7 @@ func SerialProbe(path string) (active bool, err error) {
 		return false, ustr.Wrap(err, "uio")
 	}
 
-	handle, err := unix.Open(path, os.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
+	handle, err := unix.Open(path, os.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return false, ustr.Wrap(err, "uio")
 	}
@@ -122,7 +123,7 @@ func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string)
 		return nil, ustr.Wrap(err, "uio")
 	}
 
-	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
+	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, ustr.Wrap(err, "uio")
 	}

@@ -1,9 +1,10 @@
-//go:build go1.20
+//go:build go1.24
 
 package uhash
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"math/big"
@@ -54,6 +55,10 @@ func Hash128(in []byte) (out [16]byte) {
 	}
 
 	return
+}
+
+func Hash256(in []byte) (out [32]byte) {
+	return sha256.Sum256(in)
 }
 
 func CRC16(inputs ...[]byte) uint16 {

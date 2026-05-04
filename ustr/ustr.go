@@ -1,5 +1,3 @@
-//go:build go1.20
-
 package ustr
 
 import (
@@ -267,10 +265,8 @@ func Range(in string, extra ...int) (out []int) {
 				}
 
 			} else {
+				end = min(end, start+count)
 				for index := start; index <= end; index++ {
-					if len(list) >= count {
-						break
-					}
 					if (lower < 0 || (lower >= 0 && index >= lower)) && (upper < 0 || (upper >= 0 && index <= upper)) {
 						list[index] = struct{}{}
 					}

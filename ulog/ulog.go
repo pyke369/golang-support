@@ -174,8 +174,8 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 			go func() {
 				l.mu.RLock()
 				if l.purgePath != "" && (l.purgeAge > 0 || l.purgeCount > 0) {
-					go func() {
-						if paths, err := filepath.Glob(l.purgePath); err == nil {
+					go func(root string, age time.Duration, count int) {
+						if paths, err := filepath.Glob(root); err == nil {
 							entries := []*fileOutput{}
 							for _, path := range paths {
 								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
@@ -186,27 +186,27 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 								return entries[i].last.After(entries[j].last)
 							})
 							for index, entry := range entries {
-								if l.purgeAge > 0 && time.Since(entry.last) >= l.purgeAge {
+								if age > 0 && time.Since(entry.last) >= age {
 									os.Remove(entry.path)
 									os.Remove(filepath.Dir(entry.path))
 								}
-								if l.purgeCount > 0 && index >= l.purgeCount {
+								if count > 0 && index >= count {
 									os.Remove(entry.path)
 									os.Remove(filepath.Dir(entry.path))
 								}
 							}
 						}
-					}()
+					}(l.purgePath, l.purgeAge, l.purgeCount)
 				}
 				if l.compressPath != "" && l.compressAge > 0 {
-					go func() {
-						if paths, err := filepath.Glob(l.compressPath); err == nil {
+					go func(root string, age time.Duration) {
+						if paths, err := filepath.Glob(root); err == nil {
 							start := time.Now()
 							for _, path := range paths {
-								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= l.compressAge {
+								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= age {
 									ok := false
 									if source, err := os.Open(path); err == nil {
-										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600); err == nil {
+										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR|O_NOFOLLOW, 0o600); err == nil {
 											gzwriter := gzip.NewWriter(target)
 											_, err := io.Copy(gzwriter, source)
 											gzwriter.Close()
@@ -231,7 +231,7 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 								}
 							}
 						}
-					}()
+					}(l.compressPath, l.compressAge)
 				}
 				l.mu.RUnlock()
 			}()
@@ -599,7 +599,12 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 
 	}
 	if layout, ok := in.(string); ok {
-		content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
+		if len(a) == 0 {
+			content = fmt.Appendf(content, "%s", layout)
+
+		} else {
+			content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
+		}
 		content = bytes.ReplaceAll(content, []byte("\n"), []byte{})
 		content = bytes.ReplaceAll(content, []byte("\r"), []byte{})
 		content = bytes.ReplaceAll(content, []byte("\t"), []byte{})
@@ -665,9 +670,10 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 
 		l.mu.Lock()
 		if _, exists := l.fileOutputs[path]; !exists {
-			os.MkdirAll(filepath.Dir(path), 0o700)
-			if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o600); err == nil {
-				l.fileOutputs[path] = &fileOutput{handle: handle}
+			if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
+				if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK|O_NOFOLLOW, 0o600); err == nil {
+					l.fileOutputs[path] = &fileOutput{handle: handle}
+				}
 			}
 		}
 		if output, exists := l.fileOutputs[path]; exists {

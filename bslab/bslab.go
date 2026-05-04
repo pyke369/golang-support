@@ -51,6 +51,7 @@ func New(extra ...map[string]any) *Arena {
 			}
 		}
 	}
+
 	return a
 }
 
@@ -71,7 +72,7 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 			out = item[:0]
 		}
 		if out == nil {
-			Put(item)
+			a.Put(item)
 		}
 	}
 	if out == nil {
@@ -82,6 +83,9 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 		for size != 0 {
 			size >>= 1
 			bits++
+		}
+		if bits-power > 26 {
+			return nil
 		}
 		size = 1 << (bits - power)
 		if slab, exists := a.slabs[size]; exists {
@@ -202,6 +206,7 @@ func (a *Arena) Stat() *Info {
 			atomic.LoadUint64(&(slab.put)),
 		}
 	}
+
 	return info
 }
 
@@ -253,5 +258,6 @@ func (i *Info) String() string {
 	out = append(out, ustr.String(hsize(lost), 29)...)
 	out = append(out, '\n')
 	out = append(out, "------------------------------------------------------------------------------\n"...)
+
 	return string(out)
 }

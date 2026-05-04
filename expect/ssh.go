@@ -36,6 +36,7 @@ type SSHOptions struct {
 	Pty            bool
 	Prompt         string
 	Filter         string
+	MaxLines       int
 	KnownHosts     string
 	AcceptHandler  func(string, net.Addr, ssh.PublicKey) bool
 }
@@ -226,7 +227,9 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 					if c.options.Filter != "" && filter.Match(line) {
 						continue
 					}
-					lines = append(lines, string(line))
+					if c.options.MaxLines == 0 || len(lines) < c.options.MaxLines {
+						lines = append(lines, string(line))
+					}
 					continue
 				}
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
@@ -31,7 +30,7 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 		}
 	}
 
-	handle, err := os.Open(path)
+	handle, err := os.OpenFile(path, os.O_RDONLY|O_NOFOLLOW, 0)
 	if err != nil {
 		return
 	}
@@ -65,12 +64,14 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 }
 
 func Write(path string, lines []string, extra ...string) error {
-	flags := os.O_WRONLY | syscall.O_NOFOLLOW
+	flags := os.O_WRONLY | O_NOFOLLOW
 	if len(extra) > 0 {
 		extra[0] = strings.ToLower(strings.TrimSpace(extra[0]))
 		if strings.Contains(extra[0], "creat") {
 			if strings.Contains(extra[0], "dir") {
-				os.MkdirAll(filepath.Dir(path), 0o700)
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					return ustr.Wrap(err, "file")
+				}
 			}
 			flags |= os.O_CREATE
 		}
@@ -101,7 +102,7 @@ func Touch(path string, extra ...string) {
 			os.MkdirAll(filepath.Dir(path), 0o700)
 		}
 	}
-	if handle, err := os.OpenFile(path, os.O_CREATE|syscall.O_NOFOLLOW, 0o600); err == nil {
+	if handle, err := os.OpenFile(path, os.O_CREATE|O_NOFOLLOW, 0o600); err == nil {
 		handle.Close()
 	}
 }
@@ -137,7 +138,7 @@ func Link(path string) (base string) {
 }
 
 func Sum(path string) (sum string, size int64) {
-	handle, err := os.Open(path)
+	handle, err := os.OpenFile(path, os.O_RDONLY|O_NOFOLLOW, 0)
 	if err != nil {
 		return
 	}
@@ -156,14 +157,14 @@ func Sum(path string) (sum string, size int64) {
 }
 
 func Copy(source, target string, extra ...bool) (err error) {
-	tflags := os.O_RDWR | os.O_EXCL
+	tflags := os.O_RDWR | os.O_EXCL | O_NOFOLLOW
 	if len(extra) > 0 {
 		if extra[0] {
 			tflags |= os.O_CREATE
 		}
 	}
 
-	shandle, err := os.Open(source)
+	shandle, err := os.OpenFile(source, os.O_RDONLY|O_NOFOLLOW, 0)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
@@ -188,7 +189,7 @@ func Copy(source, target string, extra ...bool) (err error) {
 		return errors.New("file: source size > target size")
 	}
 
-	copied, err := io.Copy(thandle, shandle)
+	copied, err := io.CopyN(thandle, shandle, ssize)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
