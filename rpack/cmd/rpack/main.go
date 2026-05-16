@@ -22,6 +22,7 @@ func main() {
 	options.String("output", "resources.go", "the generated output file path")
 	options.String("pkgname", "main", "the package name to use in the generated output")
 	options.String("funcname", "Resources", "the function name prefix to use in the generated output")
+	options.String("include", "", "an optionnal pattern of paths to include")
 	options.String("exclude", "", "an optionnal pattern of paths to exclude")
 	options.Bool("minified", false, "wheter to auto-use minified versions of .js/.css files or not")
 	if err := options.Parse(os.Args[1:]); err != nil {
@@ -38,6 +39,7 @@ func main() {
 		options.Lookup("output").Value.String(),
 		options.Lookup("pkgname").Value.String(),
 		options.Lookup("funcname").Value.String(),
+		options.Lookup("include").Value.String(),
 		options.Lookup("exclude").Value.String(),
 		minified,
 	)

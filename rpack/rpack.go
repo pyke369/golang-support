@@ -93,8 +93,11 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // 🔔 /SHAME! 🔔
 
-func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
-	var excluder *regexp.Regexp
+func Pack(root, out, pkgname, funcname, include, exclude string, minified bool) {
+	var (
+		includer *regexp.Regexp
+		excluder *regexp.Regexp
+	)
 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
 		return
@@ -106,6 +109,9 @@ func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
 
 	if funcname == "" {
 		funcname = "Resources"
+	}
+	if include != "" {
+		includer = rcache.Get(include)
 	}
 	if exclude != "" {
 		excluder = rcache.Get(exclude)
@@ -125,6 +131,9 @@ func Pack(root, out, pkgname, funcname, exclude string, minified bool) {
 		}
 		rpath := strings.Trim(strings.TrimPrefix(path, root), "/")
 
+		if includer != nil && !includer.MatchString(rpath) {
+			return nil
+		}
 		if excluder != nil && excluder.MatchString(rpath) {
 			return nil
 		}
