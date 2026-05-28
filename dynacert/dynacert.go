@@ -62,6 +62,19 @@ func (d *DYNACERT) Count() int {
 	return len(d.certs)
 }
 
+func (d *DYNACERT) Get(match string) (public, private string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, cert := range d.certs {
+		if cert.match == match {
+			return cert.public, cert.private
+		}
+	}
+
+	return
+}
+
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
 	if time.Now().UnixNano()-atomic.LoadInt64(&d.last) >= int64(15*time.Second) {
 		var info os.FileInfo
