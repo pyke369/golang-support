@@ -300,14 +300,19 @@ func (l *TCPListener) Addr() (addr net.Addr) {
 	return l.listener.Addr()
 }
 
-func NewTCPListener(network, address string, options *TCPOptions) (listener *TCPListener, err error) {
+func NewTCPListener(network, address string, extra ...*TCPOptions) (listener *TCPListener, err error) {
+	options := &TCPOptions{}
+	if len(extra) != 0 && extra[0] != nil {
+		options = extra[0]
+	}
 	config := net.ListenConfig{
 		Control: func(network, address string, conn syscall.RawConn) error {
 			conn.Control(func(handle uintptr) {
-				reuse(handle, options != nil && options.Reuse)
+				reuse(handle, options.Reuse)
 			})
 			return nil
-		}}
+		},
+	}
 	clistener, err := config.Listen(context.Background(), network, address)
 	if err != nil {
 		return nil, ustr.Wrap(err, "listener")

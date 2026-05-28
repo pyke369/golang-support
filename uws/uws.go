@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -347,6 +348,10 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 		}
 		if config.OriginHandler == nil {
 			host := r.Host
+			if host == "" {
+				rw.WriteHeader(http.StatusForbidden)
+				return
+			}
 			if value, _, err := net.SplitHostPort(host); err == nil {
 				host = value
 			}
@@ -598,7 +603,7 @@ close:
 							break readmore
 						}
 						rsize := binary.BigEndian.Uint64(buffer[roffset+2:])
-						if rsize > uint64(s.config.MessageSize) {
+						if rsize > uint64(s.config.MessageSize) || rsize > uint64(math.MaxInt) {
 							code = ERROR_OVERSIZED
 							break close
 						}

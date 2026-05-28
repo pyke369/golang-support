@@ -30,7 +30,7 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 		}
 	}
 
-	handle, err := os.OpenFile(path, os.O_RDONLY|O_NOFOLLOW, 0)
+	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return
 	}
@@ -138,7 +138,7 @@ func Link(path string) (base string) {
 }
 
 func Sum(path string) (sum string, size int64) {
-	handle, err := os.OpenFile(path, os.O_RDONLY|O_NOFOLLOW, 0)
+	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return
 	}
@@ -164,7 +164,7 @@ func Copy(source, target string, extra ...bool) (err error) {
 		}
 	}
 
-	shandle, err := os.OpenFile(source, os.O_RDONLY|O_NOFOLLOW, 0)
+	shandle, err := os.OpenFile(source, os.O_RDONLY, 0)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}

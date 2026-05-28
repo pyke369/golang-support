@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pyke369/golang-support/file"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
 	"github.com/pyke369/golang-support/uhash"
 )
@@ -34,6 +35,9 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 		out += "rounds=" + strconv.Itoa(rounds) + "$"
 	}
 	salt = salt[:min(16, len(salt))]
+	if salt != "" && !rcache.Get(`^[\./0-9A-Za-z]{1,16}$`).MatchString(salt) {
+		return "", errors.New("auth: invalid salt")
+	}
 	if salt == "" {
 		value := make([]byte, 12)
 		rand.Read(value)

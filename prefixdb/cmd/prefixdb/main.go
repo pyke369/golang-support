@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/csv"
 	"encoding/json"
 	"io"
@@ -43,7 +44,12 @@ var (
 	jsonMatcher = regexp.MustCompile(`^(\S+)(?:\s(\{.+?\}))?$`)
 	ouiMatcher  = regexp.MustCompile(`(?i)^([0-9a-f]{1,2})(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?(?::([0-9a-f]{1,2}))?$`)
 	pfdb        = prefixdb.New()
-	client      = &http.Client{Timeout: 5 * time.Second}
+	client      = &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13},
+		},
+	}
 )
 
 func size(in int) string {
@@ -535,6 +541,7 @@ func server() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       15 * time.Second,
 		MaxHeaderBytes:    4 << 10,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13},
 	}
 	os.Stderr.WriteString("listen   [" + os.Args[2] + "]\n")
 	for {

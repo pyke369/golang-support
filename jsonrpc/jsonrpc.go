@@ -90,8 +90,8 @@ var httpDefaultTransport *http.Transport
 
 func init() {
 	httpDefaultTransport = http.DefaultTransport.(*http.Transport).Clone()
-	httpDefaultTransport.MaxIdleConnsPerHost = 64
-	httpDefaultTransport.IdleConnTimeout = 60 * time.Second
+	httpDefaultTransport.MaxIdleConnsPerHost = 16
+	httpDefaultTransport.IdleConnTimeout = time.Minute
 	httpDefaultTransport.DisableCompression = true
 	httpDefaultTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 }
@@ -265,11 +265,10 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 }
 
 func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, extra ...any) (out []byte) {
-	in = bytes.TrimSpace(in)
-	out = []byte{}
+	in, out = bytes.TrimSpace(in), []byte{}
 	batch := true
 	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
-	if len(in) == 0 {
+	if len(in) == 0 || len(in) > 256<<10 {
 		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 	} else {
@@ -282,11 +281,11 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 		} else {
-			if len(requests) == 0 || len(requests) > 64 || requests[0].JSONRPC == "" {
+			if len(requests) == 0 || len(requests) > 16 || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 
 			} else {
-				running, sink := 0, make(chan *RESPONSE, 64)
+				running, sink := 0, make(chan *RESPONSE, 16)
 				for _, request := range requests {
 					_, ok1 := request.Id.(string)
 					_, ok2 := request.Id.(float64)

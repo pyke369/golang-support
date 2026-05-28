@@ -221,7 +221,7 @@ func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 }
 
 func (s *Store) Metric(name string) *metric {
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.Trim(name, ".") == "" || strings.Contains(name, "..") {
+	if !rcache.Get(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`).MatchString(name) {
 		return nil
 	}
 	s.mu.Lock()
@@ -1141,7 +1141,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 						}
 						if item[4] == AggregatePercentile {
 							if item[1] == ModeGauge || item[1] == ModeCounter || item[1] == ModeIncrement {
-								// TODO cast?
+								// TODO cast
 								list, total := make([][2]int64, 0, len(values[index].(map[string]int))), 0
 								for key, count := range values[index].(map[string]int) {
 									if value, err := strconv.ParseInt(key, 10, 64); err == nil {
@@ -1179,7 +1179,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 							}
 
 						} else if item[4] != AggregateHistogram {
-							// TODO cast?
+							// TODO cast
 							if item[1] == ModeText {
 								values[index] = string(values[index].([]byte))
 
@@ -1190,11 +1190,11 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 					}
 				}
 				if len(prepend) != 0 && prepend[0] {
-					// TODO cast?
+					// TODO cast
 					result["values"] = append(result["values"].([]any), append([]any{ptime}, values...))
 
 				} else {
-					// TODO cast?
+					// TODO cast
 					result["values"] = append(result["values"].([]any), values)
 				}
 				values, msteps, step = []any{}, make([]int, len(mapping)), 0

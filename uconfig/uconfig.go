@@ -23,6 +23,8 @@ import (
 
 type UConfig struct {
 	size      int
+	inline    bool
+	root      string
 	input     string
 	separator string
 	hash      [32]byte
@@ -225,17 +227,20 @@ func expand(in []byte, extra ...int) (out []byte) {
 }
 
 func New(in string, extra ...map[string]any) (config *UConfig, err error) {
-	inline, arena := false, bslab.Default
+	inline, root, arena := false, "", bslab.Default
 	if len(extra) != 0 && extra[0] != nil {
 		if value, ok := extra[0]["inline"].(bool); ok {
 			inline = value
+		}
+		if value, ok := extra[0]["root"].(string); ok && value != "" {
+			root = value
 		}
 		if value, ok := extra[0]["arena"].(*bslab.Arena); ok {
 			arena = value
 		}
 	}
-	config = &UConfig{size: 64 << 10, input: in, separator: ".", arena: arena}
-	err = config.Load(in, inline)
+	config = &UConfig{size: 64 << 10, inline: inline, root: root, input: in, separator: ".", arena: arena}
+	err = config.Load(in)
 
 	return config, ustr.Wrap(err, "uconfig")
 }
@@ -252,13 +257,13 @@ func (c *UConfig) GetPrefix() string {
 	return c.prefix
 }
 
-func (c *UConfig) Load(in string, inline ...bool) error {
+func (c *UConfig) Load(in string) error {
 	base, _ := os.Getwd()
-	payload, name, top := c.arena.Get(max(c.size, 3+len(base)+3+len(in))), "", ""
+	payload, name, top, root := c.arena.Get(max(c.size, 3+len(base)+3+len(in))), "", "", c.root
 	payload = append(payload, '<', '<', '%')
 	payload = append(payload, base...)
 	payload = append(payload, '>', '>', ' ')
-	if len(inline) > 0 && inline[0] {
+	if c.inline {
 		payload = append(payload, in...)
 
 	} else {
@@ -269,6 +274,9 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 		payload = append(payload, '<', '<', '~')
 		payload = append(payload, in...)
 		payload = append(payload, '>', '>')
+		if root == "" {
+			root = top
+		}
 	}
 
 	// remove commented-out sections and expand macros
@@ -332,46 +340,37 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 						var insert []byte
 
 						switch macro {
-						case '~', '/': // files content
+						case '~': // files content
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							sizes, size := map[string]int{}, 0
-							paths, err := filepath.Glob(arg)
-							if err == nil {
-								for _, path := range paths {
-									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-										sizes[path] = int(info.Size())
-										size += 4 + len(path) + 4 + 3*int(info.Size()) + 4 + len(base) + 3
-										if macro == '/' {
-											size += len(path) + 7*strings.Count(path, psep)
+							arg = filepath.Clean(arg)
+
+							paths, sizes, size := []string{}, map[string]int{}, 0
+							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+								if values, err := filepath.Glob(arg); err == nil {
+									for _, value := range values {
+										info, err := os.Stat(value)
+										if err != nil || !info.Mode().IsRegular() {
+											continue
 										}
+										link, err := filepath.EvalSymlinks(value)
+										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+											continue
+										}
+										sizes[value] = int(info.Size())
+										size += 4 + len(value) + 4 + 3*int(info.Size()) + 4 + len(base) + 3
+										paths = append(paths, value)
 									}
 								}
 							}
 							if size != 0 {
 								insert = c.arena.Get(size)
 								for _, path := range paths {
-									nbase, parts := filepath.Dir(path), []string{}
+									nbase := filepath.Dir(path)
 									insert = append(insert, ' ', '<', '<', '%')
 									insert = append(insert, nbase...)
 									insert = append(insert, '>', '>', '\n', ' ')
-									if macro == '/' {
-										index := 0
-										for index < min(len(nbase), len(arg)) {
-											if nbase[index] != arg[index] {
-												break
-											}
-											index++
-										}
-										if nbase = nbase[index:]; nbase != "" {
-											parts = strings.Split(nbase, psep)
-											for _, part := range parts {
-												insert = append(insert, part...)
-												insert = append(insert, ' ', ':', ' ', '{', ' ')
-											}
-										}
-									}
 									if handle, err := os.Open(path); err == nil {
 										start := len(insert)
 										insert = insert[:start+sizes[path]]
@@ -382,9 +381,6 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 											insert = expand(insert, start)
 										}
 										handle.Close()
-									}
-									for index := 0; index < len(parts); index++ {
-										insert = append(insert, ' ', '}')
 									}
 									insert = append(insert, ' ', '<', '<', '%')
 									insert = append(insert, base...)
@@ -397,14 +393,24 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							sizes, size, empty := map[string]int{}, 0, true
-							paths, err := filepath.Glob(arg)
-							if err == nil {
-								for _, path := range paths {
-									if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+							arg = filepath.Clean(arg)
+
+							paths, sizes, size, empty := []string{}, map[string]int{}, 0, true
+							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+								if values, err := filepath.Glob(arg); err == nil {
+									for _, value := range values {
+										info, err := os.Stat(value)
+										if err != nil || !info.Mode().IsRegular() {
+											continue
+										}
+										link, err := filepath.EvalSymlinks(value)
+										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+											continue
+										}
 										lsize := max(256, int(info.Size()))
-										sizes[path] = lsize
+										sizes[value] = lsize
 										size += lsize + 5*(lsize/2)
+										paths = append(paths, value)
 									}
 								}
 							}
@@ -469,11 +475,19 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							size := 0
-							paths, err := filepath.Glob(arg)
-							if err == nil {
-								for _, path := range paths {
-									size += 1 + 2*len(path) + 1
+							arg = filepath.Clean(arg)
+
+							paths, size := []string{}, 0
+							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+								if values, err := filepath.Glob(arg); err == nil {
+									for _, value := range values {
+										link, err := filepath.EvalSymlinks(value)
+										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+											continue
+										}
+										size += 1 + 2*len(value) + 1
+										paths = append(paths, value)
+									}
 								}
 							}
 							insert = c.arena.Get(4 + size + len(paths)*3 + 2)
@@ -495,17 +509,6 @@ func (c *UConfig) Load(in string, inline ...bool) error {
 								insert = insert[:len(insert)-2]
 							}
 							insert = append(insert, ']', ' ')
-
-						case '_': // configuration basename
-							value := ""
-							if len(inline) == 0 || !inline[0] {
-								value = filepath.Base(in)
-							}
-							insert = c.arena.Get(3 + 2*len(value) + 2)
-							insert = append(insert, ' ', ' ', '"')
-							insert = append(insert, value...)
-							insert = escape(insert, 3)
-							insert = append(insert, '"', ' ')
 						}
 
 						payload = grow(payload, len(insert)-(cindex+1-mstart), c.arena)
