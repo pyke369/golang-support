@@ -140,9 +140,9 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 	return out + string(C[:86]), nil
 }
 
-func Password(in string, values []string) bool {
+func Password(in string, values []string) (match bool, entry string) {
 	if len(values) == 0 {
-		return false
+		return false, ""
 	}
 
 	login, password, checked := "", in, false
@@ -176,7 +176,14 @@ func Password(in string, values []string) bool {
 				}
 				if encrypted, err := Crypt512(password, salt, rounds); err == nil {
 					if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-						return true
+						parts := strings.Split(value, ":")
+						if len(parts) >= 2 {
+							parts[1] = "*"
+
+						} else {
+							parts[0] = "*"
+						}
+						return true, strings.Join(parts, ":")
 					}
 				}
 
@@ -195,17 +202,17 @@ func Password(in string, values []string) bool {
 		Crypt512(password, uhash.RandKey(16), 0)
 	}
 
-	return false
+	return false, ""
 }
 
-func PasswordConfig(in string, config *uconfig.UConfig, path string) bool {
+func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool, entry string) {
 	return Password(in, config.Strings(path))
 }
 
-func PasswordFile(in, path string) bool {
+func PasswordFile(in, path string) (match bool, entry string) {
 	lines := file.Read(path, map[string]any{"options": "trim comment"})
 	if len(lines) == 0 {
-		return false
+		return false, ""
 	}
 
 	return Password(in, lines)
