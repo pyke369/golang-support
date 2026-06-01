@@ -221,3 +221,7 @@ func PasswordFile(in, path string) (match bool, entry string) {
 
 	return Password(in, lines)
 }
+
+func PasswordEntropy(in string) float64 {
+	return 0
+}

@@ -513,6 +513,9 @@ func server() {
 		if value, err := netip.ParseAddrPort(remote); err == nil {
 			remote = value.Addr().String()
 		}
+		if value := r.Header.Get("X-Forwarded-For"); value != "" {
+			remote = strings.Split(value, ",")[0]
+		}
 		parameters := r.URL.Query()
 		if value := parameters.Get("remote"); value != "" {
 			remote = value

@@ -623,3 +623,15 @@ func Transform(in string, options int) string {
 
 	return in
 }
+
+func Reverse(in string) string {
+	size := len(in)
+	out := make([]byte, size)
+	for start := 0; start < size; {
+		r, n := utf8.DecodeRuneInString(in[start:])
+		start += n
+		utf8.EncodeRune(out[size-start:], r)
+	}
+
+	return string(out)
+}
