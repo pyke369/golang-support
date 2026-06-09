@@ -83,7 +83,6 @@ type Socket struct {
 	connected, errored                    atomic.Bool
 	client, closing                       bool
 	wlock, slock, clock                   sync.Mutex
-	slast, rlast                          int64
 }
 
 var (
@@ -361,7 +360,7 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 				return
 			}
 
-		} else if origin == "" || !config.OriginHandler(origin) {
+		} else if !config.OriginHandler(origin) {
 			rw.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -510,11 +509,7 @@ func (s *Socket) send(payload net.Buffers) (err error) {
 	if !s.connected.Load() || s.errored.Load() {
 		return errors.New(`uws: not connected`)
 	}
-	now := atomic.LoadInt64(&gnow)
-	if time.Duration(now-s.slast) >= time.Second {
-		s.slast = now
-		s.conn.SetWriteDeadline(time.UnixMicro(now / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
-	}
+	s.conn.SetWriteDeadline(time.UnixMicro(atomic.LoadInt64(&gnow) / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout)))
 	if _, err = payload.WriteTo(s.conn); err != nil {
 		s.errored.Store(true)
 		s.Close(ERROR_ABNORMAL)
@@ -543,11 +538,7 @@ close:
 			roffset = 0
 		}
 
-		now := atomic.LoadInt64(&gnow)
-		if time.Duration(now-s.rlast) >= time.Second {
-			s.rlast = now
-			s.conn.SetReadDeadline(time.UnixMicro(now / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout)))
-		}
+		s.conn.SetReadDeadline(time.UnixMicro(atomic.LoadInt64(&gnow) / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout)))
 		if buffered != nil {
 			read, err = buffered.Read(buffer[woffset:])
 			buffered = nil

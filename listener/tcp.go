@@ -63,7 +63,7 @@ type TCPConn struct {
 func (c *TCPConn) Read(b []byte) (n int, err error) {
 	n, err = c.conn.Read(b)
 	if err != nil {
-		return 0, ustr.Wrap(err, "listener")
+		return 0, err
 	}
 
 	// PROXYv2
@@ -158,7 +158,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	if n == 0 {
 		n, err = c.conn.Read(b)
 		if err != nil {
-			return 0, ustr.Wrap(err, "listener")
+			return 0, err
 		}
 	}
 
@@ -207,7 +207,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 		}
 	}
 
-	return n, ustr.Wrap(err, "listener")
+	return n, err
 }
 
 func (c *TCPConn) Write(b []byte) (n int, err error) {
@@ -274,7 +274,7 @@ type TCPListener struct {
 func (l *TCPListener) Accept() (net.Conn, error) {
 	conn, err := l.listener.AcceptTCP()
 	if err != nil {
-		return nil, ustr.Wrap(err, "listener")
+		return nil, err
 	}
 	conn.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3})
 	if l.options != nil {
@@ -315,7 +315,7 @@ func NewTCPListener(network, address string, extra ...*TCPOptions) (listener *TC
 	}
 	clistener, err := config.Listen(context.Background(), network, address)
 	if err != nil {
-		return nil, ustr.Wrap(err, "listener")
+		return nil, err
 	}
 
 	return &TCPListener{options: options, listener: clistener.(*net.TCPListener)}, nil
