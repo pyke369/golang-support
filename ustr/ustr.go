@@ -625,12 +625,10 @@ func Transform(in string, options int) string {
 }
 
 func Reverse(in string) string {
-	size := len(in)
-	out := make([]byte, size)
-	for start := 0; start < size; {
-		r, n := utf8.DecodeRuneInString(in[start:])
-		start += n
-		utf8.EncodeRune(out[size-start:], r)
+	runes := []rune(in)
+	out := make([]rune, 0, len(runes))
+	for index := len(runes) - 1; index >= 0; index-- {
+		out = append(out, runes[index])
 	}
 
 	return string(out)
