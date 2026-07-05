@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 
@@ -15,10 +16,39 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
 	"github.com/pyke369/golang-support/uhash"
+	"github.com/pyke369/golang-support/ustr"
 )
 
-// see https://akkadia.org/drepper/SHA-crypt.txt
-var cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
+var (
+	sets = []string{
+		`abcdefghijklmnopqrstuvwxyz`,
+		`ABCDEFGHIJKLMNOPQRSTUVWXYZ`,
+		`0123456789`,
+		` ,-._`,
+		`!$&*@`,
+		`"#%'()+/:;<=>?[\]^` + "`" + `{|}~`,
+	}
+	seqs = [][]rune{
+		[]rune("abcdefghijklmnopqrstuvwxyz"),
+		[]rune("01234567890"),
+		[]rune("qwertyuiop"),
+		[]rune("asdfghjkl"),
+		[]rune("zxcvbnm"),
+		[]rune("azertyuiop"),
+		[]rune("qsdfghjklm"),
+		[]rune("wxcvbn"),
+	}
+
+	// see https://akkadia.org/drepper/SHA-crypt.txt
+	cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
+)
+
+func init() {
+	count := len(seqs)
+	for index := 0; index < count; index++ {
+		seqs = append(seqs, []rune(ustr.Reverse(string(seqs[index]))))
+	}
+}
 
 func Crypt512(in, salt string, rounds int) (out string, err error) {
 	in, salt = strings.TrimSpace(in), strings.TrimSpace(salt)
@@ -222,6 +252,97 @@ func PasswordFile(in, path string) (match bool, entry string) {
 	return Password(in, lines)
 }
 
-func PasswordEntropy(in string) float64 {
-	return 0
+func passwordContains(runes, seq []rune, start int) (offset, length int) {
+	for start < len(runes)-2 {
+		sindex := 0
+		for sindex < len(seq) {
+			if seq[sindex] == runes[start] {
+				break
+			}
+			sindex++
+		}
+		if sindex < len(seq) {
+			matched, rindex := 1, start+1
+			sindex++
+			for rindex < len(runes) && sindex < len(seq) {
+				if seq[sindex] == runes[rindex] {
+					matched++
+
+				} else {
+					break
+				}
+				rindex++
+				sindex++
+			}
+			if matched > 2 {
+				return start, matched
+			}
+		}
+		start++
+	}
+
+	return
+}
+
+func passwordPrune(runes, seq []rune) []rune {
+	start := 0
+	for {
+		offset, length := passwordContains(runes, seq, start)
+		if length < 3 {
+			break
+		}
+		copy(runes[offset+2:], runes[offset+length:])
+		runes = runes[:len(runes)-(length-2)]
+		start = offset
+	}
+
+	return runes
+}
+
+func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) {
+	pool, chars, contains := 0, map[rune]struct{}{}, make([]bool, len(sets))
+	for _, char := range in {
+		chars[char] = struct{}{}
+	}
+	for char := range chars {
+		match := false
+		for set := 0; set < len(sets); set++ {
+			if strings.ContainsRune(sets[set], char) {
+				contains[set], match = true, true
+				break
+			}
+		}
+		if !match {
+			pool++
+		}
+	}
+	for set, contain := range contains {
+		if contain {
+			pool += len(sets[set])
+		}
+	}
+
+	runes := []rune(in)
+	for index := 2; index < len(runes); {
+		if runes[index] == runes[index-1] && runes[index-1] == runes[index-2] {
+			copy(runes[index:], runes[index+1:])
+			runes = runes[:len(runes)-1]
+
+		} else {
+			index++
+		}
+	}
+	for _, seq := range seqs {
+		runes = passwordPrune(runes, seq)
+	}
+	if len(extra) != 0 {
+		for _, seq := range extra[0] {
+			runes = passwordPrune(runes, []rune(seq))
+			runes = passwordPrune(runes, []rune(ustr.Reverse(seq)))
+		}
+	}
+
+	entropy = math.Log2(math.Pow(float64(pool), float64(len(string(runes)))))
+
+	return entropy, entropy >= 65.0
 }
