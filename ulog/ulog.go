@@ -149,7 +149,7 @@ var (
 		LOG_DEBUG:   "\x1b[32m",
 	}
 	structureColors = []*colorizer{
-		&colorizer{regexp.MustCompile(`"(err(:?or)?)":`), []byte("\"\x1b[31m$1\x1b[m\":")},
+		&colorizer{regexp.MustCompile(`"(err(:?or)?|reason)":`), []byte("\"\x1b[31m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"(warn(:?ing)?)":`), []byte("\"\x1b[33m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)":`), []byte("\"\x1b[38;5;250m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)"([,}\]])`), []byte("\"\x1b[34m$1\x1b[m\"$2")},
