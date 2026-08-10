@@ -24,11 +24,11 @@ A collection of Go utility/support libraries.
 - jsonrpc:
   Full JSON-RPC 2.0 client and server: request building, response parsing, HTTP transport, batch requests, server-side routing with authorization filter, goroutine-per-call dispatch, panic recovery. Also provides extensive type coercion helpers (Boolean, String, Number, Slice, Map, StringSlice, etc.) and Flatten, Size, SizeBounds, Duration, DurationBounds.
 
-- listener:
-  TCP listener with SO_REUSEPORT support, HAProxy PROXY protocol v2 parsing (with CRC32c TLV verification), TLS ClientHello SNI hijacking, keepalive configuration, and per-connection attributes.
-
 - mstore:
   Append-only columnar time-series metric store backed by memory-mapped files (one file per calendar month). Supports gauge, counter, increment, text, and binary column types. Aggregation: min, max, sum, average, first, last, histogram, percentile, raw. Text/binary columns use CRC32-keyed mapping tables.
+
+- net
+  TCP listener with SO_REUSEPORT support, HAProxy PROXY protocol v2 parsing (with CRC32c TLV verification), TLS ClientHello SNI hijacking, keepalive configuration, and per-connection attributes. Various other helpers.
 
 - multiflag:
   flag.Value implementation for repeated key:value CLI flags.

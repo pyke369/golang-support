@@ -1,6 +1,6 @@
 //go:build windows
 
-package listener
+package net
 
 import (
 	"syscall"

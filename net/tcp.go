@@ -1,4 +1,4 @@
-package listener
+package net
 
 import (
 	"bytes"

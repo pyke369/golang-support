@@ -14,7 +14,7 @@ import (
 	"time"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
-	l "github.com/pyke369/golang-support/listener"
+	n "github.com/pyke369/golang-support/net"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -35,7 +35,7 @@ type Speaker struct {
 	name      string
 	key       string
 	local     *net.TCPAddr
-	listener  *l.TCPListener
+	listener  *n.TCPListener
 	mu        sync.RWMutex
 	closed    bool
 	templates map[*Template]struct{}
@@ -370,7 +370,7 @@ func NewSpeaker(local string, options ...map[string]any) (speaker *Speaker, err 
 		speaker.name = strings.TrimSpace(strings.ToLower(j.String(options[0]["name"])))
 	}
 	if port != "0" {
-		speaker.listener, err = l.NewTCPListener("tcp", net.JoinHostPort(host, port), &l.TCPOptions{Reuse: true})
+		speaker.listener, err = n.NewTCPListener("tcp", net.JoinHostPort(host, port), &n.TCPOptions{Reuse: true})
 		if err != nil {
 			return nil, ustr.Wrap(err, "ubgp")
 		}
