@@ -24,7 +24,7 @@ import (
 type UConfig struct {
 	size      int
 	inline    bool
-	root      string
+	roots     []string
 	input     string
 	separator string
 	hash      [32]byte
@@ -227,19 +227,19 @@ func expand(in []byte, extra ...int) (out []byte) {
 }
 
 func New(in string, extra ...map[string]any) (config *UConfig, err error) {
-	inline, root, arena := false, "", bslab.Default
+	inline, roots, arena := false, []string{}, bslab.Default
 	if len(extra) != 0 && extra[0] != nil {
 		if value, ok := extra[0]["inline"].(bool); ok {
 			inline = value
 		}
-		if value, ok := extra[0]["root"].(string); ok && value != "" {
-			root = value
+		if value := j.StringSlice(extra[0]["roots"], true); len(value) != 0 {
+			roots = append(roots, value...)
 		}
 		if value, ok := extra[0]["arena"].(*bslab.Arena); ok {
 			arena = value
 		}
 	}
-	config = &UConfig{size: 64 << 10, inline: inline, root: root, input: in, separator: ".", arena: arena}
+	config = &UConfig{size: 64 << 10, inline: inline, roots: roots, input: in, separator: ".", arena: arena}
 	err = config.Load(in)
 
 	return config, ustr.Wrap(err, "uconfig")
@@ -257,9 +257,19 @@ func (c *UConfig) GetPrefix() string {
 	return c.prefix
 }
 
+func withinRoots(path string, roots []string) bool {
+	for _, root := range roots {
+		if strings.HasPrefix(path, root+psep) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *UConfig) Load(in string) error {
 	base, _ := os.Getwd()
-	payload, name, top, root := c.arena.Get(max(c.size, 3+len(base)+3+len(in))), "", "", c.root
+	payload, name, top, roots := c.arena.Get(max(c.size, 3+len(base)+3+len(in))), "", "", c.roots
 	payload = append(payload, '<', '<', '%')
 	payload = append(payload, base...)
 	payload = append(payload, '>', '>', ' ')
@@ -274,9 +284,7 @@ func (c *UConfig) Load(in string) error {
 		payload = append(payload, '<', '<', '~')
 		payload = append(payload, in...)
 		payload = append(payload, '>', '>')
-		if root == "" {
-			root = top
-		}
+		roots = append(roots, top)
 	}
 
 	// remove commented-out sections and expand macros
@@ -347,7 +355,7 @@ func (c *UConfig) Load(in string) error {
 							arg = filepath.Clean(arg)
 
 							paths, sizes, size := []string{}, map[string]int{}, 0
-							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+							if withinRoots(arg, roots) {
 								if values, err := filepath.Glob(arg); err == nil {
 									for _, value := range values {
 										info, err := os.Stat(value)
@@ -355,7 +363,7 @@ func (c *UConfig) Load(in string) error {
 											continue
 										}
 										link, err := filepath.EvalSymlinks(value)
-										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+										if err != nil || !withinRoots(link, roots) {
 											continue
 										}
 										sizes[value] = int(info.Size())
@@ -396,7 +404,7 @@ func (c *UConfig) Load(in string) error {
 							arg = filepath.Clean(arg)
 
 							paths, sizes, size, empty := []string{}, map[string]int{}, 0, true
-							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+							if withinRoots(arg, roots) {
 								if values, err := filepath.Glob(arg); err == nil {
 									for _, value := range values {
 										info, err := os.Stat(value)
@@ -404,7 +412,7 @@ func (c *UConfig) Load(in string) error {
 											continue
 										}
 										link, err := filepath.EvalSymlinks(value)
-										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+										if err != nil || !withinRoots(link, roots) {
 											continue
 										}
 										lsize := max(256, int(info.Size()))
@@ -478,11 +486,11 @@ func (c *UConfig) Load(in string) error {
 							arg = filepath.Clean(arg)
 
 							paths, size := []string{}, 0
-							if strings.HasPrefix(arg, root+psep) || strings.HasPrefix(arg, top+psep) {
+							if withinRoots(arg, roots) {
 								if values, err := filepath.Glob(arg); err == nil {
 									for _, value := range values {
 										link, err := filepath.EvalSymlinks(value)
-										if err != nil || !(strings.HasPrefix(link, root+psep) || strings.HasPrefix(link, top+psep)) {
+										if err != nil || !withinRoots(link, roots) {
 											continue
 										}
 										size += 1 + 2*len(value) + 1
