@@ -1,4 +1,4 @@
-package fqdn
+package net
 
 import (
 	"context"
@@ -30,5 +30,6 @@ func FQDN() (hostname, address string) {
 		}
 		return hostname, "*"
 	}
+
 	return "unknown", "*"
 }

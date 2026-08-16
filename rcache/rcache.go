@@ -1,63 +1,60 @@
 package rcache
 
 import (
+	"container/list"
+	"errors"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 type entry struct {
 	expr    string
 	matcher *regexp.Regexp
-	hits    uint64
 }
 
 var (
-	nomatch = regexp.MustCompile(`^\x00{128}$`)
+	nomatch = regexp.MustCompile(`^\x00{256}$`)
 	mu      sync.RWMutex
-	cache   = map[string]*entry{}
+	cache   = map[string]*list.Element{}
+	lru     = list.New()
 )
 
-func Get(expr string) *regexp.Regexp {
-	if expr = strings.TrimSpace(expr); len(expr) > 128 {
-		return nomatch
+func GetErr(expr string) (matcher *regexp.Regexp, err error) {
+	if expr = strings.TrimSpace(expr); len(expr) > 256 {
+		return nomatch, errors.New("rcache: expression too long")
 	}
-
-	mu.RLock()
-	if value, exists := cache[expr]; exists {
-		mu.RUnlock()
-		atomic.AddUint64(&value.hits, 1)
-		return value.matcher
-	}
-	mu.RUnlock()
 
 	mu.Lock()
-	defer mu.Unlock()
-	if matcher, err := regexp.Compile(expr); err == nil {
-		if len(cache) >= 4<<10 {
-			entries := []*entry{}
-			for _, entry := range cache {
-				entries = append(entries, entry)
-			}
-			sort.SliceStable(entries, func(i, j int) bool {
-				return entries[i].hits < entries[j].hits
-			})
-			end := len(entries) / 4
-			for index, entry := range entries {
-				delete(cache, entry.expr)
-				if index >= end {
-					break
+	if value, exists := cache[expr]; exists {
+		lru.MoveToFront(value)
+		mu.Unlock()
+		return value.Value.(*entry).matcher, nil
+	}
+	mu.Unlock()
+
+	matcher, err = regexp.Compile(expr)
+	if err == nil {
+		mu.Lock()
+		if _, exists := cache[expr]; !exists {
+			if len(cache) >= 4<<10 {
+				if value := lru.Back(); value != nil {
+					if value := lru.Remove(value); value != nil {
+						delete(cache, value.(*entry).expr)
+					}
 				}
 			}
+			cache[expr] = lru.PushFront(&entry{expr: expr, matcher: matcher})
 		}
-		if len(cache) < 4<<10 {
-			cache[expr] = &entry{expr: expr, matcher: matcher, hits: 1}
-		}
-
-		return matcher
+		mu.Unlock()
+		return matcher, nil
 	}
 
-	return nomatch
+	return nomatch, err
+}
+
+func Get(expr string) *regexp.Regexp {
+	matcher, _ := GetErr(expr)
+
+	return matcher
 }

@@ -3,8 +3,7 @@ package acl
 import (
 	"net/netip"
 	"strconv"
-
-	"github.com/pyke369/golang-support/uconfig"
+	"strings"
 )
 
 func CIDR(in string, values []string) bool {
@@ -18,6 +17,17 @@ func CIDR(in string, values []string) bool {
 	if remote, err := netip.ParseAddr(in); err == nil {
 		remote = remote.Unmap()
 		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if _, err := netip.ParsePrefix(value); err != nil {
+				if addr, err := netip.ParseAddr(value); err == nil {
+					if addr.Is4() {
+						value += "/32"
+
+					} else {
+						value += "/128"
+					}
+				}
+			}
 			if prefix, err := netip.ParsePrefix(value); err == nil {
 				if prefix.Addr().Is4In6() {
 					if bits := prefix.Bits(); bits >= 96 {
@@ -34,8 +44,4 @@ func CIDR(in string, values []string) bool {
 	}
 
 	return false
-}
-
-func CIDRConfig(in string, config *uconfig.UConfig, path string) bool {
-	return CIDR(in, config.Strings(path))
 }
