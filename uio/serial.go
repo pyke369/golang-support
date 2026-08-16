@@ -3,7 +3,6 @@
 package uio
 
 import (
-	"errors"
 	"net"
 	"time"
 )

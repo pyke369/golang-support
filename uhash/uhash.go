@@ -1,5 +1,3 @@
-//go:build go1.24
-
 package uhash
 
 import (
@@ -7,61 +5,49 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"strings"
-
-	"github.com/zeebo/blake3"
 )
 
-func RandInt(in int) (out int) {
-	if in > 0 {
-		if value, err := rand.Int(rand.Reader, big.NewInt(int64(in))); err == nil {
-			out = int(value.Int64())
-		}
+func RandInt(in int) (out int, err error) {
+	if in <= 0 {
+		return 0, nil
+	}
+	value, err := rand.Int(rand.Reader, big.NewInt(int64(in)))
+	if err != nil {
+		return 0, err
 	}
 
-	return
+	return int(value.Int64()), nil
 }
-func RandKey(size int, extra ...string) (out string) {
+
+func RandKey(size int, extra ...string) (out string, err error) {
+	if size <= 0 || size > 256 {
+		return "", errors.New("uhash: invalid size")
+	}
 	encoding := "hex"
 	if len(extra) != 0 {
 		encoding = strings.ToLower(extra[0])
 	}
 
-	value := make([]byte, max(1, min(size, 256)))
-	rand.Read(value)
+	value := make([]byte, size)
+	_, _ = rand.Read(value)
 	switch encoding {
 	case "std":
-		return base64.StdEncoding.EncodeToString(value)
+		out = base64.RawStdEncoding.EncodeToString(value)
 
 	case "url":
-		return base64.URLEncoding.EncodeToString(value)
+		out = base64.RawURLEncoding.EncodeToString(value)
 
 	default:
-		return hex.EncodeToString(value)
-	}
-}
-
-func Hash128(in []byte) (out [16]byte) {
-	out = [16]byte{}
-
-	hasher := blake3.New()
-	hasher.Write(in)
-	digest := hasher.Digest()
-	hash := make([]byte, 16)
-	digest.Read(hash)
-	for index := 0; index < 16; index++ {
-		out[index] = hash[index]
+		out = hex.EncodeToString(value)
 	}
 
 	return
 }
 
-func Hash256(in []byte) (out [32]byte) {
-	return sha256.Sum256(in)
-}
-
-func CRC16(inputs ...[]byte) uint16 {
+func Sum16(inputs ...[]byte) uint16 {
 	csum, size := uint64(0), 0
 	if length := len(inputs); length > 0 {
 		for index, input := range inputs {
@@ -117,4 +103,15 @@ func CRC16(inputs ...[]byte) uint16 {
 	}
 
 	return ^uint16(csum)
+}
+
+func Sum128(in []byte) (out [16]byte) {
+	csum := Sum256(in)
+	copy(out[:], csum[:16])
+
+	return
+}
+
+func Sum256(in []byte) (out [32]byte) {
+	return sha256.Sum256(in)
 }

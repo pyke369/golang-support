@@ -10,36 +10,48 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
-func Read(path string, extra ...map[string]any) (lines []string) {
+const Sep = string(filepath.Separator)
+
+func Read(path string, extra ...map[string]any) (lines []string, err error) {
 	var matcher *regexp.Regexp
 
-	options, capture, separator := 0, false, ""
+	flags, maxsize, options, capture, separator := os.O_RDONLY|O_NOFOLLOW, 4<<20, 0, false, ""
 	if len(extra) > 0 {
+		if value, ok := extra[0]["follow"].(bool); ok && value {
+			flags &= ^O_NOFOLLOW
+		}
+		if value, ok := extra[0]["maxsize"].(int); ok && value > 0 {
+			maxsize = min(16<<20, max(0, value))
+		}
 		if value, ok := extra[0]["options"].(string); ok {
 			options = ustr.Options(value)
 		}
 		if value, ok := extra[0]["match"].(string); ok {
-			matcher = rcache.Get(strings.TrimSpace(value))
+			if value, err := regexp.Compile(strings.TrimSpace(value)); err == nil {
+				matcher = value
+			}
 			if value, ok := extra[0]["separator"].(string); ok {
 				capture, separator = true, value
 			}
 		}
 	}
 
-	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
+	handle, err := os.OpenFile(path, flags, 0)
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer handle.Close()
-	reader := bufio.NewReader(handle)
+	reader, size := bufio.NewReader(io.LimitReader(handle, int64(maxsize))), 0
 	for {
 		line, err := reader.ReadString('\n')
 		line = ustr.Transform(line, options)
 		if line == "" && options&ustr.OptionEmpty != 0 {
+			if err != nil {
+				break
+			}
 			continue
 		}
 		if matcher != nil {
@@ -51,9 +63,13 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 				line = strings.Join(captures[1:], separator)
 			}
 		}
+		if size+len(line) > maxsize {
+			return nil, errors.New("file: size exceeded")
+		}
 		lines = append(lines, line)
+		size += len(line)
 		if len(lines) != 0 && options&ustr.OptionFirst != 0 {
-			return
+			return lines, nil
 		}
 		if err != nil {
 			break
@@ -81,6 +97,9 @@ func Write(path string, lines []string, extra ...string) error {
 		} else {
 			flags |= os.O_TRUNC
 		}
+
+	} else {
+		flags |= os.O_TRUNC
 	}
 	handle, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
@@ -137,8 +156,13 @@ func Link(path string) (base string) {
 	return
 }
 
-func Sum(path string) (sum string, size int64) {
-	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
+func Sum256(path string, extra ...bool) (sum string, size int64) {
+	flags := os.O_RDONLY | O_NOFOLLOW
+	if len(extra) > 0 && extra[0] {
+		flags &= ^O_NOFOLLOW
+	}
+
+	handle, err := os.OpenFile(path, flags, 0)
 	if err != nil {
 		return
 	}
@@ -157,14 +181,15 @@ func Sum(path string) (sum string, size int64) {
 }
 
 func Copy(source, target string, extra ...bool) (err error) {
-	tflags := os.O_RDWR | os.O_EXCL | O_NOFOLLOW
-	if len(extra) > 0 {
-		if extra[0] {
-			tflags |= os.O_CREATE
-		}
+	sflags, tflags := os.O_RDONLY|O_NOFOLLOW, os.O_WRONLY|O_NOFOLLOW
+	if len(extra) > 0 && extra[0] {
+		tflags |= os.O_CREATE | os.O_EXCL
+	}
+	if len(extra) > 1 && extra[1] {
+		sflags &= ^O_NOFOLLOW
 	}
 
-	shandle, err := os.OpenFile(source, os.O_RDONLY, 0)
+	shandle, err := os.OpenFile(source, sflags, 0)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
@@ -184,18 +209,32 @@ func Copy(source, target string, extra ...bool) (err error) {
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
-	tsize := tinfo.Size()
-	if tflags&os.O_CREATE == 0 && tinfo.Mode().IsRegular() && ssize > tsize {
-		return errors.New("file: source size > target size")
-	}
 
-	copied, err := io.CopyN(thandle, shandle, ssize)
+	copied, err := io.Copy(thandle, shandle)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
-	if copied < ssize {
+	if copied != ssize {
 		return errors.New("file: truncated copy")
 	}
+	if tinfo.Mode().IsRegular() {
+		thandle.Truncate(copied)
+	}
+	thandle.Sync()
 
 	return
+}
+
+func WithinRoots(path string, roots map[string]struct{}) bool {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for root := range roots {
+		if strings.HasPrefix(path+Sep, root+Sep) {
+			return true
+		}
+	}
+
+	return false
 }

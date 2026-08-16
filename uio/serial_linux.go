@@ -6,9 +6,9 @@ import (
 	"errors"
 	"net"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -73,42 +73,35 @@ type serialAddr struct {
 func (a *serialAddr) Network() string {
 	return "serial"
 }
-
 func (a *serialAddr) String() string {
 	return a.name
 }
 
 type serial struct {
-	handle    int
 	control   bool
 	local     *serialAddr
 	remote    *serialAddr
-	rdeadline time.Time
-	wdeadline time.Time
-}
-
-func serialPath(path string) error {
-	target, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return ustr.Wrap(err, "uio")
-	}
-	if !strings.HasPrefix(target, "/dev/tty") && !strings.HasPrefix(target, "/dev/serial/") {
-		return errors.New("uio: invalid device path")
-	}
-
-	return nil
+	rdeadline atomic.Int64
+	wdeadline atomic.Int64
+	handle    atomic.Int32
+	closed    atomic.Bool
 }
 
 func SerialProbe(path string) (active bool, err error) {
-	if err := serialPath(path); err != nil {
-		return false, ustr.Wrap(err, "uio")
-	}
+	var info unix.Stat_t
 
-	handle, err := unix.Open(path, os.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return false, ustr.Wrap(err, "uio")
 	}
 	defer unix.Close(handle)
+
+	if err := unix.Fstat(handle, &info); err != nil || info.Mode&unix.S_IFMT != unix.S_IFCHR {
+		return false, errors.New("uio: invalid character device")
+	}
+	if _, err := unix.IoctlGetTermios(handle, unix.TCGETS); err != nil {
+		return false, ustr.Wrap(err, "uio")
+	}
 
 	state, err := unix.IoctlGetInt(handle, unix.TIOCMGET)
 	if err != nil {
@@ -119,12 +112,18 @@ func SerialProbe(path string) (active bool, err error) {
 }
 
 func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string) (conn *serial, err error) {
-	if err := serialPath(path); err != nil {
+	var info unix.Stat_t
+
+	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	if err != nil {
 		return nil, ustr.Wrap(err, "uio")
 	}
-
-	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
-	if err != nil {
+	if err := unix.Fstat(handle, &info); err != nil || info.Mode&unix.S_IFMT != unix.S_IFCHR {
+		unix.Close(handle)
+		return nil, errors.New("uio: invalid character device")
+	}
+	if _, err := unix.IoctlGetTermios(handle, unix.TCGETS); err != nil {
+		unix.Close(handle)
 		return nil, ustr.Wrap(err, "uio")
 	}
 
@@ -157,11 +156,19 @@ func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string)
 		peer = extra[0]
 	}
 
-	return &serial{handle: handle, control: speed < 0, local: &serialAddr{name: path}, remote: &serialAddr{name: peer}}, nil
+	conn = &serial{control: speed < 0, local: &serialAddr{name: path}, remote: &serialAddr{name: peer}}
+	conn.handle.Store(int32(handle))
+
+	return
 }
 
-func (s *serial) Close() error {
-	return unix.Close(s.handle)
+func (s *serial) Close() (err error) {
+	if !s.closed.Swap(true) {
+		handle := int(s.handle.Swap(-1))
+		err = unix.Close(handle)
+	}
+
+	return
 }
 
 func (s *serial) String() string {
@@ -172,48 +179,89 @@ func (s *serial) Read(b []byte) (n int, err error) {
 	if s.control {
 		return 0, unsupported
 	}
-
-	set, timeout := []unix.PollFd{unix.PollFd{Fd: int32(s.handle), Events: unix.EPOLLIN}}, -1
-	if !s.rdeadline.IsZero() {
-		timeout = int(time.Until(s.rdeadline) / time.Millisecond)
+	if s.closed.Load() {
+		return 0, os.ErrClosed
 	}
-	s.rdeadline = time.Time{}
 
-	if _, err := unix.Poll(set, timeout); err != nil {
-		return 0, nil
+	set, timeout := []unix.PollFd{unix.PollFd{Fd: s.handle.Load(), Events: unix.EPOLLIN}}, -1
+	if deadline := s.rdeadline.Swap(0); deadline != 0 {
+		if timeout = int((deadline - time.Now().Unix()) * 1000); timeout <= 0 {
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+
+	for {
+		start := time.Now()
+		if _, err := unix.Poll(set, timeout); err != nil {
+			if err != syscall.EINTR {
+				return 0, err
+			}
+			if timeout = timeout - int(time.Since(start)/time.Millisecond); timeout <= 0 {
+				return 0, os.ErrDeadlineExceeded
+			}
+			if s.closed.Load() {
+				return 0, os.ErrClosed
+			}
+			continue
+		}
+		break
 	}
 	if set[0].Revents == 0 {
 		return 0, os.ErrDeadlineExceeded
 	}
-	if set[0].Revents != unix.EPOLLIN {
+	if set[0].Revents&unix.EPOLLIN == 0 {
+		return 0, os.ErrClosed
+	}
+	if s.closed.Load() {
 		return 0, os.ErrClosed
 	}
 
-	return unix.Read(s.handle, b)
+	return unix.Read(int(s.handle.Load()), b)
 }
 
 func (s *serial) Write(b []byte) (n int, err error) {
 	if s.control {
 		return 0, unsupported
 	}
-
-	set, timeout := []unix.PollFd{unix.PollFd{Fd: int32(s.handle), Events: unix.EPOLLOUT}}, -1
-	if !s.wdeadline.IsZero() {
-		timeout = int(time.Until(s.wdeadline) / time.Millisecond)
+	if s.closed.Load() {
+		return 0, os.ErrClosed
 	}
-	s.wdeadline = time.Time{}
 
-	if _, err := unix.Poll(set, timeout); err != nil {
-		return 0, nil
+	set, timeout := []unix.PollFd{unix.PollFd{Fd: s.handle.Load(), Events: unix.EPOLLOUT}}, -1
+	if deadline := s.wdeadline.Swap(0); deadline != 0 {
+		if timeout = int((deadline - time.Now().Unix()) * 1000); timeout <= 0 {
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+
+	for {
+		start := time.Now()
+		if _, err := unix.Poll(set, timeout); err != nil {
+			if err != syscall.EINTR {
+				return 0, err
+			}
+			if timeout = timeout - int(time.Since(start)/time.Millisecond); timeout <= 0 {
+				return 0, os.ErrDeadlineExceeded
+			}
+			if s.closed.Load() {
+				return 0, os.ErrClosed
+			}
+			continue
+		}
+		break
 	}
 	if set[0].Revents == 0 {
 		return 0, os.ErrDeadlineExceeded
 	}
-	if set[0].Revents != unix.EPOLLOUT {
+	if set[0].Revents&unix.EPOLLOUT == 0 {
 		return 0, os.ErrClosed
 	}
 
-	return unix.Write(s.handle, b)
+	if s.closed.Load() {
+		return 0, os.ErrClosed
+	}
+
+	return unix.Write(int(s.handle.Load()), b)
 }
 
 func (s *serial) LocalAddr() net.Addr {
@@ -225,22 +273,30 @@ func (s *serial) RemoteAddr() net.Addr {
 }
 
 func (s *serial) SetDeadline(t time.Time) error {
-	s.rdeadline, s.wdeadline = t, t
+	s.rdeadline.Store(t.Unix())
+	s.wdeadline.Store(t.Unix())
+
 	return nil
 }
 
 func (s *serial) SetReadDeadline(t time.Time) error {
-	s.rdeadline = t
+	s.rdeadline.Store(t.Unix())
+
 	return nil
 }
 
 func (s *serial) SetWriteDeadline(t time.Time) error {
-	s.wdeadline = t
+	s.wdeadline.Store(t.Unix())
+
 	return nil
 }
 
 func (s *serial) GetControl() (control string, err error) {
-	value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
+	if s.closed.Load() {
+		return "", os.ErrClosed
+	}
+
+	value, err := unix.IoctlGetInt(int(s.handle.Load()), unix.TIOCMGET)
 	if err != nil {
 		return "", ustr.Wrap(err, "uio")
 	}
@@ -261,10 +317,14 @@ func (s *serial) GetControl() (control string, err error) {
 }
 
 func (s *serial) SetControl(control string) (err error) {
+	if s.closed.Load() {
+		return os.ErrClosed
+	}
+
 	fields := strings.Fields(strings.ToUpper(control))
 	rts, dtr := slices.Contains(fields, "RTS"), slices.Contains(fields, "DTR")
 	if rts || dtr {
-		value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
+		value, err := unix.IoctlGetInt(int(s.handle.Load()), unix.TIOCMGET)
 		if err != nil {
 			return ustr.Wrap(err, "uio")
 		}
@@ -274,17 +334,21 @@ func (s *serial) SetControl(control string) (err error) {
 		if dtr {
 			value |= unix.TIOCM_DTR
 		}
-		return unix.IoctlSetPointerInt(s.handle, unix.TIOCMSET, value)
+		return unix.IoctlSetPointerInt(int(s.handle.Load()), unix.TIOCMSET, value)
 	}
 
 	return nil
 }
 
 func (s *serial) ClearControl(control string) (err error) {
+	if s.closed.Load() {
+		return os.ErrClosed
+	}
+
 	fields := strings.Fields(strings.ToUpper(control))
 	rts, dtr := slices.Contains(fields, "RTS"), slices.Contains(fields, "DTR")
 	if rts || dtr {
-		value, err := unix.IoctlGetInt(s.handle, unix.TIOCMGET)
+		value, err := unix.IoctlGetInt(int(s.handle.Load()), unix.TIOCMGET)
 		if err != nil {
 			return ustr.Wrap(err, "uio")
 		}
@@ -294,7 +358,7 @@ func (s *serial) ClearControl(control string) (err error) {
 		if dtr {
 			value &= ^unix.TIOCM_DTR
 		}
-		return unix.IoctlSetPointerInt(s.handle, unix.TIOCMSET, value)
+		return unix.IoctlSetPointerInt(int(s.handle.Load()), unix.TIOCMSET, value)
 	}
 
 	return nil

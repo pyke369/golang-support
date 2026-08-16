@@ -42,6 +42,7 @@ func init() {
 	for _, prefix := range []string{
 		"::/128",
 		"::1/128",
+		"::/96",
 		"::ffff:0:0/96",
 		"64:ff9b::/96",
 		"64:ff9b:1::/48",
@@ -94,6 +95,7 @@ func Loopback(in string) (loopback bool, err error) {
 }
 
 func Reserved(in netip.Addr) bool {
+	in = in.Unmap()
 	if in.Is4() {
 		for _, prefix := range v4reserved {
 			if prefix.Contains(in) {

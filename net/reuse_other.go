@@ -8,9 +8,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func reuse(handle uintptr, port bool) {
-	syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-	if port {
-		syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-	}
+func reuseAddr(handle uintptr) error {
+	return syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+}
+
+func reusePort(handle uintptr) error {
+	return syscall.SetsockoptInt(int(handle), syscall.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 }

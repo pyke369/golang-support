@@ -32,13 +32,13 @@ type SSHOptions struct {
 	ExecTimeout    time.Duration
 	IdleTimeout    time.Duration
 	Mode           string
-	SubSystem      string
+	Subsystem      string
 	Pty            bool
 	Prompt         string
 	Filter         string
 	MaxLines       int
 	KnownHosts     string
-	AcceptHandler  func(string, net.Addr, ssh.PublicKey) bool
+	AcceptHandler  func(string, net.Addr, string, ssh.PublicKey) bool
 }
 
 type SSHConn struct {
@@ -46,7 +46,7 @@ type SSHConn struct {
 	closed  atomic.Bool
 	last    int64
 	config  *ssh.ClientConfig
-	options *SSHOptions
+	options SSHOptions
 	client  *ssh.Client
 	session *ssh.Session
 	input   io.WriteCloser
@@ -57,15 +57,20 @@ var (
 	mu sync.Mutex
 )
 
-func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions) (conn *SSHConn, err error) {
+func NewSSHConn(remote string, credentials SSHCredentials, extra *SSHOptions) (conn *SSHConn, err error) {
+	var options SSHOptions
+
 	if remote == "" {
 		return nil, errors.New("expect: invalid remote")
 	}
-	if credentials == nil || credentials.Username == "" || (credentials.Password == "" && credentials.Key == "") {
+	if credentials.Username == "" || (credentials.Password == "" && credentials.Key == "") {
 		return nil, errors.New("expect: invalid credentials")
 	}
-	if options == nil {
-		options = &SSHOptions{Mode: TEXT}
+	if extra != nil {
+		options = *extra
+	}
+	if options.MaxLines == 0 {
+		options.MaxLines = 100000
 	}
 	if options.Mode == "" {
 		options.Mode = TEXT
@@ -77,24 +82,24 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 	if options.ExecTimeout == 0 {
 		options.ExecTimeout = 20 * time.Second
 	}
-	options.ExecTimeout = min(2*time.Minute, max(5*time.Second, options.ExecTimeout))
+	options.ExecTimeout = min(5*time.Minute, max(5*time.Second, options.ExecTimeout))
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = time.Minute
 	}
-	options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
+	options.IdleTimeout = max(options.ExecTimeout+time.Second, options.IdleTimeout)
 
-	if options.SubSystem != "" && options.SubSystem != "netconf" {
+	if options.Subsystem != "" && options.Subsystem != "netconf" {
 		return nil, errors.New("expect: invalid subsystem")
 	}
 	if _, err := netip.ParseAddrPort(remote); err != nil {
-		if options.SubSystem == "netconf" {
+		if options.Subsystem == "netconf" {
 			remote += ":830"
 
 		} else {
 			remote += ":22"
 		}
 	}
-	switch options.SubSystem {
+	switch options.Subsystem {
 	case "":
 		if options.Prompt == "" {
 			options.Prompt = `^[^\$#]*[\$#]`
@@ -136,6 +141,12 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		remote:  remote,
 		options: options,
 		config: &ssh.ClientConfig{
+			HostKeyAlgorithms: []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512},
+			Config: ssh.Config{
+				KeyExchanges: []string{ssh.KeyExchangeMLKEM768X25519, ssh.KeyExchangeCurve25519, ssh.KeyExchangeECDHP256},
+				Ciphers:      []string{ssh.CipherAES256GCM, ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},
+				MACs:         []string{ssh.HMACSHA256ETM, ssh.HMACSHA512ETM},
+			},
 			User:    credentials.Username,
 			Timeout: options.ConnectTimeout,
 			HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -146,10 +157,6 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 				mu.Lock()
 				defer mu.Unlock()
 
-				if options.AcceptHandler != nil {
-					file.Touch(options.KnownHosts)
-				}
-
 				appended := false
 			retry:
 				value, err := kh.New(options.KnownHosts)
@@ -159,8 +166,8 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 
 				err = value(hostname, remote, key)
 				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !appended && options.AcceptHandler != nil {
-					if options.AcceptHandler(hostname, remote, key) {
-						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "append")
+					if options.AcceptHandler(hostname, remote, ssh.FingerprintSHA256(key), key) {
+						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "create append")
 						appended = true
 						goto retry
 					}
@@ -190,24 +197,27 @@ func (c *SSHConn) Close() {
 }
 
 func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace *os.File) (lines []string, err error) {
-	queue := make(chan []string)
+	type result struct {
+		lines []string
+		err   error
+	}
+	queue := make(chan *result, 1)
 
 	go func() {
-		defer func() {
-			recover()
-		}()
-
-		data, offset, prompt, filter, lines := make([]byte, 64<<10), 0, rcache.Get(prompt), rcache.Get(filter), []string{}
+		data, offset, prompt, filter, lines, size := make([]byte, 8<<10), 0, rcache.Get(prompt), rcache.Get(filter), []string{}, 0
 	done:
 		for {
 			if offset == cap(data) {
+				queue <- &result{nil, errors.New("line overflow")}
 				return
 			}
 			n, err := c.output.Read(data[offset:])
 			if err != nil {
+				queue <- &result{nil, err}
 				return
 			}
 			n += offset
+			atomic.StoreInt64(&c.last, time.Now().Unix())
 
 			loffset := 0
 			for {
@@ -227,9 +237,16 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 					if c.options.Filter != "" && filter.Match(line) {
 						continue
 					}
-					if c.options.MaxLines == 0 || len(lines) < c.options.MaxLines {
-						lines = append(lines, string(line))
+					if c.options.MaxLines >= 0 && len(lines) > c.options.MaxLines {
+						queue <- &result{nil, errors.New("lines count overflow")}
+						return
 					}
+					if size >= 64<<20 {
+						queue <- &result{nil, errors.New("lines size overflow")}
+						return
+					}
+					lines = append(lines, string(line))
+					size += len(line)
 					continue
 				}
 
@@ -244,19 +261,17 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 				break
 			}
 		}
-		queue <- lines
+		queue <- &result{lines, nil}
 	}()
 
 	select {
-	case lines = <-queue:
+	case r := <-queue:
+		return r.lines, r.err
 
-	case <-time.After(timeout):
+	case <-time.After(max(time.Second, timeout)):
 		c.Close()
-		err = os.ErrDeadlineExceeded
+		return nil, os.ErrDeadlineExceeded
 	}
-	close(queue)
-
-	return
 }
 
 func (c *SSHConn) write(message string, trace *os.File) (err error) {
@@ -275,8 +290,18 @@ func (c *SSHConn) write(message string, trace *os.File) (err error) {
 func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err error) {
 	var trace *os.File
 
-	if command == "" {
-		return nil, errors.New("expect: invalid or missing parameter")
+	command = strings.TrimSpace(command)
+	switch c.options.Subsystem {
+	case "":
+		if !rcache.Get(`^[A-Za-z0-9 ._:/=,+@%-]{1,4096}$`).MatchString(command) {
+			return nil, errors.New("expect: invalid command")
+		}
+
+	case "netconf":
+		index := strings.Index(command, "</rpc>")
+		if len(command) < 4 || strings.Contains(command, "]]>]]>") || (index != -1 && index < len(command)-6) {
+			return nil, errors.New("expect: invalid command")
+		}
 	}
 	if c.closed.Load() {
 		return nil, errors.New("expect: connection closed")
@@ -324,8 +349,8 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			c.Close()
 			return nil, ustr.Wrap(err, "expect")
 		}
-		if c.options.SubSystem != "" {
-			if err = c.session.RequestSubsystem(c.options.SubSystem); err != nil {
+		if c.options.Subsystem != "" {
+			if err = c.session.RequestSubsystem(c.options.Subsystem); err != nil {
 				c.Close()
 				return nil, ustr.Wrap(err, "expect")
 			}
@@ -349,7 +374,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			return nil, ustr.Wrap(err, "expect")
 		}
 
-		if c.options.SubSystem == "netconf" {
+		if c.options.Subsystem == "netconf" {
 			message := ParseXML(lines, map[string]any{"skip": false})
 			hello, exists := message["hello"]
 			if !exists {
@@ -386,8 +411,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 	}
 
-	command = strings.TrimSpace(command)
-	switch c.options.SubSystem {
+	switch c.options.Subsystem {
 	case "":
 		switch c.options.Mode {
 		case JSON:
@@ -444,13 +468,48 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			result = ParseJSON(strings.Join(lines, ""))
 
 		case XML:
-			for index, line := range lines {
-				if line != "" && line[0] == '<' {
-					lines = lines[index:]
-					break
+			result = ParseXML(lines, map[string]any{"empty": empty})
+			if c.options.Subsystem == "netconf" {
+				var payload map[string]any
+
+				value := j.Map(result)
+				for {
+					if len(value) == 0 {
+						break
+					}
+					if value, exists := value["rpc-error"]; exists {
+						if avalue := j.Slice(value); len(avalue) != 0 {
+							payload = j.Map(avalue[0])
+
+						} else {
+							payload = j.Map(value)
+						}
+						break
+					}
+					for k := range value {
+						value = j.Map(value[k])
+						break
+					}
+				}
+
+				if payload != nil {
+					message, details := "expect: netconf rpc error", []string{}
+					if value := strings.TrimSpace(j.String(payload["error-message"])); value != "" {
+						details = append(details, value)
+					}
+					for k, v := range j.Map(payload["error-info"]) {
+						if k := strings.TrimSpace(j.String(k)); k != "" {
+							if v := strings.TrimSpace(j.String(v)); v != "" {
+								details = append(details, k+": "+v)
+							}
+						}
+					}
+					if len(details) != 0 {
+						message += ": " + strings.Join(details, " / ")
+					}
+					return nil, errors.New(message)
 				}
 			}
-			result = ParseXML(lines, map[string]any{"empty": empty})
 		}
 	}
 	atomic.StoreInt64(&c.last, time.Now().Unix())

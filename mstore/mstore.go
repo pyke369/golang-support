@@ -10,14 +10,17 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/sys/unix"
@@ -51,11 +54,13 @@ const (
 )
 
 type Store struct {
-	prefix  string
-	mu      sync.Mutex
-	metrics map[string]*metric
-	chunks  map[string]*chunk
-	last    time.Time
+	readonly bool
+	path     string
+	mu       sync.Mutex
+	lock     int
+	closed   atomic.Bool
+	metrics  map[string]*metric
+	chunks   map[string]*chunk
 }
 
 type Column struct {
@@ -75,13 +80,14 @@ type metric struct {
 	size        int64
 	columns     []*Column
 	frozen      bool
-	sync.Mutex
+	mu          sync.RWMutex
 }
 
 type chunk struct {
-	last   time.Time
-	handle *os.File
-	data   []byte
+	readonly bool
+	metric   *metric
+	handle   *os.File
+	data     []byte
 }
 
 type entry struct {
@@ -131,45 +137,74 @@ var (
 		"percentile": AggregatePercentile,
 		"raw":        AggregateRaw,
 	}
+
+	nameMatcher  = regexp.MustCompile(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
+	monthMatcher = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
 )
 
-func (s *Store) chunk(path string, size int64, create bool) (data []byte, err error) {
+func (s *Store) chunk(m *metric, path string, size int64, extra ...bool) (data []byte, err error) {
+	create := false
+	if len(extra) != 0 {
+		create = extra[0]
+	}
+	if s.readonly && create {
+		return nil, errors.New("mstore: read-only store")
+	}
 	if size < 4 {
 		return nil, errors.New("mstore: invalid size")
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if chunk, exists := s.chunks[path]; exists {
 		if len(chunk.data) != int(size) {
 			return nil, errors.New("mstore: size mismatch")
 		}
-		chunk.last = time.Now()
-		if !create || chunk.handle != nil {
+		if create && chunk.readonly {
+			chunk.metric.mu.Lock()
+			if chunk.handle != nil {
+				unix.Munmap(chunk.data)
+				chunk.handle.Close()
+			}
+			delete(s.chunks, path)
+			chunk.metric.mu.Unlock()
+
+		} else if !create || chunk.handle != nil {
 			return chunk.data, nil
 		}
 	}
-	chunk, flags, created := &chunk{}, os.O_RDWR, false
+	chunk, flags, prot, created := &chunk{metric: m, readonly: true}, os.O_RDONLY, unix.PROT_READ, false
 	if create {
-		flags |= os.O_CREATE
+		flags, prot, chunk.readonly = os.O_RDWR|os.O_CREATE, unix.PROT_READ|unix.PROT_WRITE, false
 	}
 	if _, err := os.Stat(path); err != nil {
 		if !create {
 			if info, err := os.Stat(filepath.Dir(path)); err == nil && info.IsDir() {
-				chunk.last, chunk.data = time.Now(), make([]byte, size)
+				chunk.data = make([]byte, size)
 				s.chunks[path] = chunk
 				return chunk.data, nil
 			}
 		}
 		created = true
 	}
-	if chunk.handle, err = os.OpenFile(path, flags, 0o600); err != nil {
+	if chunk.handle, err = os.OpenFile(path, flags|file.O_NOFOLLOW, 0o600); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
-	if err = chunk.handle.Truncate(size); err != nil {
-		chunk.handle.Close()
+	info, err := chunk.handle.Stat()
+	if err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
-	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED); err != nil {
+	if info.Size() != size {
+		if !create {
+			chunk.handle.Close()
+			return nil, errors.New("mstore: size mismatch")
+		}
+		if err := chunk.handle.Truncate(size); err != nil {
+			chunk.handle.Close()
+			return nil, ustr.Wrap(err, "mstore")
+		}
+	}
+	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), prot, unix.MAP_SHARED); err != nil {
 		chunk.handle.Close()
 		return nil, ustr.Wrap(err, "mstore")
 	}
@@ -182,68 +217,79 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 		chunk.handle.Close()
 		return nil, errors.New("mstore: invalid chunk")
 	}
-	chunk.last = time.Now()
 	s.chunks[path] = chunk
 
 	return chunk.data, nil
 }
 
-func (s *Store) cleanup() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-	if now.Sub(s.last) >= time.Minute {
-		s.last = now
-		for path, chunk := range s.chunks {
-			if now.Sub(chunk.last) >= time.Minute {
-				if chunk.handle != nil {
-					unix.Munmap(chunk.data)
-					chunk.handle.Close()
-				}
-				delete(s.chunks, path)
-			}
-		}
-	}
-}
-
-func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
-	if len(readonly) == 0 || !readonly[0] {
-		if err := os.MkdirAll(prefix, 0o700); err != nil {
+func New(path string, extra ...bool) (store *Store, err error) {
+	readonly := len(extra) == 0 || !extra[0]
+	if !readonly {
+		if err := os.MkdirAll(path, 0o700); err != nil {
 			return nil, ustr.Wrap(err, "mstore")
 		}
 	}
-	if info, err := os.Stat(prefix); err != nil || !info.IsDir() {
+
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		return nil, errors.New("mstore: invalid store")
 	}
 
-	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
+	s := &Store{readonly: readonly, path: path, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}
+	if !readonly {
+		lock, err := unix.Open(path, 0, 0o700)
+		if err != nil {
+			return nil, errors.New("mstore: invalid store")
+		}
+		if err := unix.Flock(lock, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			return nil, errors.New("mstore: already opened for writing")
+		}
+		s.lock = lock
+	}
+
+	return s, nil
 }
 
-func (s *Store) Metric(name string) *metric {
-	if !rcache.Get(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`).MatchString(name) {
-		return nil
+func (s *Store) Close() {
+	if !s.closed.Swap(true) {
+		if !s.readonly {
+			unix.Close(s.lock)
+		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+}
+
+func (s *Store) Metric(name string) (m *metric, err error) {
+	if s.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
+	if !nameMatcher.MatchString(name) {
+		return nil, errors.New("mstore: invalid metric name")
+	}
 	if metric, exists := s.metrics[name]; exists {
-		return metric
+		return metric, nil
 	}
-	s.metrics[name] = &metric{store: s, name: name}
+	s.metrics[name] = &metric{store: s, name: name, path: ""}
 
-	return s.metrics[name]
+	return s.metrics[name], nil
 }
 
-func (s *Store) List(prefix string) (names []string) {
-	prefix = filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator)))
-	if !strings.HasPrefix(filepath.Clean(prefix)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
-		return
+func (s *Store) List(path string) (names []string, err error) {
+	if s.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
+	if path != "" && !nameMatcher.MatchString(path) {
+		return nil, errors.New("mstore: invalid path")
+	}
+	path = filepath.Join(s.path, strings.ReplaceAll(path, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(path)+string(filepath.Separator), filepath.Clean(s.path)+string(filepath.Separator)) {
+		return nil, errors.New("mstore: invalid path")
 	}
 
 	names = []string{}
-	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
+	filepath.WalkDir(path, func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
-			names = append(names, strings.ReplaceAll(strings.Trim(strings.TrimPrefix(filepath.Dir(path), s.prefix), string(filepath.Separator)), string(filepath.Separator), "."))
+			names = append(names, strings.ReplaceAll(strings.Trim(strings.TrimPrefix(filepath.Dir(path), s.path), string(filepath.Separator)), string(filepath.Separator), "."))
 		}
 		return nil
 	})
@@ -252,16 +298,29 @@ func (s *Store) List(prefix string) (names []string) {
 }
 
 func (s *Store) Rename(from, to string) error {
-	from = filepath.Join(s.prefix, strings.ReplaceAll(from, ".", string(filepath.Separator)))
-	if !strings.HasPrefix(filepath.Clean(from)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
-		return errors.New("mstore: path traversal detected")
+	if s.closed.Load() {
+		return errors.New("mstore: closed")
+	}
+
+	if s.readonly {
+		return errors.New("mstore: read-only store")
+	}
+	if !nameMatcher.MatchString(from) {
+		return errors.New("mstore: invalid source metric name")
+	}
+	if !nameMatcher.MatchString(to) {
+		return errors.New("mstore: invalid target metric name")
+	}
+	from = filepath.Join(s.path, strings.ReplaceAll(from, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(from)+string(filepath.Separator), filepath.Clean(s.path)+string(filepath.Separator)) {
+		return errors.New("mstore: path traversal")
 	}
 	if info, err := os.Stat(from); err != nil || !info.IsDir() {
 		return errors.New("mstore: invalid source metric")
 	}
-	to = filepath.Join(s.prefix, strings.ReplaceAll(to, ".", string(filepath.Separator)))
-	if !strings.HasPrefix(filepath.Clean(to)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
-		return errors.New("mstore: path traversal detected")
+	to = filepath.Join(s.path, strings.ReplaceAll(to, ".", string(filepath.Separator)))
+	if !strings.HasPrefix(filepath.Clean(to)+string(filepath.Separator), filepath.Clean(s.path)+string(filepath.Separator)) {
+		return errors.New("mstore: path traversal")
 	}
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
@@ -274,22 +333,43 @@ func (s *Store) Rename(from, to string) error {
 }
 
 func (s *Store) Trim(name string, start, end time.Time) error {
-	return nil
+	if s.closed.Load() {
+		return errors.New("mstore: closed")
+	}
+
+	if s.readonly {
+		return errors.New("mstore: read-only store")
+	}
+
+	return nil // TODO implement
 }
 
 func (s *Store) Delete(name string) error {
-	return nil
+	if s.closed.Load() {
+		return errors.New("mstore: closed")
+	}
+
+	if s.readonly {
+		return errors.New("mstore: read-only store")
+	}
+
+	return nil // TODO implement
 }
 
-func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]int64) (result map[string]any) {
+func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]int64) (result map[string]any, err error) {
+	if s.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
+	// TODO cap max work
 	result = map[string]any{}
 	if count := len(names); count > 0 {
 		queue := make(chan []any)
 		for name, columns := range names {
 			go func(name string, columns [][]int64) {
-				m := s.Metric(name)
-				if m == nil {
-					queue <- []any{name, map[string]string{"error": "invalid name"}}
+				m, err := s.Metric(name)
+				if err != nil {
+					queue <- []any{name, map[string]string{"error": err.Error()}}
 					return
 				}
 				if value, err := m.Get(start, end, interval, columns); err == nil {
@@ -315,15 +395,16 @@ func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]i
 
 func (m *metric) meta(create bool) error {
 	if m.path == "" {
-		m.path = filepath.Join(m.store.prefix, strings.ReplaceAll(m.name, ".", string(filepath.Separator)))
-		if !strings.HasPrefix(filepath.Clean(m.path)+string(filepath.Separator), filepath.Clean(m.store.prefix)+string(filepath.Separator)) {
-			return errors.New("mstore: path traversal detected")
+		m.path = filepath.Join(m.store.path, strings.ReplaceAll(m.name, ".", string(filepath.Separator)))
+		if !strings.HasPrefix(filepath.Clean(m.path)+string(filepath.Separator), filepath.Clean(m.store.path)+string(filepath.Separator)) {
+			return errors.New("mstore: path traversal")
 		}
 	}
 	if m.size != 0 {
 		return nil
 	}
 	path := filepath.Join(m.path, ".meta")
+
 	if data, err := os.ReadFile(path); err == nil {
 		size := len(data)
 		if size < metaMinSize || size > metaMaxSize || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:size-4]) != binary.BigEndian.Uint32(data[size-4:]) {
@@ -334,7 +415,7 @@ func (m *metric) meta(create bool) error {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.interval, m.columns, m.size = int64(binary.BigEndian.Uint16(data[4:])), []*Column{}, 1
-		if m.interval < minInterval {
+		if m.interval < minInterval || m.interval > maxInterval {
 			return errors.New("mstore: invalid interval")
 		}
 		if m.interval > 120 {
@@ -346,8 +427,15 @@ func (m *metric) meta(create bool) error {
 			if size != 1 && size != 2 && size != 4 && size != 8 {
 				return errors.New("mstore: invalid column size")
 			}
+			mode := int64(binary.BigEndian.Uint32(data[offset:]))
+			if _, ok := ModeNames[mode]; !ok {
+				return errors.New("mstore: invalid column mode")
+			}
+			if (mode == ModeText || mode == ModeBinary) && size > 2 {
+				return errors.New("mstore: invalid column size")
+			}
 			m.columns = append(m.columns, &Column{
-				Mode:        int64(binary.BigEndian.Uint32(data[offset:])),
+				Mode:        mode,
 				Size:        size,
 				Description: string(bytes.Trim(data[offset+6:offset+38], "\x00")),
 			})
@@ -357,6 +445,7 @@ func (m *metric) meta(create bool) error {
 		m.description, m.frozen = string(bytes.Trim(data[size-128-4:size-4], "\x00")), true
 		return nil
 	}
+
 	if create {
 		if len(m.columns) == 0 {
 			return errors.New("mstore: empty columns list")
@@ -395,7 +484,14 @@ func (m *metric) meta(create bool) error {
 		offset += 128
 		binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(data[:offset]))
 		offset += 4
-		if os.WriteFile(path, data[:offset], 0o600) != nil {
+
+		handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|file.O_NOFOLLOW, 0o600)
+		if err != nil {
+			return errors.New("mstore: invalid metadata")
+		}
+		defer handle.Close()
+
+		if n, err := handle.Write(data[:offset]); err != nil || n != offset {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.frozen = true
@@ -411,7 +507,7 @@ func (m *metric) chunk(atime time.Time, create bool) (data []byte, offset, delta
 	end := time.Date(atime.Year(), atime.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 	slots := (atime.Unix() - start.Unix()) / m.interval
 	offset, delta = 4+slots*m.size, atime.Unix()-start.Unix()-(slots*m.interval)
-	data, err = m.store.chunk(filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
+	data, err = m.store.chunk(m, filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
 
 	return
 }
@@ -422,6 +518,7 @@ func (m *metric) mapping(column int, flush bool) error {
 	}
 	m.columns[column].mu.Lock()
 	defer m.columns[column].mu.Unlock()
+
 	path := filepath.Join(m.path, ".map"+strconv.FormatInt(int64(column), 10))
 	if m.columns[column].mapping != nil {
 		count := len(m.columns[column].mapping[1])
@@ -440,13 +537,21 @@ func (m *metric) mapping(column int, flush bool) error {
 				offset += 2 + length
 			}
 			binary.BigEndian.PutUint32(data[size-4:], crc32.ChecksumIEEE(data[:size-4]))
-			if os.WriteFile(path, data, 0o600) != nil {
+
+			handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|file.O_NOFOLLOW, 0o600)
+			if err != nil {
+				return errors.New("mstore: invalid mapping")
+			}
+			defer handle.Close()
+
+			if n, err := handle.Write(data); err != nil || n != len(data) {
 				return errors.New("mstore: invalid mapping")
 			}
 		}
 		return nil
 	}
-	m.columns[column].mapping = []map[int]*entry{map[int]*entry{}, map[int]*entry{}}
+
+	loaded := []map[int]*entry{map[int]*entry{}, map[int]*entry{}}
 	if data, err := os.ReadFile(path); err == nil {
 		size, offset := len(data), 6
 		if size < 10 || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:size-4]) != binary.BigEndian.Uint32(data[size-4:]) {
@@ -462,11 +567,12 @@ func (m *metric) mapping(column int, flush bool) error {
 			}
 			entry := &entry{index: index, value: make([]byte, length)}
 			copy(entry.value, data[offset+2:offset+2+length])
-			m.columns[column].mapping[0][int(crc32.ChecksumIEEE(entry.value))] = entry
-			m.columns[column].mapping[1][index] = entry
+			loaded[0][int(crc32.ChecksumIEEE(entry.value))] = entry
+			loaded[1][index] = entry
 			offset += 2 + length
 		}
 	}
+	m.columns[column].mapping = loaded
 
 	return nil
 }
@@ -574,9 +680,14 @@ func (m *metric) WithColumns(columns []*Column) *metric {
 }
 
 func (m *metric) Metadata() (metadata map[string]any, err error) {
+	if m.store.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
 	if err := m.meta(false); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
+
 	columns, names, first, last := []map[string]any{}, []string{}, int64(-1), int64(-1)
 	for index, column := range m.columns {
 		columns = append(columns, map[string]any{
@@ -588,14 +699,14 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 	}
 	if len(columns) != 0 {
 		filepath.WalkDir(m.path, func(path string, entry fs.DirEntry, err error) error {
-			if entry != nil && entry.Type().IsRegular() && rcache.Get(`^\d{4}-\d{2}$`).MatchString(entry.Name()) {
+			if entry != nil && entry.Type().IsRegular() && monthMatcher.MatchString(entry.Name()) {
 				names = append(names, entry.Name())
 			}
 			return nil
 		})
 		sort.Strings(names)
 		if len(names) != 0 {
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[0]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[0]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
@@ -615,7 +726,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 					}
 				}
 			}
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[len(names)-1]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[len(names)-1]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
@@ -644,7 +755,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 	}
 
 	return map[string]any{
-		"store":       m.store.prefix,
+		"store":       m.store.path,
 		"name":        m.name,
 		"description": m.description,
 		"interval":    m.interval,
@@ -655,6 +766,10 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 }
 
 func (m *metric) Export() (export map[string]any, err error) {
+	if m.store.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
 	metadata, err := m.Metadata()
 	if err != nil {
 		return nil, ustr.Wrap(err, "mstore")
@@ -690,6 +805,10 @@ func (m *metric) Export() (export map[string]any, err error) {
 }
 
 func (m *metric) Import(in map[string]any) error {
+	if m.store.closed.Load() {
+		return errors.New("mstore: closed")
+	}
+
 	if in == nil {
 		return errors.New("mstore: invalid parameter")
 	}
@@ -704,6 +823,9 @@ func (m *metric) Import(in map[string]any) error {
 	if len(columns) == 0 {
 		return errors.New("mstore: empty columns list")
 	}
+	if len(columns) > MaxColumns {
+		return errors.New("mstore: too many columns")
+	}
 	for _, value := range columns {
 		column := j.Map(value)
 		if mode := ModeIndexes[j.String(column["mode"])]; mode != 0 {
@@ -714,7 +836,7 @@ func (m *metric) Import(in map[string]any) error {
 		}
 	}
 	for _, value := range j.Slice(in["values"]) {
-		if entry := j.Slice(value); len(entry) >= 2 {
+		if entry := j.Slice(value); len(entry) == len(columns)+1 {
 			at, err := time.Parse(time.DateTime, j.String(entry[0]))
 			if err != nil {
 				value := int64(j.Number(entry[0]))
@@ -737,14 +859,21 @@ func (m *metric) Put(values ...any) error {
 }
 
 func (m *metric) PutAt(atime time.Time, values ...any) error {
-	m.Lock()
-	defer m.Unlock()
+	if m.store.closed.Load() {
+		return errors.New("mstore: closed")
+	}
+
+	if m.store.readonly {
+		return errors.New("mstore: read-only store")
+	}
 	if time.Since(atime) < 0 {
 		return errors.New("mstore: metric time in future")
 	}
 	if err := m.meta(true); err != nil {
 		return ustr.Wrap(err, "mstore")
 	}
+
+	m.mu.Lock()
 	data, offset, delta, err := m.chunk(atime, true)
 	if err == nil {
 		header, coffset := false, offset+1
@@ -781,7 +910,7 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 						} else if value, ok := value.([]byte); ok {
 							content = value
 						}
-						if len(content) > 0 && m.mapping(column, false) == nil {
+						if len(content) > 0 && len(content) < 64<<10 && m.mapping(column, false) == nil {
 							key := int(crc32.ChecksumIEEE(content))
 							m.columns[column].mu.Lock()
 							if value, exists := m.columns[column].mapping[0][key]; exists {
@@ -807,21 +936,24 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 			}
 		}
 	}
-	m.store.cleanup()
+	m.mu.Unlock()
 
 	return ustr.Wrap(err, "mstore")
 }
 
 func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, prepend ...bool) (result map[string]any, err error) {
-	m.Lock()
-	defer m.Unlock()
+	if m.store.closed.Load() {
+		return nil, errors.New("mstore: closed")
+	}
+
 	if err := m.meta(false); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
+
 	result = map[string]any{"range": []int64{0, 0}, "columns": [][]any{}, "values": []any{}}
 	mapping, duplicates := [][]int64{}, map[int64]bool{}
 	for _, column := range columns {
-		if len(column) == 0 || int(column[0]) >= len(m.columns) {
+		if len(column) == 0 || column[0] < 0 || column[0] >= int64(len(m.columns)) {
 			continue
 		}
 		aggregate, lowest, highest := int64(0), int64(math.MinInt64), int64(math.MaxInt64)
@@ -875,7 +1007,9 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		}
 
 		var data []byte
+
 		current, values, steps, msteps, step, offset, ptime := start, []any{}, interval/m.interval, make([]int, len(mapping)), int64(0), int64(0), int64(0)
+		m.mu.RLock()
 		for current.Before(end) {
 			if data == nil {
 				data, offset, _, _ = m.chunk(current, false)
@@ -905,11 +1039,17 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 
 								case ModeText, ModeBinary:
 									values = append(values, []byte{})
+
+								default:
+									values = append(values, nil)
 								}
 							}
 						}
 					}
 					for index, item := range mapping {
+						if index >= len(values) {
+							break
+						}
 						switch item[1] {
 						case ModeGauge, ModeIncrement:
 							msteps[index]++
@@ -1200,8 +1340,8 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 				values, msteps, step = []any{}, make([]int, len(mapping)), 0
 			}
 		}
+		m.mu.RUnlock()
 	}
-	m.store.cleanup()
 
 	return
 }

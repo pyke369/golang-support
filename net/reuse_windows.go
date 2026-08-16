@@ -3,11 +3,13 @@
 package net
 
 import (
-	"syscall"
+	"errors"
 )
 
-func reuse(handle uintptr, port bool) {
-	if port {
-		syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-	}
+func reuseAddr(handle uintptr) error {
+	return errors.ErrUnsupported
+}
+
+func reusePort(handle uintptr) error {
+	return errors.ErrUnsupported
 }
