@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"reflect"
@@ -86,12 +87,14 @@ type ROUTE struct {
 
 type HANDLER func(map[string]any, any) (any, *ERROR)
 
-var httpDefaultTransport *http.Transport
+var (
+	httpDefaultTransport *http.Transport
+)
 
 func init() {
 	httpDefaultTransport = http.DefaultTransport.(*http.Transport).Clone()
 	httpDefaultTransport.MaxIdleConnsPerHost = 16
-	httpDefaultTransport.IdleConnTimeout = time.Minute
+	httpDefaultTransport.IdleConnTimeout = 15 * time.Second
 	httpDefaultTransport.DisableCompression = true
 	httpDefaultTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 }
@@ -121,7 +124,13 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 			request.Header.Set(key, value)
 		}
 		request.Header.Set("Content-Type", "application/json")
-		client := &http.Client{Transport: options.Transport, Timeout: options.Timeout}
+		client := &http.Client{
+			Transport: options.Transport,
+			Timeout:   options.Timeout,
+			CheckRedirect: func(request *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 		if response, err := client.Do(request); err == nil {
 			out, err = io.ReadAll(io.LimitReader(response.Body, 256<<10))
 			response.Body.Close()
@@ -264,7 +273,7 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 	return Response(out, calls)
 }
 
-func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, extra ...any) (out []byte) {
+func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 	in, out = bytes.TrimSpace(in), []byte{}
 	batch := true
 	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
@@ -281,7 +290,13 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 		} else {
-			if len(requests) == 0 || len(requests) > 16 || requests[0].JSONRPC == "" {
+			concurrency := 1
+			if len(extra) > 1 {
+				if value := int(Number(extra[1])); value > 0 {
+					concurrency = min(16, value)
+				}
+			}
+			if len(requests) == 0 || len(requests) > concurrency || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 
 			} else {
@@ -300,19 +315,6 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 							responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: METHOD_NOT_FOUND_CODE, Message: METHOD_NOT_FOUND_MESSAGE}}
 						}
 						continue
-					}
-
-					if filter != nil {
-						ctx := routes[request.Method].Context
-						if ctx == nil && len(extra) > 0 {
-							ctx = extra[0]
-						}
-						if filter(request.Method, ctx) {
-							if request.Id != nil {
-								responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: METHOD_NOT_AUTHORIZED_CODE, Message: METHOD_NOT_AUTHORIZED_MESSAGE}}
-							}
-							continue
-						}
 					}
 
 					if request.Params != nil {
@@ -337,8 +339,8 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 					running++
 					go func(request REQUEST) {
 						defer func() {
-							if r := recover(); r != nil {
-								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE}}
+							if recover() != nil {
+								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: request.Id}}
 							}
 						}()
 
@@ -437,7 +439,16 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 func Flatten(in any, out map[string]string, extra ...map[string]any) {
 	separator, path, options := ".", "", map[string]any{}
 	if len(extra) > 0 && extra[0] != nil {
-		options = extra[0]
+		options = maps.Clone(extra[0])
+	}
+	if value, ok := options["_level"].(int); !ok {
+		options["_level"] = 1
+
+	} else {
+		options["_level"] = value + 1
+	}
+	if options["_level"].(int) > 1000 {
+		return
 	}
 	if value, ok := options["separator"].(string); ok {
 		separator = value
@@ -590,7 +601,7 @@ func Number(in any, fallback ...float64) float64 {
 			return reflect.ValueOf(in).Float()
 
 		case reflect.String:
-			if value, err := strconv.ParseFloat(reflect.ValueOf(in).String(), 64); err == nil {
+			if value, err := strconv.ParseFloat(reflect.ValueOf(in).String(), 64); err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) {
 				return value
 			}
 		}
@@ -826,7 +837,6 @@ func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out 
 		}
 		out = int64(value * math.Pow(scale, float64(strings.Index("_KMGTP", captures[2]))))
 		return max(min(out, highest), max(0, lowest))
-
 	}
 
 	return fallback
@@ -840,7 +850,7 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 	in = strings.TrimSpace(in)
 
 	value := float64(0.0)
-	if captures := rcache.Get(`(\d+)(Y|MO|D|H|MN|S|MS|US)?`).FindAllStringSubmatch(strings.ToUpper(in), -1); captures != nil {
+	if captures := rcache.Get(`^(\d+)(Y|MO|D|H|MN|S|MS|US)?$`).FindAllStringSubmatch(strings.ToUpper(in), -1); captures != nil {
 		for index := 0; index < len(captures); index++ {
 			if uvalue, err := strconv.ParseFloat(captures[index][1], 64); err == nil {
 				switch captures[index][2] {
@@ -885,5 +895,5 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 		value = fallback
 	}
 
-	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
+	return time.Duration(max(min(value, min(highest, float64(math.MaxInt64/int64(time.Second)))), max(0, lowest))) * time.Second
 }
