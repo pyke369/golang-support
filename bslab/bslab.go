@@ -61,9 +61,6 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	if len(extra) != 0 {
 		item = extra[0]
 	}
-	if size <= 0 {
-		return nil
-	}
 	if size < (1 << 8) {
 		size = (1 << 8)
 	}
@@ -76,6 +73,7 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 		}
 	}
 	if out == nil {
+		want := size
 		bits, power := uint(0), uint(0)
 		if size&(size-1) == 0 {
 			power = 1
@@ -85,7 +83,7 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 			bits++
 		}
 		if bits-power > 26 {
-			return nil
+			return make([]byte, 0, want)
 		}
 		size = 1 << (bits - power)
 		if slab, exists := a.slabs[size]; exists {

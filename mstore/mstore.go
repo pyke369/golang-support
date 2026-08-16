@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/sys/unix"
@@ -131,6 +131,9 @@ var (
 		"percentile": AggregatePercentile,
 		"raw":        AggregateRaw,
 	}
+
+	nameMatcher  = regexp.MustCompile(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
+	monthMatcher = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
 )
 
 func (s *Store) chunk(path string, size int64, create bool) (data []byte, err error) {
@@ -220,18 +223,18 @@ func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
 }
 
-func (s *Store) Metric(name string) *metric {
-	if !rcache.Get(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`).MatchString(name) {
-		return nil
+func (s *Store) Metric(name string) (m *metric, err error) {
+	if !nameMatcher.MatchString(name) {
+		return nil, errors.New("mstore: invalid metric name")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if metric, exists := s.metrics[name]; exists {
-		return metric
+		return metric, nil
 	}
 	s.metrics[name] = &metric{store: s, name: name}
 
-	return s.metrics[name]
+	return s.metrics[name], nil
 }
 
 func (s *Store) List(prefix string) (names []string) {
@@ -241,7 +244,7 @@ func (s *Store) List(prefix string) (names []string) {
 	}
 
 	names = []string{}
-	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
+	filepath.WalkDir(prefix, func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
 			names = append(names, strings.ReplaceAll(strings.Trim(strings.TrimPrefix(filepath.Dir(path), s.prefix), string(filepath.Separator)), string(filepath.Separator), "."))
 		}
@@ -287,9 +290,9 @@ func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]i
 		queue := make(chan []any)
 		for name, columns := range names {
 			go func(name string, columns [][]int64) {
-				m := s.Metric(name)
-				if m == nil {
-					queue <- []any{name, map[string]string{"error": "invalid name"}}
+				m, err := s.Metric(name)
+				if err != nil {
+					queue <- []any{name, map[string]string{"error": err.Error()}}
 					return
 				}
 				if value, err := m.Get(start, end, interval, columns); err == nil {
@@ -588,14 +591,14 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 	}
 	if len(columns) != 0 {
 		filepath.WalkDir(m.path, func(path string, entry fs.DirEntry, err error) error {
-			if entry != nil && entry.Type().IsRegular() && rcache.Get(`^\d{4}-\d{2}$`).MatchString(entry.Name()) {
+			if entry != nil && entry.Type().IsRegular() && monthMatcher.MatchString(entry.Name()) {
 				names = append(names, entry.Name())
 			}
 			return nil
 		})
 		sort.Strings(names)
 		if len(names) != 0 {
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[0]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[0]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
@@ -615,7 +618,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 					}
 				}
 			}
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[len(names)-1]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[len(names)-1]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {

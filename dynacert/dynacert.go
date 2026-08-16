@@ -5,35 +5,55 @@ import (
 	"errors"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
 type cert struct {
 	inline   bool
-	match    string
 	public   string
 	private  string
+	matcher  *regexp.Regexp
 	cert     *tls.Certificate
 	modified time.Time
 }
 
 type DYNACERT struct {
-	certs []*cert
-	last  int64
-	mu    sync.RWMutex
+	mu       sync.RWMutex
+	wildcard *cert
+	certs    []*cert
+	last     int64
 }
 
-func (d *DYNACERT) Add(match, public, private string) {
+func (d *DYNACERT) Add(match, public, private string) error {
 	d.mu.Lock()
-	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
-	d.mu.Unlock()
+	defer d.mu.Unlock()
+
+	match = strings.TrimSpace(match)
+	if match == "" || match == "*" {
+		d.wildcard = &cert{public: strings.TrimSpace(public), private: strings.TrimSpace(private)}
+		return nil
+	}
+
+	if match[0] != '^' {
+		match = "^" + match
+	}
+	if match[len(match)-1] != '$' {
+		match += "$"
+	}
+	matcher, err := regexp.Compile(match)
+	if err != nil {
+		return ustr.Wrap(err, "dynacert")
+	}
+	d.certs = append(d.certs, &cert{matcher: matcher, public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	atomic.StoreInt64(&d.last, time.Now().Add(-time.Minute).UnixNano())
+
+	return nil
 }
 
 func (d *DYNACERT) Inline(match string, public, private []byte) error {
@@ -44,7 +64,22 @@ func (d *DYNACERT) Inline(match string, public, private []byte) error {
 	if err != nil {
 		return ustr.Wrap(err, "dynacert")
 	}
-	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), inline: true, cert: &value})
+	match = strings.TrimSpace(match)
+	if match == "" || match == "*" {
+		d.wildcard = &cert{inline: true, cert: &value}
+		return nil
+	}
+	if match[0] != '^' {
+		match = "^" + match
+	}
+	if match[len(match)-1] != '$' {
+		match += "$"
+	}
+	matcher, err := regexp.Compile(match)
+	if err != nil {
+		return ustr.Wrap(err, "dynacert")
+	}
+	d.certs = append(d.certs, &cert{inline: true, matcher: matcher, cert: &value})
 
 	return nil
 }
@@ -60,19 +95,6 @@ func (d *DYNACERT) Count() int {
 	defer d.mu.RUnlock()
 
 	return len(d.certs)
-}
-
-func (d *DYNACERT) Get(match string) (public, private string) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	for _, cert := range d.certs {
-		if cert.match == match {
-			return cert.public, cert.private
-		}
-	}
-
-	return
 }
 
 func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certificate, err error) {
@@ -107,15 +129,13 @@ func (d *DYNACERT) GetCertificate(hello *tls.ClientHelloInfo) (cert *tls.Certifi
 			name = value
 		}
 		for _, cert := range d.certs {
-			if cert.match != "" && cert.match != "*" && cert.cert != nil && rcache.Get(cert.match).MatchString(name) {
+			if cert.matcher.MatchString(name) {
 				return cert.cert, nil
 			}
 		}
 	}
-	for _, cert := range d.certs {
-		if (cert.match == "" || cert.match == "*") && cert.cert != nil {
-			return cert.cert, nil
-		}
+	if d.wildcard != nil {
+		return d.wildcard.cert, nil
 	}
 
 	return nil, errors.New(`dynacert: no matching certificate`)

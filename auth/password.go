@@ -9,13 +9,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/pyke369/golang-support/file"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
-	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -38,6 +37,7 @@ var (
 		[]rune("qsdfghjklm"),
 		[]rune("wxcvbn"),
 	}
+	saltMatcher = regexp.MustCompile(`^[./0-9A-Za-z]{1,16}$`)
 
 	// see https://akkadia.org/drepper/SHA-crypt.txt
 	cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
@@ -50,22 +50,21 @@ func init() {
 	}
 }
 
-func Crypt512(in, salt string, rounds int) (out string, err error) {
+func crypt512(in, salt string, rounds int) (out string, err error) {
 	in, salt = strings.TrimSpace(in), strings.TrimSpace(salt)
 	if len(in) > 128 {
 		return "", errors.New("auth: password too long")
 	}
+	if rounds < 1000 || rounds >= 1000000000 {
+		return "", errors.New("auth: invalid rounds value")
+	}
 
 	out = "$6$"
-	if rounds <= 0 {
-		rounds = 100000
-	}
 	if rounds != 5000 {
-		rounds = max(100000, min(1000000, rounds))
 		out += "rounds=" + strconv.Itoa(rounds) + "$"
 	}
 	salt = salt[:min(16, len(salt))]
-	if salt != "" && !rcache.Get(`^[\./0-9A-Za-z]{1,16}$`).MatchString(salt) {
+	if salt != "" && !saltMatcher.MatchString(salt) {
 		return "", errors.New("auth: invalid salt")
 	}
 	if salt == "" {
@@ -174,82 +173,65 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 	return out + string(C[:86]), nil
 }
 
-func Password(in string, values []string) (match bool, entry string) {
+func Crypt512(in, salt string) (out string, err error) {
+	return crypt512(in, salt, 100000)
+}
+
+func Password(in string, values []string) bool {
 	if len(values) == 0 {
-		return false, ""
+		return false
 	}
 
-	login, password, checked := "", in, false
-	if parts := strings.SplitN(in, ":", 2); len(parts) >= 2 {
-		login, password = parts[0], parts[1]
+	parts := strings.SplitN(in, ":", 2)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return false
 	}
+	login, password := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+
 	for _, value := range values {
-		check := value
-		if login != "" {
-			if parts := strings.Split(check, ":"); len(parts) < 2 || login != parts[0] {
-				continue
-
-			} else {
-				check = parts[1]
-			}
+		parts := strings.SplitN(value, ":", 2)
+		if len(parts) < 2 || login != strings.TrimSpace(parts[0]) {
+			continue
 		}
-		if check != "" && (check[0] == '!' || check[0] == '*') {
+		check := strings.TrimSpace(parts[1])
+		if check == "" || check[0] == '!' || check[0] == '*' {
 			continue
 		}
 
 		if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
-			checked = true
 			switch parts[1] {
 			case "6":
 				rounds, salt := 5000, parts[2]
 				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
 					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
-						rounds = value
+						rounds = min(1000000, max(1000, value))
 					}
 					salt = parts[3]
 				}
-				if encrypted, err := Crypt512(password, salt, rounds); err == nil {
+				if encrypted, err := crypt512(password, salt, rounds); err == nil {
 					if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-						parts := strings.Split(value, ":")
-						if len(parts) >= 2 {
-							parts[1] = "*"
-
-						} else {
-							parts[0] = "*"
-						}
-						return true, strings.Join(parts, ":")
+						return true
 					}
 				}
 
 			case "2", "2a":
-				// TODO add bcrypt support
+				// TODO add bcrypt support (golang.org/x/crypto/bcrypt)
 
-			case "y":
-				// TODO add yescrypt support
-
-			case "?":
-				// TODO add argon2 support
+			case "argon2id":
+				// TODO add argon2 support (golang.org/x/crypto/argon2)
 			}
 		}
 	}
-	if !checked {
-		Crypt512(password, uhash.RandKey(16), 0)
-	}
 
-	return false, ""
+	return false
 }
 
-func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool, entry string) {
+func PasswordConfig(in string, config *uconfig.UConfig, path string) bool {
 	return Password(in, config.Strings(path))
 }
 
-func PasswordFile(in, path string) (match bool, entry string) {
-	lines := file.Read(path, map[string]any{"options": "trim comment"})
-	if len(lines) == 0 {
-		return false, ""
-	}
-
-	return Password(in, lines)
+func PasswordFile(in, path string) bool {
+	return Password(in, file.Read(path, map[string]any{"options": "trim comment"}))
 }
 
 func passwordContains(runes, seq []rune, start int) (offset, length int) {

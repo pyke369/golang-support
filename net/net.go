@@ -94,6 +94,7 @@ func Loopback(in string) (loopback bool, err error) {
 }
 
 func Reserved(in netip.Addr) bool {
+	in = in.Unmap()
 	if in.Is4() {
 		for _, prefix := range v4reserved {
 			if prefix.Contains(in) {

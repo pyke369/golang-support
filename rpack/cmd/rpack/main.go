@@ -35,12 +35,15 @@ func main() {
 	if options.Lookup("minified").Value.String() == "true" {
 		minified = true
 	}
-	rpack.Pack(options.Arg(0),
+	if err := rpack.Pack(options.Arg(0),
 		options.Lookup("output").Value.String(),
 		options.Lookup("pkgname").Value.String(),
 		options.Lookup("funcname").Value.String(),
 		options.Lookup("include").Value.String(),
 		options.Lookup("exclude").Value.String(),
 		minified,
-	)
+	); err != nil {
+		os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(2)
+	}
 }

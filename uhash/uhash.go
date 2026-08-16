@@ -23,6 +23,9 @@ func RandInt(in int) (out int) {
 	return
 }
 func RandKey(size int, extra ...string) (out string) {
+	if size <= 0 {
+		return
+	}
 	encoding := "hex"
 	if len(extra) != 0 {
 		encoding = strings.ToLower(extra[0])

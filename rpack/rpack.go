@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
@@ -93,28 +92,39 @@ func combine(crc1, crc2, len2 uint32) uint32 {
 
 // 🔔 /SHAME! 🔔
 
-func Pack(root, out, pkgname, funcname, include, exclude string, minified bool) {
+func Pack(root, out, pkgname, funcname, include, exclude string, minified bool) error {
 	var (
 		includer *regexp.Regexp
 		excluder *regexp.Regexp
 	)
 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
-		return
+		return errors.New("rpack: invalid root path")
 	}
-	matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-	if !matcher.MatchString(pkgname) || !matcher.MatchString(funcname) {
-		return
+	matcher := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	if !matcher.MatchString(pkgname) {
+		return errors.New("rpack: invalid package name")
+	}
+	if !matcher.MatchString(funcname) {
+		return errors.New("rpack: invalid function name")
 	}
 
 	if funcname == "" {
 		funcname = "Resources"
 	}
 	if include != "" {
-		includer = rcache.Get(include)
+		value, err := regexp.Compile(strings.TrimSpace(include))
+		if err != nil {
+			return errors.New("rpack: invalid include expression")
+		}
+		includer = value
 	}
 	if exclude != "" {
-		excluder = rcache.Get(exclude)
+		value, err := regexp.Compile(strings.TrimSpace(exclude))
+		if err != nil {
+			return errors.New("rpack: invalid exclude expression")
+		}
+		excluder = value
 	}
 	entries := map[string]*RPACK{}
 	compressor, _ := gzip.NewWriterLevel(nil, gzip.BestCompression)
@@ -206,6 +216,8 @@ func ` + funcname + `Handler(ttl time.Duration) http.Handler {
 `)
 		handle.Close()
 	}
+
+	return nil
 }
 
 func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte, ctype string, modified int64, err error) {
@@ -221,6 +233,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	}
 
 	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if entry.raw == nil {
 		value, err := base64.StdEncoding.DecodeString(entry.Content)
 		if err != nil {
@@ -228,7 +241,6 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 		}
 		entry.raw = value
 	}
-	entry.mu.Unlock()
 
 	content, ctype, modified = entry.raw, entry.Mime, entry.Modified
 	if uncompress {
@@ -249,6 +261,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			return
 		}
 		if sttl := ttl / time.Second; sttl > 0 {
+			rw.Header().Set("Vary", "Accept-Encoding")
 			rw.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
 			rw.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
@@ -257,13 +270,10 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			r.URL.Path += "index"
 		}
 		prefix, resources := path.Dir(r.URL.Path), strings.Split(path.Base(r.URL.Path), "+")
-		if len(resources) > 10 {
-			resources = resources[:10]
-		}
+		resources = resources[:min(8, len(resources))]
 
 		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && r.Header.Get("Range") == "" {
-			rw.Header().Set("Content-Encoding", "gzip")
 			uncompress = false
 		}
 		for index, resource := range resources {
@@ -276,6 +286,9 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			}
 
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
+				if !uncompress {
+					rw.Header().Set("Content-Encoding", "gzip")
+				}
 				if len(resources) > 1 && !uncompress {
 					if len(pcontent) < 18 {
 						rw.WriteHeader(http.StatusInternalServerError)
@@ -325,7 +338,6 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Content-Type", ctype)
-		rw.Header().Set("Content-Length", strconv.Itoa(len(content)))
 		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))
 	})
 }

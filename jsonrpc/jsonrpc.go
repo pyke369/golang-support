@@ -86,7 +86,9 @@ type ROUTE struct {
 
 type HANDLER func(map[string]any, any) (any, *ERROR)
 
-var httpDefaultTransport *http.Transport
+var (
+	httpDefaultTransport *http.Transport
+)
 
 func init() {
 	httpDefaultTransport = http.DefaultTransport.(*http.Transport).Clone()
@@ -281,7 +283,13 @@ func Handle(in []byte, routes map[string]*ROUTE, filter func(string, any) bool, 
 			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 		} else {
-			if len(requests) == 0 || len(requests) > 16 || requests[0].JSONRPC == "" {
+			concurrency := 1
+			if len(extra) > 1 {
+				if value := int(Number(extra[1])); value > 0 {
+					concurrency = min(16, value)
+				}
+			}
+			if len(requests) == 0 || len(requests) > concurrency || requests[0].JSONRPC == "" {
 				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 
 			} else {
@@ -826,7 +834,6 @@ func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out 
 		}
 		out = int64(value * math.Pow(scale, float64(strings.Index("_KMGTP", captures[2]))))
 		return max(min(out, highest), max(0, lowest))
-
 	}
 
 	return fallback
@@ -885,5 +892,5 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 		value = fallback
 	}
 
-	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
+	return time.Duration(max(min(value, min(highest, float64(math.MaxInt64/int64(time.Second)))), max(0, lowest))) * time.Second
 }

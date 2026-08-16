@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/pyke369/golang-support/bslab"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 	"golang.org/x/net/http/httpproxy"
@@ -86,8 +86,9 @@ type Socket struct {
 }
 
 var (
-	proxy func(*url.URL) (*url.URL, error)
-	gnow  int64
+	splitter = regexp.MustCompile("[, ]+")
+	proxy    func(*url.URL) (*url.URL, error)
+	gnow     int64
 )
 
 func init() {
@@ -318,12 +319,9 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 			rw.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		cprotocols, sprotocols, protocol := []string{}, map[string]bool{}, ""
+		sprotocols, protocol := map[string]bool{}, ""
 		if len(config.Protocols) > 0 {
-			if splitter := rcache.Get("[, ]+"); splitter != nil {
-				cprotocols = splitter.Split(r.Header.Get("Sec-WebSocket-Protocol"), 10)
-			}
-			if len(cprotocols) > 0 {
+			if cprotocols := splitter.Split(r.Header.Get("Sec-WebSocket-Protocol"), 10); len(cprotocols) > 0 {
 				for _, value := range config.Protocols {
 					sprotocols[value] = true
 				}
@@ -532,7 +530,7 @@ func (s *Socket) receive(buffered io.Reader) {
 	}
 close:
 	for {
-		if cap(buffer)-roffset < 14 {
+		if woffset == cap(buffer) || cap(buffer)-roffset < 14 {
 			copy(buffer[0:], buffer[roffset:woffset])
 			woffset -= roffset
 			roffset = 0
@@ -559,6 +557,7 @@ close:
 
 					fin, opcode, size = buffer[roffset]>>7, buffer[roffset]&0x0f, int(buffer[roffset+1]&0x7f)
 					if (s.client && (buffer[roffset+1]&MASK) != 0) || (!s.client && (buffer[roffset+1]&MASK) == 0) ||
+						buffer[roffset]&0x70 != 0 ||
 						(fin == 0 && opcode >= OPCODE_CLOSE && opcode <= OPCODE_PONG) ||
 						(opcode != 0 && opcode != OPCODE_TEXT && opcode != OPCODE_BLOB && (opcode < OPCODE_CLOSE || opcode > OPCODE_PONG)) ||
 						((opcode == OPCODE_PING || opcode == OPCODE_PONG) && size > 125) {

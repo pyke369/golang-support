@@ -463,7 +463,7 @@ done:
 									record = append(record, strconv.FormatFloat(rvalue, 'f', -1, 64))
 
 								} else if rvalue := j.String(value); rvalue != "" {
-									record = append(record, rvalue)
+									record = append(record, `"`+ustr.Strip(rvalue, `"=+-@"`)+`"`)
 
 								} else {
 									if rvalue := j.Boolean(value); rvalue {

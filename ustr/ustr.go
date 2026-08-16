@@ -572,7 +572,9 @@ const (
 
 func Options(in string) (out int) {
 	for _, value := range strings.Fields(strings.ToLower(in)) {
-		value = strings.TrimSpace(value)
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
 		if strings.HasPrefix("trim", value) {
 			out |= OptionTrim
 		}

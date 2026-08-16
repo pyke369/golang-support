@@ -6,8 +6,9 @@ import (
 	"syscall"
 )
 
-func reuse(handle uintptr, port bool) {
-	if port {
-		syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-	}
+func reuseAddr(handle uintptr) {
+	syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+}
+
+func reusePort(handle uintptr) {
 }

@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -23,7 +22,9 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 			options = ustr.Options(value)
 		}
 		if value, ok := extra[0]["match"].(string); ok {
-			matcher = rcache.Get(strings.TrimSpace(value))
+			if value, err := regexp.Compile(strings.TrimSpace(value)); err == nil {
+				matcher = value
+			}
 			if value, ok := extra[0]["separator"].(string); ok {
 				capture, separator = true, value
 			}

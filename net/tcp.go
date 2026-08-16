@@ -41,7 +41,8 @@ const (
 )
 
 type TCPOptions struct {
-	Reuse       bool
+	ReuseAddr   bool
+	ReusePort   bool
 	ReadBuffer  int
 	WriteBuffer int
 	Callback    func(net.Conn)
@@ -52,7 +53,7 @@ type TCPOptions struct {
 type TCPConn struct {
 	options  *TCPOptions
 	conn     *net.TCPConn
-	proxyed  atomic.Bool
+	proxied  atomic.Bool
 	tlsed    atomic.Bool
 	hijacked atomic.Bool
 	local    *TCPAddr
@@ -67,7 +68,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	}
 
 	// PROXYv2
-	if c.options.Proxy != nil && !c.proxyed.Swap(true) {
+	if c.options.Proxy != nil && !c.proxied.Swap(true) {
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
 			if n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
@@ -168,36 +169,33 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 			if b[5] == 1 { // ClientHello message
 				if b[9] == 3 && b[10] >= 1 { // TLS1.0+ client
 					offset := 43
-					if length := int(b[43]); offset+1+length < n-1 { // ignore session-id
+					if length := int(b[43]); offset+1+length <= n { // ignore session-id
 						offset += 1 + length
-						if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 && offset+2+length < n { // ignore cyphers
-							offset += 2 + length
-							if length := int(b[offset]); offset+1+length < n-1 { // ignore compression
-								offset += 1 + length
-								end := min(offset+2+int(binary.BigEndian.Uint16(b[offset:])), n)
-								offset += 2
-								for offset < end-4 { // extensions
-									key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
-									if key == 0x0000 { // SNI
-										if offset+4+length < end {
-											offset += 4
-											if int(binary.BigEndian.Uint16(b[offset:])) == length-2 {
-												offset += 2
-												if b[offset] == 0 { // DNS hostname
-													offset++
-													if int(binary.BigEndian.Uint16(b[offset:])) == length-5 {
-														offset += 2
-														if c.options.TLS(c, string(b[offset:offset+length-5]), b[:n]) {
-															c.hijacked.Store(true)
-															return 0, net.ErrClosed
-														}
-													}
-												}
+						if offset+2 <= n {
+							if length := int(binary.BigEndian.Uint16(b[offset:])); length%2 == 0 && offset+2+length < n { // ignore cyphers
+								offset += 2 + length
+								if length := int(b[offset]); offset+1+length < n-1 { // ignore compression
+									offset += 1 + length
+									end := min(offset+2+int(binary.BigEndian.Uint16(b[offset:])), n)
+									offset += 2
+									for offset < end-4 { // extensions
+										key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
+										if key == 0x0000 { // SNI
+											if length < 5 || offset+4+length >= end {
+												break
 											}
+											sni := b[offset+4 : offset+4+length]
+											if int(binary.BigEndian.Uint16(sni)) != length-2 || sni[2] != 0 || int(binary.BigEndian.Uint16(sni[3:])) != length-5 {
+												break
+											}
+											if c.options.TLS(c, string(sni[5:]), b[:n]) {
+												c.hijacked.Store(true)
+												return 0, net.ErrClosed
+											}
+											break
 										}
-										break
+										offset += 4 + length
 									}
-									offset += 4 + length
 								}
 							}
 						}
@@ -308,7 +306,12 @@ func NewTCPListener(network, address string, extra ...*TCPOptions) (listener *TC
 	config := net.ListenConfig{
 		Control: func(network, address string, conn syscall.RawConn) error {
 			conn.Control(func(handle uintptr) {
-				reuse(handle, options.Reuse)
+				if options.ReuseAddr {
+					reuseAddr(handle)
+				}
+				if options.ReusePort {
+					reusePort(handle)
+				}
 			})
 			return nil
 		},

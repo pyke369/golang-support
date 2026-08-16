@@ -13,7 +13,7 @@ A collection of Go utility/support libraries.
   Dynamic TLS certificate loader. Watches certificate files for modification (every 15 seconds), supports inline in-memory certs, SNI-based matching via regex, and produces a tls.Config with GetCertificate hook. Forces TLS 1.3 minimum.
 
 - expect:
-  SSH client automation library with text/JSON/XML output modes, NETCONF subsystem support (RFC 6241), idle timeout, host key auto-accept, XML/JSON parsing, and a Mapper for extracting structured data.
+  SSH client automation library with text/JSON/XML output modes, NETCONF subsystem support (RFC 6241), idle timeout, host key accept handler, XML/JSON parsing, and a Mapper for extracting structured data.
 
 - file:
   Filesystem utility functions: Read (line-by-line with regex filter/capture), Write (create/append/truncate), Touch, Exists, IsRegular, IsDir, Link, Sum (SHA-256), Copy.
@@ -33,9 +33,6 @@ A collection of Go utility/support libraries.
 - multiflag:
   flag.Value implementation for repeated key:value CLI flags.
 
-- netlink:
-  Linux netlink (RTNETLINK) interface management: enumerate interfaces/addresses, create/remove VLAN, veth pair, bridge, bond, set state/MTU/hwaddr/queue/namespace, add/remove IP addresses, routes enumeration, etc.
-
 - prefixdb:
   Custom binary IP prefix lookup database format (PFDB). Stores a radix trie over IPv4/IPv6 prefixes with associated key-value pairs (strings, numbers, booleans). Supports clustered/shared dictionaries for compression. Falls back to capital city coordinates for country-code lookups with zero lat/lon.
 
@@ -48,9 +45,6 @@ A collection of Go utility/support libraries.
 - rpack:
   Static resource packer: walks a directory tree, gzip-compresses each file, base64-encodes it, and writes a Go source file with an embedded map and HTTP handler. Also supports serving multiple resources concatenated (gzip stream combining via CRC combining).
 
-- ubgp:
-  Full BGP-4 speaker implementation (RFC 4271). Supports: multi-group/multi-speaker/peer architecture, BGP FSM (idle/active/connect/open-sent/open-confirm/established), OPEN/UPDATE/NOTIFICATION/KEEPALIVE/ROUTE-REFRESH messages, extended messages, ASN4 (RFC 6793), multi-protocol (RFC 4760), add-path (RFC 7911), route-refresh, graceful restart, EOR, communities, passive (listening) and active modes, callbacks via Processor interface.
-
 - uconfig:
   Flexible configuration file parser. Accepts files or inline strings. Supports a superset of JSON with comments (#, //, /* */), macros (<<~file>>, <<^file>>, etc.).
 
@@ -58,7 +52,7 @@ A collection of Go utility/support libraries.
   Hash utilities: Rand(n) (crypto random int), Key(size) (URL-safe random key string up to 256 chars), CRC16 (Internet checksum over multiple byte buffers).
 
 - uio:
-  Hardware I/O: Linux serial port (full termios config, poll-based read/write, RTS/DTR control), GPIO (Linux GPIO character device v2 via ioctl, line info enumeration), I2C, SPI, PWM.
+  Hardware I/O: Linux serial port (full termios config, poll-based read/write, RTS/DTR control).
 
 - ulog:
   Structured and unstructured logger. Targets: syslog (local or UDP remote), file (with strftime-style rotation patterns, auto-close of idle handles, purge by age/count, gzip compression of old files), console (color-coded output with ANSI escapes). Supports log levels, structured map[string]any payloads with JSON encoding, ordered fields, template substitutions, and external log callbacks.

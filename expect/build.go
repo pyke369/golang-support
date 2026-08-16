@@ -2,21 +2,21 @@ package expect
 
 import (
 	"encoding/xml"
+	"regexp"
 	"sort"
 	"strings"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/rcache"
 )
+
+var matcher = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
 
 func BuildXML(command string, parameters ...map[string]string) (out string) {
 	var b strings.Builder
 
-	matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
 	if !matcher.MatchString(command) {
 		return
 	}
-
 	b.WriteString("<" + command)
 	if len(parameters) > 1 {
 		keys := []string{}
@@ -58,7 +58,7 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 						raw = true
 					}
 				}
-				if raw && !strings.Contains(value, "</"+key+">") {
+				if raw && !strings.Contains(value, "</"+key+">") && !strings.Contains(value, "]]>]]>") {
 					b.WriteString(value)
 
 				} else {

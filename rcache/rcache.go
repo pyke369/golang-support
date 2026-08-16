@@ -33,9 +33,9 @@ func Get(expr string) *regexp.Regexp {
 	}
 	mu.RUnlock()
 
-	mu.Lock()
-	defer mu.Unlock()
 	if matcher, err := regexp.Compile(expr); err == nil {
+		mu.Lock()
+		defer mu.Unlock()
 		if len(cache) >= 4<<10 {
 			entries := []*entry{}
 			for _, entry := range cache {

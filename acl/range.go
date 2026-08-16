@@ -1,11 +1,11 @@
 package acl
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
 )
 
@@ -15,19 +15,22 @@ type timeRange struct {
 	times [2]int
 }
 
+var (
+	dateMatcher = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})?-(\d{4}-\d{2}-\d{2})?$`)
+	dayMatcher  = regexp.MustCompile(`^(mon|tue|wed|thu|fri|sat|sun)?-(mon|tue|wed|thu|fri|sat|sun)?$`)
+	timeMatcher = regexp.MustCompile(`^(?:(\d{2}):(\d{2})(?::(\d{2}))?)?-(?:(\d{2}):(\d{2})(?::(\d{2}))?)?$`)
+	days        = map[string]int{"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+)
+
 func Ranges(in time.Time, values []string) bool {
 	if len(values) == 0 {
 		return false
 	}
-	ranges, matcher1, matcher2, matcher3, days := []timeRange{},
-		rcache.Get(`^(\d{4}-\d{2}-\d{2})?-(\d{4}-\d{2}-\d{2})?$`),
-		rcache.Get(`^(mon|tue|wed|thu|fri|sat|sun)?-(mon|tue|wed|thu|fri|sat|sun)?$`),
-		rcache.Get(`^(?:(\d{2}):(\d{2})(?::(\d{2}))?)?-(?:(\d{2}):(\d{2})(?::(\d{2}))?)?$`),
-		map[string]int{"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+	ranges := []timeRange{}
 	for _, path := range values {
 		entry := timeRange{}
 		for _, value := range strings.Split(path, " ") {
-			if captures := matcher1.FindStringSubmatch(value); len(captures) == 3 {
+			if captures := dateMatcher.FindStringSubmatch(value); len(captures) == 3 {
 				if value, err := time.Parse("2006-01-02", captures[1]); err == nil {
 					entry.dates[0] = value
 				}
@@ -35,10 +38,10 @@ func Ranges(in time.Time, values []string) bool {
 					entry.dates[1] = value.Add(86399 * time.Second)
 				}
 
-			} else if captures := matcher2.FindStringSubmatch(strings.ToLower(value)); len(captures) == 3 {
+			} else if captures := dayMatcher.FindStringSubmatch(strings.ToLower(value)); len(captures) == 3 {
 				entry.days[0], entry.days[1] = days[captures[1]], days[captures[2]]
 
-			} else if captures := matcher3.FindStringSubmatch(value); len(captures) == 7 {
+			} else if captures := timeMatcher.FindStringSubmatch(value); len(captures) == 7 {
 				hour, _ := strconv.ParseInt(captures[1], 10, 64)
 				hour = max(0, min(23, hour))
 				minute, _ := strconv.ParseInt(captures[2], 10, 64)
