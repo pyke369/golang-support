@@ -9,14 +9,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pyke369/golang-support/file"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uconfig"
-	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
+	a2 "golang.org/x/crypto/argon2"
+	bc "golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -40,7 +42,8 @@ var (
 	}
 
 	// see https://akkadia.org/drepper/SHA-crypt.txt
-	cryptb64 = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
+	cryptMatcher = regexp.MustCompile(`^[./0-9A-Za-z]{8,22}$`)
+	cryptBase64  = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 )
 
 func init() {
@@ -50,28 +53,27 @@ func init() {
 	}
 }
 
-func Crypt512(in, salt string, rounds int) (out string, err error) {
-	in, salt = strings.TrimSpace(in), strings.TrimSpace(salt)
+func crypt512(in, salt string, rounds int) (out string, err error) {
 	if len(in) > 128 {
-		return "", errors.New("auth: password too long")
+		return "", errors.New("auth: password is too long")
 	}
-
-	out = "$6$"
 	if rounds <= 0 {
-		rounds = 100000
+		return "", errors.New("auth: invalid rounds parameter")
 	}
-	if rounds != 5000 {
-		rounds = max(100000, min(1000000, rounds))
-		out += "rounds=" + strconv.Itoa(rounds) + "$"
-	}
-	salt = salt[:min(16, len(salt))]
-	if salt != "" && !rcache.Get(`^[\./0-9A-Za-z]{1,16}$`).MatchString(salt) {
-		return "", errors.New("auth: invalid salt")
-	}
+	rounds = min(999999999, max(1000, rounds))
+
+	salt = strings.TrimSpace(salt)
 	if salt == "" {
 		value := make([]byte, 12)
 		rand.Read(value)
-		salt = cryptb64.EncodeToString(value)
+		salt = cryptBase64.EncodeToString(value)
+
+	} else if !cryptMatcher.MatchString(salt) || len(salt) > 16 {
+		return "", errors.New("auth: invalid salt")
+	}
+	out = "$6$"
+	if rounds != 5000 {
+		out += "rounds=" + strconv.Itoa(rounds) + "$"
 	}
 	out += salt + "$"
 
@@ -161,7 +163,7 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 	}
 
 	// digest C special base64 encoding
-	C := []byte(cryptb64.EncodeToString([]byte{
+	C := []byte(cryptBase64.EncodeToString([]byte{
 		A[0], A[21], A[42], A[22], A[43], A[1], A[44], A[2], A[23], A[3], A[24], A[45], A[25], A[46], A[4], A[47],
 		A[5], A[26], A[6], A[27], A[48], A[28], A[49], A[7], A[50], A[8], A[29], A[9], A[30], A[51], A[31], A[52],
 		A[10], A[53], A[11], A[32], A[12], A[33], A[54], A[34], A[55], A[13], A[56], A[14], A[35], A[15], A[36], A[57],
@@ -174,78 +176,175 @@ func Crypt512(in, salt string, rounds int) (out string, err error) {
 	return out + string(C[:86]), nil
 }
 
-func Password(in string, values []string) (match bool, entry string) {
+func Crypt512(in, salt string) (out string, err error) {
+	return crypt512(in, salt, 100000)
+}
+
+func bcrypt(in string, cost int) (out string, err error) {
+	if len(in) > 72 {
+		return "", errors.New("auth: password is too long")
+	}
+	if cost <= 0 {
+		return "", errors.New("auth: invalid cost parameter")
+	}
+	cost = min(15, max(4, cost))
+
+	value, err := bc.GenerateFromPassword([]byte(in), cost)
+	if err != nil {
+		return "", err
+	}
+
+	return string(value), nil
+}
+
+func Bcrypt(in string) (out string, err error) {
+	return bcrypt(in, 12)
+}
+
+func argon2(in, salt string, memory, time, threads int) (out string, err error) {
+	if len(in) > 128 {
+		return "", errors.New("auth: password is too long")
+	}
+	if memory <= 0 {
+		return "", errors.New("auth: invalid memory parameter")
+	}
+	if time <= 0 {
+		return "", errors.New("auth: invalid time parameter")
+	}
+	if threads <= 0 {
+		return "", errors.New("auth: invalid threads parameter")
+	}
+	memory = min(256<<10, max(8<<10, memory))
+	time = min(8, max(1, time))
+	threads = min(4, max(1, threads))
+
+	var bsalt []byte
+
+	salt = strings.TrimSpace(salt)
+	if salt == "" {
+		bsalt = make([]byte, 16)
+		rand.Read(bsalt)
+		salt = base64.RawStdEncoding.EncodeToString(bsalt)
+
+	} else {
+		value, err := base64.RawStdEncoding.DecodeString(salt)
+		if err != nil || len(value) < 8 || len(value) > 16 {
+			return "", errors.New("auth: invalid salt")
+		}
+		bsalt = value
+	}
+
+	return "$argon2id$v=19" + "$m=" + strconv.Itoa(memory) + ",t=" + strconv.Itoa(time) + ",p=" + strconv.Itoa(threads) + "$" + salt +
+		"$" + base64.RawStdEncoding.EncodeToString(a2.IDKey([]byte(in), bsalt, uint32(time), uint32(memory), uint8(threads), 32)), nil
+}
+
+func Argon2(in, salt string) (out string, err error) {
+	return argon2(in, salt, 19<<10, 2, 1)
+}
+
+func Password(in string, values []string) (pass bool, entry string) {
 	if len(values) == 0 {
 		return false, ""
 	}
 
-	login, password, checked := "", in, false
-	if parts := strings.SplitN(in, ":", 2); len(parts) >= 2 {
-		login, password = parts[0], parts[1]
+	parts := strings.SplitN(in, ":", 2)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return false, ""
 	}
-	for _, value := range values {
-		check := value
-		if login != "" {
-			if parts := strings.Split(check, ":"); len(parts) < 2 || login != parts[0] {
+	login, password := strings.TrimSpace(parts[0]), parts[1]
+
+	defer func(start time.Time) {
+		if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+			time.Sleep(200*time.Millisecond - elapsed)
+		}
+	}(time.Now())
+
+	if login == parts[0] {
+		for _, value := range values {
+			parts := strings.Split(value, ":")
+			if len(parts) < 2 || subtle.ConstantTimeCompare([]byte(login), []byte(strings.TrimSpace(parts[0]))) == 0 {
 				continue
-
-			} else {
-				check = parts[1]
 			}
-		}
-		if check != "" && (check[0] == '!' || check[0] == '*') {
-			continue
-		}
+			check := strings.TrimSpace(parts[1])
+			if check == "" || check[0] == '!' || check[0] == '*' {
+				continue
+			}
+			parts[1] = "*"
+			entry = strings.Join(parts, ":")
 
-		if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
-			checked = true
-			switch parts[1] {
-			case "6":
-				rounds, salt := 5000, parts[2]
-				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
-					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
-						rounds = value
-					}
-					salt = parts[3]
-				}
-				if encrypted, err := Crypt512(password, salt, rounds); err == nil {
-					if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-						parts := strings.Split(value, ":")
-						if len(parts) >= 2 {
-							parts[1] = "*"
-
-						} else {
-							parts[0] = "*"
+			if parts := strings.Split(check, "$"); len(parts) >= 4 && parts[0] == "" && parts[2] != "" && parts[3] != "" {
+				switch parts[1] {
+				case "6":
+					rounds, salt := 5000, parts[2]
+					if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
+						if value, err := strconv.Atoi(parts[2][7:]); err == nil {
+							rounds = value
+							if rounds < 100000 || rounds > 1000000 {
+								continue
+							}
 						}
-						return true, strings.Join(parts, ":")
+						salt = parts[3]
+					}
+					if encrypted, err := crypt512(password, salt, rounds); err == nil {
+						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
+							return true, entry
+						}
+					}
+
+				case "2a", "2b":
+					if cost, err := bc.Cost([]byte(check)); err == nil && cost <= 15 {
+						if bc.CompareHashAndPassword([]byte(check), []byte(password)) == nil {
+							return true, entry
+						}
+					}
+
+				case "argon2id":
+					if len(parts) != 6 || parts[2] != "v=19" || parts[4] == "" || parts[5] == "" {
+						continue
+					}
+					memory, time, threads := 0, 0, 0
+					for _, part := range strings.Split(parts[3], ",") {
+						part = strings.TrimSpace(part)
+						switch {
+						case strings.HasPrefix(part, "m="):
+							if value, err := strconv.Atoi(strings.TrimPrefix(part, "m=")); err == nil {
+								memory = value
+							}
+
+						case strings.HasPrefix(part, "t="):
+							if value, err := strconv.Atoi(strings.TrimPrefix(part, "t=")); err == nil {
+								time = value
+							}
+
+						case strings.HasPrefix(part, "p="):
+							if value, err := strconv.Atoi(strings.TrimPrefix(part, "p=")); err == nil {
+								threads = value
+							}
+						}
+					}
+
+					if memory <= 256<<10 && time <= 8 && threads <= 4 {
+						if encrypted, err := argon2(password, parts[4], memory, time, threads); err == nil {
+							if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
+								return true, entry
+							}
+						}
 					}
 				}
-
-			case "2", "2a":
-				// TODO add bcrypt support
-
-			case "y":
-				// TODO add yescrypt support
-
-			case "?":
-				// TODO add argon2 support
 			}
 		}
-	}
-	if !checked {
-		Crypt512(password, uhash.RandKey(16), 0)
 	}
 
 	return false, ""
 }
 
-func PasswordConfig(in string, config *uconfig.UConfig, path string) (match bool, entry string) {
+func PasswordConfig(in string, config *uconfig.UConfig, path string) (pass bool, entry string) {
 	return Password(in, config.Strings(path))
 }
 
-func PasswordFile(in, path string) (match bool, entry string) {
-	lines := file.Read(path, map[string]any{"options": "trim comment"})
-	if len(lines) == 0 {
+func PasswordFile(in, path string) (pass bool, entry string) {
+	lines, err := file.Read(path, map[string]any{"options": "empty comment trim"})
+	if err != nil {
 		return false, ""
 	}
 
@@ -342,7 +441,7 @@ func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) 
 		}
 	}
 
-	entropy = math.Log2(math.Pow(float64(pool), float64(len(string(runes)))))
+	entropy = float64(len(runes)) * math.Log2(float64(pool))
 
 	return entropy, entropy >= 65.0
 }

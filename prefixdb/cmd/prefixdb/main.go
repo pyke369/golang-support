@@ -97,7 +97,7 @@ func mkjson() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - size[" + size(pfdb.Size) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 
@@ -158,7 +158,7 @@ func mkoui() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - size[" + size(pfdb.Size) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 
@@ -270,7 +270,7 @@ func mkcity() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - size[" + size(pfdb.Size) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 
@@ -323,7 +323,7 @@ func mkasn() {
 		os.Args[2] = os.Args[2][:index]
 	}
 	if _, err := pfdb.Save(os.Args[2], description); err == nil {
-		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - total[" + size(pfdb.Total) +
+		os.Stderr.WriteString("saved database   [" + os.Args[2] + "] (" + ustr.Duration(time.Since(start)) + " - size[" + size(pfdb.Size) +
 			"] strings[" + size(pfdb.Strings[0]) + "] numbers[" + size(pfdb.Numbers[0]) + "] pairs[" + size(pfdb.Pairs[0]) +
 			"] clusters[" + size(pfdb.Clusters[0]) + "] maps[" + size(pfdb.Maps[0]) + "] nodes[" + size(pfdb.Nodes[0]) + "])\n")
 
@@ -360,7 +360,7 @@ func lookup() {
 		case strings.HasSuffix(os.Args[index], `.pfdb`):
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
-				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+				os.Stderr.WriteString("database [" + os.Args[index] + "] (size[" + size(database.Size) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 				databases = append(databases, database)
 
@@ -403,7 +403,7 @@ done:
 		case strings.HasSuffix(os.Args[index], `.pfdb`):
 			database := prefixdb.New()
 			if err := database.Load(os.Args[index]); err == nil {
-				os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+				os.Stderr.WriteString("database [" + os.Args[index] + "] (size[" + size(database.Size) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 					strconv.Itoa(int((database.Version>>8)&0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 				databases = append(databases, database)
 
@@ -463,7 +463,7 @@ done:
 									record = append(record, strconv.FormatFloat(rvalue, 'f', -1, 64))
 
 								} else if rvalue := j.String(value); rvalue != "" {
-									record = append(record, rvalue)
+									record = append(record, `"`+ustr.Strip(rvalue, `"=+-@`+"\t\r\n")+`"`)
 
 								} else {
 									if rvalue := j.Boolean(value); rvalue {
@@ -498,7 +498,7 @@ func server() {
 	for index := 3; index < len(os.Args); index++ {
 		database := prefixdb.New()
 		if err := database.Load(os.Args[index]); err == nil {
-			os.Stderr.WriteString("database [" + os.Args[index] + "] (total[" + size(database.Total) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
+			os.Stderr.WriteString("database [" + os.Args[index] + "] (size[" + size(database.Size) + "] version[" + strconv.Itoa(int((database.Version>>16)&0xff)) + "." +
 				strconv.Itoa((int(database.Version>>8) & 0xff)) + "." + strconv.Itoa(int(database.Version&0xff)) + "] description[" + database.Description + "])\n")
 			databases = append(databases, database)
 

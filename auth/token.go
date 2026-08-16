@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +15,8 @@ import (
 	"errors"
 	"maps"
 	"math/big"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,48 +42,65 @@ var (
 		string(AlgES256): AlgES256,
 		string(AlgEDDSA): AlgEDDSA,
 	}
+	claimMatcher = regexp.MustCompile(`^[0-9a-zA-Z_]{3,64}$`)
 )
 
-func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, kid ...string) (out string, err error) {
-	var (
-		der     *pem.Block
-		token   []byte
-		rclaims = map[string]any{}
-	)
+func TokenEncode(typ, kid, key string, alg Alg, expire time.Time, claims map[string]any) (out string, err error) {
+	var der *pem.Block
 
+	if typ == "" {
+		typ = "JWT"
+	}
+	if !strings.Contains(strings.ToLower(typ), "jwt") {
+		return "", errors.New("auth: invalid token type")
+	}
 	if expire.Before(time.Now()) {
 		return "", errors.New("auth: expire must be in the future")
 	}
 	if expire.After(time.Now().Add(time.Hour * 24 * 365)) {
 		return "", errors.New("auth: expire must be less than a year")
 	}
-	header := map[string]string{"typ": "JWT", "alg": string(alg)}
 	if alg == AlgHS256 {
 		if len(key) < 32 {
 			return "", errors.New("auth: invalid key")
 		}
 
 	} else {
-		if der, _ = pem.Decode([]byte(key)); der == nil {
+		if der, _ = pem.Decode([]byte(key)); der == nil || !strings.Contains(der.Type, "PRIVATE KEY") {
 			return "", errors.New("auth: invalid private key")
-		}
-		if len(kid) != 0 {
-			if kid[0] == "" {
-				return "", errors.New("auth: invalid kid")
-			}
-			header["kid"] = kid[0]
 		}
 	}
 
+	if claims == nil {
+		return "", errors.New("auth: no claim provided")
+	}
+	for k := range claims {
+		if !claimMatcher.MatchString(k) {
+			return "", errors.New("auth: invalid claim name")
+		}
+	}
+	if value := j.String(claims["iss"]); value == "" {
+		return "", errors.New("auth: missing or invalid 'iss' claim")
+	}
+	if value := j.StringSlice(claims["aud"], true); len(value) == 0 {
+		return "", errors.New("auth: missing or invalid 'aud' claim")
+	}
+	if value := j.String(claims["sub"]); value == "" {
+		return "", errors.New("auth: missing or invalid 'sub' claim")
+	}
+
+	header := map[string]string{"typ": typ, "alg": string(alg)}
+	if kid != "" {
+		header["kid"] = kid
+	}
 	marshaled, err := json.Marshal(header)
 	if err != nil {
 		return "", ustr.Wrap(err, "auth")
 	}
-	token = base64.RawURLEncoding.AppendEncode(token, marshaled)
+	token := base64.RawURLEncoding.AppendEncode([]byte{}, marshaled)
 	token = append(token, '.')
-	if claims != nil {
-		rclaims = maps.Clone(claims)
-	}
+
+	rclaims := maps.Clone(claims)
 	rclaims["iat"], rclaims["nbf"], rclaims["exp"] = time.Now().Unix(), time.Now().Unix(), expire.Unix()
 	marshaled, err = json.Marshal(rclaims)
 	if err != nil {
@@ -129,10 +147,19 @@ func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, k
 
 		key, err := x509.ParseECPrivateKey(der.Bytes)
 		if err != nil {
-			return "", ustr.Wrap(err, "auth")
+			value, err := x509.ParsePKCS8PrivateKey(der.Bytes)
+			if err != nil {
+				return "", ustr.Wrap(err, "auth")
+			}
+			if value, ok := value.(*ecdsa.PrivateKey); ok {
+				key = value
+
+			} else {
+				return "", errors.New("auth: invalid EC private key")
+			}
 		}
 		if key.Curve.Params().BitSize != 256 {
-			return "", errors.New("auth: unsupported elliptic curve size")
+			return "", errors.New("auth: unsupported EC size")
 		}
 		sum := sha256.Sum256(token)
 		r, s, err := ecdsa.Sign(rand.Reader, key, sum[:])
@@ -161,97 +188,97 @@ func TokenEncode(claims map[string]any, expire time.Time, alg Alg, key string, k
 	return string(token), nil
 }
 
-func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claims map[string]any, err error) {
+func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ...time.Duration) (out map[string]any, err error) {
+	if len(token) > 4<<10 {
+		return nil, errors.New("auth: size exceeded")
+	}
 	if len(keys) == 0 {
 		return nil, errors.New("auth: no key provided")
 	}
-	if len(token) > 4<<10 {
-		return nil, errors.New("auth: size exceeded")
+	if claims == nil {
+		return nil, errors.New("auth: no claim provided")
 	}
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("auth: invalid format")
+		return nil, errors.New("auth: invalid token format")
 	}
+
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return nil, ustr.Wrap(err, "auth")
 	}
-	header := map[string]string{}
+	header := map[string]any{}
 	if err := json.Unmarshal(decoded, &header); err != nil {
 		return nil, ustr.Wrap(err, "auth")
 	}
-	if header["typ"] != "JWT" {
-		return nil, errors.New("auth: invalid token")
+	if header["crit"] != nil {
+		return nil, errors.New("auth: crit not supported")
 	}
-	alg, exists := algs[header["alg"]]
+	if typ := j.String(header["typ"]); typ != "" && !strings.Contains(strings.ToLower(typ), "jwt") {
+		return nil, errors.New("auth: invalid 'typ' claim")
+	}
+	alg, exists := algs[j.String(header["alg"])]
 	if !exists {
-		return nil, errors.New("auth: invalid alg")
+		return nil, errors.New("auth: unsupported 'alg' claim")
 	}
-	akeys, exists := keys[alg]
-	if !exists {
-		return nil, errors.New("auth: no key provided for alg")
+	if _, exists := keys[alg]; !exists {
+		return nil, errors.New("auth: invalid key")
 	}
+	kid, key := j.String(header["kid"]), ""
+	if kid == "" {
+		key = strings.TrimSpace(j.String(keys[alg]))
+
+	} else {
+		key = strings.TrimSpace(j.StringMap(keys[alg])[kid])
+	}
+	if key == "" {
+		return nil, errors.New("auth: invalid key")
+	}
+
 	decoded, err = base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return nil, ustr.Wrap(err, "auth")
 	}
-
 	pass, input := false, []byte(parts[0]+"."+parts[1])
 	if alg == AlgHS256 {
-		for _, key := range j.StringSlice(akeys, true) {
-			if len(key) < 32 {
-				continue
-			}
+		if len(key) >= 32 {
 			signature := hmac.New(sha256.New, []byte(key))
 			signature.Write(input)
 			if hmac.Equal(signature.Sum(nil), decoded) {
 				pass = true
-				break
 			}
 		}
 
 	} else {
-		kid := header["kid"]
-		for id, key := range j.StringMap(akeys, true) {
-			if kid != "" && kid != id {
-				continue
-			}
+		if der, _ := pem.Decode([]byte(key)); der != nil && strings.Contains(der.Type, "PUBLIC KEY") {
+			if key, err := x509.ParsePKIXPublicKey(der.Bytes); err == nil {
+				switch alg {
+				case AlgRS256, AlgPS256:
+					if key, ok := key.(*rsa.PublicKey); ok && key.N.BitLen() >= 2048 && len(decoded) == key.Size() {
+						sum := sha256.Sum256(input)
+						if alg == AlgRS256 {
+							pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
 
-			if der, _ := pem.Decode([]byte(key)); der != nil {
-				if key, err := x509.ParsePKIXPublicKey(der.Bytes); err == nil {
-					switch alg {
-					case AlgRS256, AlgPS256:
-						if key, ok := key.(*rsa.PublicKey); ok && key.N.BitLen() >= 2048 && len(decoded) == key.Size() {
-							sum := sha256.Sum256(input)
-							if alg == AlgRS256 {
-								pass = rsa.VerifyPKCS1v15(key, crypto.SHA256, sum[:], decoded) == nil
-
-							} else {
-								pass = rsa.VerifyPSS(key, crypto.SHA256, sum[:], decoded, nil) == nil
-							}
+						} else {
+							pass = rsa.VerifyPSS(key, crypto.SHA256, sum[:], decoded, nil) == nil
 						}
+					}
 
-					case AlgES256:
-						if key, ok := key.(*ecdsa.PublicKey); ok && key.Curve.Params().BitSize == 256 && len(decoded) == 64 {
-							sum := sha256.Sum256(input)
-							pass = ecdsa.Verify(key, sum[:], big.NewInt(0).SetBytes(decoded[:32]), big.NewInt(0).SetBytes(decoded[32:]))
-						}
+				case AlgES256:
+					if key, ok := key.(*ecdsa.PublicKey); ok && key.Curve.Params().BitSize == 256 && len(decoded) == 64 {
+						sum := sha256.Sum256(input)
+						pass = ecdsa.Verify(key, sum[:], big.NewInt(0).SetBytes(decoded[:32]), big.NewInt(0).SetBytes(decoded[32:]))
+					}
 
-					case AlgEDDSA:
-						if key, ok := key.(ed25519.PublicKey); ok && len(decoded) == 64 {
-							pass = ed25519.Verify(key, input, decoded)
-						}
+				case AlgEDDSA:
+					if key, ok := key.(ed25519.PublicKey); ok && len(decoded) == 64 {
+						pass = ed25519.Verify(key, input, decoded)
 					}
 				}
 			}
-
-			if kid != "" || pass {
-				break
-			}
 		}
 	}
-
 	if !pass {
 		return nil, errors.New("auth: invalid signature")
 	}
@@ -260,47 +287,71 @@ func TokenDecode(token string, keys map[Alg]any, extra ...map[string]any) (claim
 	if err != nil {
 		return nil, ustr.Wrap(err, "auth")
 	}
-	if err := json.Unmarshal(decoded, &claims); err != nil {
+	rclaims := map[string]any{}
+	if err := json.Unmarshal(decoded, &rclaims); err != nil {
 		return nil, ustr.Wrap(err, "auth")
+	}
+	iat, exp, iss, aud := int64(j.Number(rclaims["iat"])), int64(j.Number(rclaims["exp"])), j.String(rclaims["iss"]), j.StringSlice(rclaims["aud"], true)
+	if iat == 0 || exp == 0 || iss == "" || len(aud) == 0 || j.String(rclaims["sub"]) == "" {
+		return nil, errors.New("auth: missing mandatory claim")
+	}
+	for k := range rclaims {
+		if !claimMatcher.MatchString(k) {
+			return nil, errors.New("auth: invalid claim name")
+		}
 	}
 
 	skew := 30 * time.Second
 	if len(extra) != 0 {
-		if value, ok := extra[0]["skew"].(time.Duration); ok {
-			skew = max(0, min(2*time.Minute, value))
-		}
+		skew = max(0, min(2*time.Minute, extra[0]))
 	}
-
-	value, ok := claims["exp"].(float64)
-	if !ok || time.Now().Add(-skew).After(time.Unix(int64(value), 0)) {
+	if time.Now().Add(skew).Before(time.Unix(int64(iat), 0)) {
+		return nil, errors.New("auth: invalid 'iat' claim")
+	}
+	if time.Now().Add(-skew).After(time.Unix(int64(exp), 0)) {
 		return nil, errors.New("auth: expired")
 	}
-
-	if value, ok := claims["iat"].(float64); ok {
-		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
-			return nil, errors.New("auth: issued in future")
-		}
-
-	} else {
-		return nil, errors.New("auth: invalid iat")
+	if exp <= iat || exp-iat > 3600*24*365 {
+		return nil, errors.New("auth: invalid 'exp' claim")
 	}
-	if value, ok := claims["nbf"].(float64); ok {
+	if value := j.Number(rclaims["nbf"]); value != 0 {
 		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
 			return nil, errors.New("auth: not yet valid")
 		}
-
-	} else {
-		return nil, errors.New("auth: invalid nbf")
 	}
-	if len(extra) != 0 {
-		if value, ok := extra[0]["claims"].(map[string]string); ok {
-			for k, v := range value {
-				if value, ok := claims[k].(string); !ok || subtle.ConstantTimeCompare([]byte(value), []byte(v)) == 0 {
-					return nil, errors.New("auth: invalid claim")
-				}
+	if j.String(claims["iss"]) != iss {
+		return nil, errors.New("auth: invalid 'iss' claim")
+	}
+	pass = false
+	for _, value := range j.StringSlice(claims["aud"], true) {
+		if slices.Contains(aud, value) {
+			pass = true
+			break
+		}
+	}
+	if !pass {
+		return nil, errors.New("auth: invalid 'aud' claim")
+	}
+
+	for k, v := range claims {
+		if slices.Contains([]string{"iat", "exp", "nbf", "iss", "aud"}, k) {
+			continue
+		}
+		claim := j.StringSlice(rclaims[k], true)
+		if len(claim) == 0 {
+			return nil, errors.New("auth: missing '" + k + "' claim")
+		}
+		pass = false
+		for _, value := range j.StringSlice(v, true) {
+			if slices.Contains(claim, value) {
+				pass = true
+				break
 			}
+		}
+		if !pass {
+			return nil, errors.New("auth: invalid '" + k + "' claim")
 		}
 	}
 
-	return
+	return maps.Clone(rclaims), nil
 }

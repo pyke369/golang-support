@@ -4,12 +4,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math"
 	"net"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 var (
@@ -47,20 +48,52 @@ func Bool(in bool, extra ...int) (out string) {
 }
 
 func Int(in int, extra ...int) string {
-	value, size, pad := strconv.Itoa(in), 0, byte(' ')
+	value, size, pad, tsep := strconv.Itoa(in), 0, byte(' '), ""
 	if len(extra) > 0 {
 		size = extra[0]
 		if len(extra) > 1 && size >= 0 {
-			pad = '0'
+			if extra[1] >= 0x20 && extra[1] < 0x7f {
+				pad = byte(extra[1])
+
+			} else {
+				pad = '0'
+			}
+		}
+		if len(extra) > 2 {
+			pad = byte(' ')
+			if extra[2] >= 0x20 && extra[2] < 0x7f {
+				tsep = string(byte(extra[2]))
+
+			} else {
+				tsep = ","
+			}
 		}
 	}
-	length, usize := len(value), size
-	if usize < 0 {
+
+	if tsep != "" {
+		separated := ""
+		for index, c := range Reverse(value) {
+			if index != 0 && index%3 == 0 && c != '-' {
+				separated = tsep + separated
+			}
+			separated = string(c) + separated
+		}
+		value = separated
+	}
+
+	usize := size
+	if size < 0 {
+		if usize == math.MinInt {
+			return value
+		}
 		usize = -usize
 	}
+	usize = min(1<<16, usize)
+	length := len(value)
 	if length >= usize {
 		return value
 	}
+
 	out := make([]byte, usize)
 	if size > 0 {
 		if in >= 0 || pad == ' ' {
@@ -113,13 +146,19 @@ func String(in string, extra ...int) string {
 	if size == 0 {
 		return ""
 	}
+
 	usize := size
 	if size < 0 {
+		if usize == math.MinInt {
+			return in
+		}
 		usize = -usize
 	}
+	usize = min(1<<16, usize)
 	if usize == len(in) {
 		return in
 	}
+
 	out := make([]byte, usize)
 	if usize < length {
 		copy(out, in)
@@ -143,27 +182,22 @@ func String(in string, extra ...int) string {
 }
 
 func Truncate(in string, length int, ellipsis ...bool) (out string) {
-	if in = strings.TrimSpace(in); in == "" {
+	if in = strings.TrimSpace(in); in == "" || length <= 0 {
 		return
 	}
 
-	count := 0
-	for _, c := range in {
-		if count < length {
-			out += string(c)
+	end, count := len(in), 0
+	for i := range in {
+		if count == length {
+			end = i
+			break
 		}
 		count++
 	}
-	out = strings.TrimSpace(out)
+	out = strings.TrimSpace(in[:end])
 
-	if length < count && len(ellipsis) != 0 && ellipsis[0] {
-		end := len(out)
-		for remove := 1; remove <= 3; remove++ {
-			if _, size := utf8.DecodeLastRuneInString(out[:end]); size < end {
-				end -= size
-			}
-		}
-		out = out[:end] + "..."
+	if end < len(in) && len(ellipsis) != 0 && ellipsis[0] {
+		out += "..."
 	}
 
 	return
@@ -181,7 +215,15 @@ func Strip(in, charset string) string {
 
 func Replace(in string, pairs [][2]string) string {
 	for _, pair := range pairs {
-		in = strings.ReplaceAll(in, pair[0], pair[1])
+		if strings.HasPrefix(pair[0], "~") {
+			pair[0] = strings.TrimPrefix(pair[0], "~")
+			if matcher, err := regexp.Compile(strings.TrimSpace(pair[0])); err == nil {
+				in = matcher.ReplaceAllString(in, pair[1])
+			}
+
+		} else {
+			in = strings.ReplaceAll(in, pair[0], pair[1])
+		}
 	}
 
 	return in
@@ -247,7 +289,7 @@ func Range(in string, extra ...int) (out []int) {
 		}
 	}
 
-	list := map[int]struct{}{}
+	list, budget := map[int]struct{}{}, count*4
 	for _, part := range strings.Split(in, ",") {
 		bounds, start, end := strings.Split(strings.TrimSpace(part), "-"), -1, -1
 		if value, err := strconv.Atoi(strings.TrimSpace(bounds[0])); err == nil && value >= 0 {
@@ -265,15 +307,18 @@ func Range(in string, extra ...int) (out []int) {
 				}
 
 			} else {
-				end = min(end, start+count)
-				for index := start; index <= end; index++ {
+				if end-start > count {
+					end = start + count
+				}
+				for index := start; index <= end && budget > 0; index++ {
+					budget--
 					if (lower < 0 || (lower >= 0 && index >= lower)) && (upper < 0 || (upper >= 0 && index <= upper)) {
 						list[index] = struct{}{}
 					}
 				}
 			}
 		}
-		if len(list) >= count {
+		if budget <= 0 || len(list) >= count {
 			break
 		}
 	}
@@ -572,7 +617,9 @@ const (
 
 func Options(in string) (out int) {
 	for _, value := range strings.Fields(strings.ToLower(in)) {
-		value = strings.TrimSpace(value)
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
 		if strings.HasPrefix("trim", value) {
 			out |= OptionTrim
 		}
@@ -594,6 +641,9 @@ func Options(in string) (out int) {
 		if strings.HasPrefix("first", value) {
 			out |= OptionFirst
 		}
+		if strings.HasPrefix("json", value) {
+			out |= OptionJSON
+		}
 	}
 
 	return
@@ -604,7 +654,7 @@ func Transform(in string, options int) string {
 		in = strings.TrimSpace(in)
 	}
 	if options&OptionSpace != 0 {
-		in = Strip(in, " \t\n")
+		in = Strip(in, " \t\r\n")
 	}
 	if options&OptionLower != 0 {
 		in = strings.ToLower(in)
@@ -614,9 +664,6 @@ func Transform(in string, options int) string {
 	}
 	if options&OptionComment != 0 {
 		if index := strings.Index(in, "#"); index >= 0 {
-			in = in[:index]
-		}
-		if index := strings.Index(in, "//"); index >= 0 {
 			in = in[:index]
 		}
 	}

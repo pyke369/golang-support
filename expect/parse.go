@@ -20,6 +20,7 @@ func flattenJSON(in []any) (out any) {
 				for key, value := range attributes {
 					if strings.HasPrefix(key, "xmlns") {
 						delete(attributes, key)
+						continue
 					}
 					if strings.Contains(key, ":") {
 						attributes[strings.SplitN(key, ":", 2)[1]] = value
@@ -122,6 +123,10 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 		raw         = []string{}
 	)
 
+	defer func() {
+		recover()
+	}()
+
 	out = map[string]any{}
 	if len(extra) != 0 && extra[0] != nil {
 		if value, ok := extra[0]["empty"].(bool); ok {
@@ -163,20 +168,21 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 					}
 				}
 
-				value1 := current.(map[string]any)
-				if value1[name] == nil {
-					value1[name] = element
-					path = append(path, name)
-
-				} else {
-					if value2, ok := value1[name].([]any); ok {
-						value2 = append(value2, element)
-						value1[name] = value2
-						path = append(path, []string{name, "[" + strconv.Itoa(len(value2)-1) + "]"}...)
+				if value1, ok := current.(map[string]any); ok {
+					if value1[name] == nil {
+						value1[name] = element
+						path = append(path, name)
 
 					} else {
-						value1[name] = []any{value1[name], element}
-						path = append(path, []string{name, "[1]"}...)
+						if value2, ok := value1[name].([]any); ok {
+							value2 = append(value2, element)
+							value1[name] = value2
+							path = append(path, []string{name, "[" + strconv.Itoa(len(value2)-1) + "]"}...)
+
+						} else {
+							value1[name] = []any{value1[name], element}
+							path = append(path, []string{name, "[1]"}...)
+						}
 					}
 				}
 			}
@@ -196,9 +202,11 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
 
-					} else {
+					} else if _, ok := parent.(map[string]any); ok {
 						if steps == 2 {
-							parent.(map[string]any)[last].([]any)[index] = string(data)
+							if _, ok := parent.(map[string]any)[last].([]any); ok {
+								parent.(map[string]any)[last].([]any)[index] = string(data)
+							}
 
 						} else {
 							parent.(map[string]any)[last] = string(data)
@@ -208,11 +216,15 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 
 				} else if !empty {
 					if value, ok := current.(map[string]any); ok && len(value) == 0 {
-						if steps == 2 {
-							parent.(map[string]any)[last] = parent.(map[string]any)[last].([]any)[:len(parent.(map[string]any)[last].([]any))-1]
+						if _, ok := parent.(map[string]any); ok {
+							if steps == 2 {
+								if _, ok := parent.(map[string]any)[last].([]any); ok && len(parent.(map[string]any)[last].([]any)) != 0 {
+									parent.(map[string]any)[last] = parent.(map[string]any)[last].([]any)[:len(parent.(map[string]any)[last].([]any))-1]
+								}
 
-						} else {
-							delete(parent.(map[string]any), last)
+							} else {
+								delete(parent.(map[string]any), last)
+							}
 						}
 					}
 				}
@@ -244,8 +256,9 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 			if part == "" {
 				continue
 			}
-			if captures := matcher.FindStringSubmatch(part); captures != nil {
-				if next, ok := current.([]any); ok {
+			if captures := matcher.FindStringSubmatch(part); len(captures) > 3 {
+				switch next := current.(type) {
+				case []any:
 					out[key] = []any{}
 					length, indexes := len(next), []int{}
 					if captures[1] == "*" {
@@ -289,25 +302,21 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 								map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
 						}
 					}
-					break
 
-				} else if next, ok := current.(map[string]any); ok {
+				case map[string]any:
 					out[key] = []any{}
 					out[key] = append(out[key].([]any), Mapper(
 						matcher, next,
 						map[string]string{"_": strings.Join(parts[depth+1:], separator)})["_"])
-					break
-
-				} else {
-					break
 				}
+				break
 
 			} else {
 				if next, ok := current.(map[string]any); ok {
 					if part[0] == '~' {
-						matcher, indexes := rcache.Get(strings.TrimSpace(part[1:])), []string{}
+						imatcher, indexes := rcache.Get(strings.TrimSpace(part[1:])), []string{}
 						for index := range next {
-							if matcher.MatchString(index) {
+							if imatcher.MatchString(index) {
 								indexes = append(indexes, index)
 							}
 						}

@@ -1,6 +1,7 @@
 package rcache
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,27 +16,28 @@ type entry struct {
 }
 
 var (
-	nomatch = regexp.MustCompile(`^\x00{128}$`)
+	nomatch = regexp.MustCompile(`^\x00{999}$`)
 	mu      sync.RWMutex
 	cache   = map[string]*entry{}
 )
 
-func Get(expr string) *regexp.Regexp {
-	if expr = strings.TrimSpace(expr); len(expr) > 128 {
-		return nomatch
+func GetErr(expr string) (matcher *regexp.Regexp, err error) {
+	if expr = strings.TrimSpace(expr); len(expr) > 999 {
+		return nomatch, errors.New("rcache: expression too long")
 	}
 
 	mu.RLock()
 	if value, exists := cache[expr]; exists {
 		mu.RUnlock()
 		atomic.AddUint64(&value.hits, 1)
-		return value.matcher
+		return value.matcher, nil
 	}
 	mu.RUnlock()
 
-	mu.Lock()
-	defer mu.Unlock()
-	if matcher, err := regexp.Compile(expr); err == nil {
+	matcher, err = regexp.Compile(expr)
+	if err == nil {
+		mu.Lock()
+		defer mu.Unlock()
 		if len(cache) >= 4<<10 {
 			entries := []*entry{}
 			for _, entry := range cache {
@@ -56,8 +58,14 @@ func Get(expr string) *regexp.Regexp {
 			cache[expr] = &entry{expr: expr, matcher: matcher, hits: 1}
 		}
 
-		return matcher
+		return matcher, nil
 	}
 
-	return nomatch
+	return nomatch, err
+}
+
+func Get(expr string) *regexp.Regexp {
+	matcher, _ := GetErr(expr)
+
+	return matcher
 }

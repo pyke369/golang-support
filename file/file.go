@@ -10,20 +10,24 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
-func Read(path string, extra ...map[string]any) (lines []string) {
+func Read(path string, extra ...map[string]any) (lines []string, err error) {
 	var matcher *regexp.Regexp
 
-	options, capture, separator := 0, false, ""
+	maxsize, options, capture, separator := 4<<20, 0, false, ""
 	if len(extra) > 0 {
+		if value, ok := extra[0]["maxsize"].(int); ok {
+			maxsize = min(16<<20, max(0, value))
+		}
 		if value, ok := extra[0]["options"].(string); ok {
 			options = ustr.Options(value)
 		}
 		if value, ok := extra[0]["match"].(string); ok {
-			matcher = rcache.Get(strings.TrimSpace(value))
+			if value, err := regexp.Compile(strings.TrimSpace(value)); err == nil {
+				matcher = value
+			}
 			if value, ok := extra[0]["separator"].(string); ok {
 				capture, separator = true, value
 			}
@@ -32,14 +36,20 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 
 	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer handle.Close()
-	reader := bufio.NewReader(handle)
+	reader, size := bufio.NewReader(handle), 0
 	for {
 		line, err := reader.ReadString('\n')
+		if size+len(line) > maxsize {
+			return nil, errors.New("file: size exceeded")
+		}
 		line = ustr.Transform(line, options)
 		if line == "" && options&ustr.OptionEmpty != 0 {
+			if err != nil {
+				break
+			}
 			continue
 		}
 		if matcher != nil {
@@ -52,8 +62,9 @@ func Read(path string, extra ...map[string]any) (lines []string) {
 			}
 		}
 		lines = append(lines, line)
+		size += len(line)
 		if len(lines) != 0 && options&ustr.OptionFirst != 0 {
-			return
+			return lines, nil
 		}
 		if err != nil {
 			break
@@ -81,6 +92,9 @@ func Write(path string, lines []string, extra ...string) error {
 		} else {
 			flags |= os.O_TRUNC
 		}
+
+	} else {
+		flags |= os.O_TRUNC
 	}
 	handle, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
@@ -137,7 +151,7 @@ func Link(path string) (base string) {
 	return
 }
 
-func Sum(path string) (sum string, size int64) {
+func Sum256(path string) (sum string, size int64) {
 	handle, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return
@@ -157,10 +171,10 @@ func Sum(path string) (sum string, size int64) {
 }
 
 func Copy(source, target string, extra ...bool) (err error) {
-	tflags := os.O_RDWR | os.O_EXCL | O_NOFOLLOW
+	tflags := os.O_TRUNC | os.O_WRONLY | O_NOFOLLOW
 	if len(extra) > 0 {
 		if extra[0] {
-			tflags |= os.O_CREATE
+			tflags |= os.O_CREATE | os.O_EXCL
 		}
 	}
 
@@ -186,16 +200,17 @@ func Copy(source, target string, extra ...bool) (err error) {
 	}
 	tsize := tinfo.Size()
 	if tflags&os.O_CREATE == 0 && tinfo.Mode().IsRegular() && ssize > tsize {
-		return errors.New("file: source size > target size")
+		return errors.New("file: source size higher than target size")
 	}
 
 	copied, err := io.CopyN(thandle, shandle, ssize)
 	if err != nil {
 		return ustr.Wrap(err, "file")
 	}
-	if copied < ssize {
+	if copied != ssize {
 		return errors.New("file: truncated copy")
 	}
+	thandle.Sync()
 
 	return
 }

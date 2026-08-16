@@ -56,7 +56,7 @@ type PrefixDB struct {
 	pairs       map[uint64]*[3]int  // fame / initial index / final index
 	clusters    map[[16]byte]*cluster
 	data        []byte
-	Total       int
+	Size        int
 	Version     uint32
 	Path        string
 	Description string
@@ -98,7 +98,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 
 	skeys, ckeys, lkeys := "", [][]string{}, []string{}
 	for _, cluster := range clusters {
-		skeys += strings.Join(cluster, ` `) + ` `
+		skeys += strings.Join(cluster, " ") + " "
 		ckeys = append(ckeys, cluster)
 	}
 	for key := range data {
@@ -124,7 +124,8 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					d.strings[key][0]++
 				}
 				pair := uint64((uint32(index)&0x0fffffff)|0x10000000) << 32
-				if tvalue, ok := value.(string); ok {
+				switch tvalue := value.(type) {
+				case string:
 					if len(tvalue) <= 255 {
 						if _, exists := d.strings[tvalue]; !exists {
 							index = len(d.strings)
@@ -140,7 +141,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 						pair |= uint64(0x50000000)
 					}
 
-				} else if tvalue, ok := value.(float64); ok {
+				case float64:
 					if _, exists := d.numbers[tvalue]; !exists {
 						index = len(d.numbers)
 						d.numbers[tvalue] = &[3]int{1, index}
@@ -151,7 +152,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 					}
 					pair |= uint64((uint32(index) & 0x0fffffff) | 0x20000000)
 
-				} else if tvalue, ok := value.(bool); ok {
+				case bool:
 					if tvalue {
 						pair |= uint64(0x30000000)
 
@@ -159,7 +160,7 @@ func (d *PrefixDB) Add(prefix netip.Prefix, data map[string]any, clusters [][]st
 						pair |= uint64(0x40000000)
 					}
 
-				} else {
+				default:
 					pair |= uint64(0x50000000)
 				}
 				if _, exists := d.pairs[pair]; !exists {
@@ -219,6 +220,7 @@ func wpbits(prefix byte, value int) []byte {
 	for nibble := size - 1; nibble >= 0; nibble-- {
 		data = append(data, byte(value>>(uint(nibble*8))))
 	}
+
 	return data
 }
 
@@ -262,7 +264,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	d.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'D', 'E', 'S', 'C', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	if description == "" {
-		description = time.Now().Format(`20060102150405`)
+		description = time.Now().Format("20060102150405")
 	}
 	d.Description = description
 	copy(d.data[28:47], description)
@@ -523,7 +525,7 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	d.tree, d.strings, d.numbers, d.pairs, d.clusters = node{}, map[string]*[3]int{}, map[float64]*[3]int{}, map[uint64]*[3]int{}, map[[16]byte]*cluster{}
 	hash := uhash.Hash128(d.data[24:])
 	copy(d.data[8:24], hash[:16])
-	d.Total = len(d.data)
+	d.Size = len(d.data)
 
 	// save database
 	if path != "" {
@@ -536,85 +538,87 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 	}
 
 	d.mu.Unlock()
+
 	return d.data, ustr.Wrap(err, "prefixdb")
 }
 
 func (d *PrefixDB) Load(path string) error {
-	if data, err := os.ReadFile(path); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return ustr.Wrap(err, "prefixdb")
+	}
 
-	} else {
-		if len(data) < 24 || string(data[0:4]) != "PFDB" {
-			return errors.New(`prefixdb: invalid preamble`)
-		}
-		version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7])
-		if (version & 0xff0000) > (VERSION & 0xff0000) {
-			return errors.New("prefixdb: incompatible library and database major versions")
-		}
-		hash := uhash.Hash128(data[24:])
-		if len(data) < 24 || slices.Compare(hash[:16], data[8:24]) != 0 {
-			return errors.New(`prefixdb: invalid checksum`)
-		}
-		d.mu.Lock()
-		d.data = data
-		d.Total = len(data)
-		d.Version = version
-		d.Path = path
-		offset := 24
+	if len(data) < 24 || string(data[0:4]) != "PFDB" {
+		return errors.New("prefixdb: invalid preamble")
+	}
+	hash := uhash.Hash128(data[24:])
+	if len(data) < 24 || slices.Compare(hash[:16], data[8:24]) != 0 {
+		return errors.New("prefixdb: invalid checksum")
+	}
 
-		if offset <= d.Total-4 && string(data[offset:offset+4]) == "DESC" {
-			offset += 4
-			if offset <= d.Total-20 {
-				index := 0
-				if index = bytes.Index(data[offset:offset+20], []byte{0}); index < 0 {
-					index = 20
-				}
-				d.Description = string(data[offset : offset+index])
-				offset += 20
-				if offset <= d.Total-4 && string(data[offset:offset+4]) == "STRS" {
-					offset += 4
-					if offset <= d.Total-9 {
-						d.Strings[3] = int(data[offset])
-						d.Strings[2] = offset + 9
-						d.Strings[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-						d.Strings[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-						offset += 9 + d.Strings[0]
-						if offset <= d.Total-4 && string(data[offset:offset+4]) == "NUMS" {
-							offset += 4
-							if offset <= d.Total-8 {
-								d.Numbers[2] = offset + 8
-								d.Numbers[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-								d.Numbers[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-								offset += 8 + d.Numbers[0]
-								if offset <= d.Total-4 && string(data[offset:offset+4]) == "PAIR" {
-									offset += 4
-									if offset <= d.Total-8 {
-										d.Pairs[2] = offset + 8
-										d.Pairs[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-										d.Pairs[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-										offset += 8 + d.Pairs[0]
-										if offset <= d.Total-4 && string(data[offset:offset+4]) == "CLUS" {
-											offset += 4
-											d.Clusters[3] = int(data[offset])
-											d.Clusters[2] = offset + 9
-											d.Clusters[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-											d.Clusters[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-											offset += 9 + d.Clusters[0]
-											if offset <= d.Total-4 && string(data[offset:offset+4]) == "MAPS" {
+	version := (uint32(data[5]) << 16) + (uint32(data[6]) << 8) + uint32(data[7])
+	if (version & 0xff0000) > (VERSION & 0xff0000) {
+		return errors.New("prefixdb: incompatible library and database major versions")
+	}
+
+	size, offset, description, n := len(data), 24, "", &PrefixDB{}
+
+	if offset <= size-4 && string(data[offset:offset+4]) == "DESC" {
+		offset += 4
+		if offset <= size-20 {
+			index := 0
+			if index = bytes.Index(data[offset:offset+20], []byte{0}); index < 0 {
+				index = 20
+			}
+			description = string(data[offset : offset+index])
+			offset += 20
+			if offset <= size-4 && string(data[offset:offset+4]) == "STRS" {
+				offset += 4
+				if offset <= size-9 {
+					n.Strings[3] = int(data[offset])
+					n.Strings[2] = offset + 9
+					n.Strings[1] = int(binary.BigEndian.Uint32(data[offset+5:]))
+					n.Strings[0] = int(binary.BigEndian.Uint32(data[offset+1:]))
+					offset += 9 + n.Strings[0]
+					if offset <= size-4 && string(data[offset:offset+4]) == "NUMS" {
+						offset += 4
+						if offset <= size-8 {
+							n.Numbers[2] = offset + 8
+							n.Numbers[1] = int(binary.BigEndian.Uint32(data[offset+4:]))
+							n.Numbers[0] = int(binary.BigEndian.Uint32(data[offset:]))
+							offset += 8 + n.Numbers[0]
+							if offset <= size-4 && string(data[offset:offset+4]) == "PAIR" {
+								offset += 4
+								if offset <= size-8 {
+									n.Pairs[2] = offset + 8
+									n.Pairs[1] = int(binary.BigEndian.Uint32(data[offset+4:]))
+									n.Pairs[0] = int(binary.BigEndian.Uint32(data[offset:]))
+									offset += 8 + n.Pairs[0]
+									if offset <= size-4 && string(data[offset:offset+4]) == "CLUS" {
+										offset += 4
+										if offset <= size-9 {
+											n.Clusters[3] = int(data[offset])
+											n.Clusters[2] = offset + 9
+											n.Clusters[1] = int(binary.BigEndian.Uint32(data[offset+5:]))
+											n.Clusters[0] = int(binary.BigEndian.Uint32(data[offset+1:]))
+											offset += 9 + n.Clusters[0]
+											if offset <= size-4 && string(data[offset:offset+4]) == "MAPS" {
 												offset += 4
-												if offset <= d.Total-8 {
-													d.Maps[2] = offset + 8
-													d.Maps[1] = int(binary.BigEndian.Uint32(d.data[offset+4:]))
-													d.Maps[0] = int(binary.BigEndian.Uint32(d.data[offset:]))
-													offset += 8 + d.Maps[0]
-													if offset <= d.Total-9 && string(data[offset:offset+4]) == "NODE" {
+												if offset <= size-8 {
+													n.Maps[2] = offset + 8
+													n.Maps[1] = int(binary.BigEndian.Uint32(data[offset+4:]))
+													n.Maps[0] = int(binary.BigEndian.Uint32(data[offset:]))
+													offset += 8 + n.Maps[0]
+													if offset <= size-9 && string(data[offset:offset+4]) == "NODE" {
 														offset += 4
-														d.Nodes[3] = int(data[offset])
-														d.Nodes[2] = offset + 9
-														d.Nodes[1] = int(binary.BigEndian.Uint32(d.data[offset+5:]))
-														d.Nodes[0] = int(binary.BigEndian.Uint32(d.data[offset+1:]))
-														if offset+9+d.Nodes[0] != d.Total {
-															d.Nodes[2] = 0
+														if offset <= size-9 {
+															n.Nodes[3] = int(data[offset])
+															n.Nodes[2] = offset + 9
+															n.Nodes[1] = int(binary.BigEndian.Uint32(data[offset+5:]))
+															n.Nodes[0] = int(binary.BigEndian.Uint32(data[offset+1:]))
+															if offset+9+n.Nodes[0] != size {
+																n.Nodes[2] = 0
+															}
 														}
 													}
 												}
@@ -628,18 +632,42 @@ func (d *PrefixDB) Load(path string) error {
 				}
 			}
 		}
-		d.mu.Unlock()
-		if d.Strings[2] == 0 || d.Numbers[2] == 0 || d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 {
-			return errors.New(`prefixdb: structure is invalid`)
+	}
+
+	for index, section := range [][5]int{
+		{n.Strings[0], n.Strings[1], n.Strings[2], n.Strings[3], 8},
+		{n.Numbers[0], n.Numbers[1], n.Numbers[2], 8, 8},
+		{n.Pairs[0], n.Pairs[1], n.Pairs[2], 8, 8},
+		{n.Clusters[0], n.Clusters[1], n.Clusters[2], n.Clusters[3], 8},
+		{n.Maps[0], n.Maps[1], n.Maps[2], 8, 8},
+		{n.Nodes[0], n.Nodes[1], n.Nodes[2], n.Nodes[3], 32},
+	} {
+		if section[0] < 0 ||
+			section[1] < 0 ||
+			section[2] < 48 || section[2] > size ||
+			section[0]+section[2] > size ||
+			section[3] < 0 || section[3] > section[4] ||
+			(index < 4 && uint64(section[1])*uint64(section[3]) > uint64(section[0])) {
+			return errors.New("prefixdb: corrupted section " + []string{"STRS", "NUMS", "PAIR", "CLUS", "MAPS", "NODE"}[index])
 		}
 	}
+
+	d.mu.Lock()
+	d.data, d.Size, d.Version, d.Path, d.Description = data, size, version, path, description
+	copy(d.Strings[:], n.Strings[:])
+	copy(d.Numbers[:], n.Numbers[:])
+	copy(d.Pairs[:], n.Pairs[:])
+	copy(d.Clusters[:], n.Clusters[:])
+	copy(d.Maps[:], n.Maps[:])
+	copy(d.Nodes[:], n.Nodes[:])
+	d.mu.Unlock()
 
 	return nil
 }
 
 func rpbits(data []byte) (section, index, size int, last bool) {
 	if len(data) == 0 {
-		return
+		return 0, 0, 1, true
 	}
 
 	section = int((data[0] & 0x70) >> 4)
@@ -706,13 +734,18 @@ func rnbits(bits, index, down int, data []byte) int {
 			return int(binary.BigEndian.Uint32(data[offset+(down*4):]))
 		}
 	}
+
 	return index
 }
 
 func rbytes(width int, data []byte) (value int) {
+	if width < 1 || width > 8 || len(data) < width {
+		return -1
+	}
 	for index := 0; index < width; index++ {
 		value |= int(data[index]) << (uint(width-1-index) * 8)
 	}
+
 	return value
 }
 
@@ -728,6 +761,10 @@ func (d *PrefixDB) rstring(index int) string {
 	} else {
 		end = d.Strings[0] - (count * width)
 	}
+	if start < 0 || end < start || offset+(count*width)+end > len(d.data) {
+		return ""
+	}
+
 	return string(d.data[offset+(count*width)+start : offset+(count*width)+end])
 }
 
@@ -735,6 +772,7 @@ func (d *PrefixDB) rnumber(index int) float64 {
 	if index >= d.Numbers[1] {
 		return 0.0
 	}
+
 	return math.Float64frombits(binary.BigEndian.Uint64(d.data[d.Numbers[2]+(index*8):]))
 }
 
@@ -769,11 +807,17 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 		} else {
 			end = d.Clusters[0] - (count * width)
 		}
+		if start < 0 || end < start || offset+(count*width)+end > len(d.data) {
+			return
+		}
 		start += offset + (count * width)
 		end += offset + (count * width)
 		key := ""
 		for start < end {
 			section, index, size, _ := rpbits(d.data[start:])
+			if size <= 0 {
+				break
+			}
 			switch section {
 			case 1:
 				if key != "" {
@@ -816,8 +860,10 @@ func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
 }
 
 func (d *PrefixDB) Lookup(value string, out map[string]any) {
-	if out == nil || d.data == nil || d.Total == 0 || d.Version == 0 || d.Strings[2] == 0 || d.Numbers[2] == 0 ||
-		d.Pairs[2] == 0 || d.Clusters[2] == 0 || d.Maps[2] == 0 || d.Nodes[2] == 0 || value == "" {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if out == nil || d.data == nil || d.Size == 0 || d.Version == 0 || value == "" {
 		return
 	}
 	parsed, err := netip.ParseAddr(value)
@@ -825,7 +871,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 		return
 	}
 	address, offset := parsed.As16(), 0
-	d.mu.RLock()
+
 	for bit := 0; bit < 128; bit++ {
 		down := 0
 		if (address[bit/8] & (1 << (7 - (byte(bit) % 8)))) != 0 {
@@ -842,6 +888,9 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 				key := ""
 				for offset < d.Maps[2]+d.Maps[0] {
 					section, index, size, last := rpbits(d.data[offset:])
+					if size <= 0 {
+						break
+					}
 					switch section {
 					case 1:
 						if key != "" {
@@ -891,7 +940,6 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 			break
 		}
 	}
-	d.mu.RUnlock()
 	if country, ok := out["country_code"].(string); ok && country != "" {
 		if value, ok := out["latitude"].(float64); ok && value == 0.0 {
 			if value, ok := out["longitude"].(float64); ok && value == 0.0 {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"math/big"
 	"strings"
 
@@ -14,32 +15,40 @@ import (
 )
 
 func RandInt(in int) (out int) {
-	if in > 0 {
-		if value, err := rand.Int(rand.Reader, big.NewInt(int64(in))); err == nil {
-			out = int(value.Int64())
-		}
+	if in <= 0 {
+		return 0
+	}
+	value, err := rand.Int(rand.Reader, big.NewInt(int64(in)))
+	if err != nil {
+		return 0
 	}
 
-	return
+	return int(value.Int64())
 }
-func RandKey(size int, extra ...string) (out string) {
+
+func RandKey(size int, extra ...string) (out string, err error) {
+	if size <= 0 || size > 256 {
+		return "", errors.New("uhash: invalid size")
+	}
 	encoding := "hex"
 	if len(extra) != 0 {
 		encoding = strings.ToLower(extra[0])
 	}
 
-	value := make([]byte, max(1, min(size, 256)))
+	value := make([]byte, size)
 	rand.Read(value)
 	switch encoding {
 	case "std":
-		return base64.StdEncoding.EncodeToString(value)
+		out = base64.RawStdEncoding.EncodeToString(value)
 
 	case "url":
-		return base64.URLEncoding.EncodeToString(value)
+		out = base64.RawURLEncoding.EncodeToString(value)
 
 	default:
-		return hex.EncodeToString(value)
+		out = hex.EncodeToString(value)
 	}
+
+	return
 }
 
 func Hash128(in []byte) (out [16]byte) {

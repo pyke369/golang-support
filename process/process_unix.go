@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -22,21 +23,16 @@ func Self() string {
 	return ""
 }
 
-func Exec(command string, params []string, extra ...map[string]any) (lines []string) {
+func Exec(command string, params []string, extra ...map[string]any) (lines []string, err error) {
 	var (
 		matcher *regexp.Regexp
 		content []byte
 	)
 
 	timeout, combined, options, capture, separator := 10*time.Second, false, 0, false, ""
-	if command = strings.TrimSpace(command); command == "" {
-		return
+	if command = strings.TrimSpace(command); command == "" || !filepath.IsAbs(command) {
+		return nil, errors.New("process: invalid command")
 	}
-	path, err := exec.LookPath(command)
-	if err != nil {
-		return
-	}
-	command = path
 
 	if len(extra) > 0 {
 		if value, ok := extra[0]["timeout"].(int); ok {
@@ -56,15 +52,15 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 			cmd.Stdin = value
 		}
 		if value, ok := extra[0]["environ"].(map[string]string); ok {
-			cmd.Env = cmd.Environ()
+			cmd.Env = []string{}
 			matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 			for key, value := range value {
-				if matcher.MatchString(key) {
+				if matcher.MatchString(key) && !strings.Contains(value, "\x00") {
 					cmd.Env = append(cmd.Env, key+"="+value)
 				}
 			}
 		}
-		if value, ok := extra[0]["dir"].(string); ok {
+		if value, ok := extra[0]["dir"].(string); ok && filepath.IsAbs(value) {
 			cmd.Dir = value
 		}
 		if value, ok := extra[0]["options"].(string); ok {
@@ -80,26 +76,26 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 
 	if combined {
 		if content, err = cmd.CombinedOutput(); err != nil {
-			return
+			return nil, err
 		}
 
 	} else {
 		if content, err = cmd.Output(); err != nil {
-			return
+			return nil, err
 		}
 	}
 
 	if options&ustr.OptionJSON != 0 {
 		var data any
 
-		if json.Unmarshal(content, &data) != nil {
-			return
+		if err := json.Unmarshal(content, &data); err != nil {
+			return nil, err
 		}
 		content, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
-			return
+			return nil, err
 		}
-		return strings.Split(string(content), "\n")
+		return strings.Split(string(content), "\n"), nil
 	}
 
 	for _, line := range strings.Split(strings.TrimRight(string(content), "\n"), "\n") {

@@ -5,15 +5,17 @@ package uuid
 import (
 	"crypto/rand"
 	"errors"
+	"regexp"
 	"strings"
 )
 
 type UUID [16]byte
 
 var (
-	parts = []int{0, 9, 14, 19, 24, 37}
-	hex   = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
-	uhex  = map[byte]byte{'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'a': 10, 'b': 11, 'c': 12, 'd': 13, 'e': 14, 'f': 15, 'A': 10, 'B': 11, 'C': 12, 'D': 13, 'E': 14, 'F': 15}
+	parts   = []int{0, 9, 14, 19, 24, 37}
+	hex     = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+	uhex    = map[byte]byte{'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'a': 10, 'b': 11, 'c': 12, 'd': 13, 'e': 14, 'f': 15, 'A': 10, 'B': 11, 'C': 12, 'D': 13, 'E': 14, 'F': 15}
+	matcher = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 )
 
 func New() (out UUID) {
@@ -24,7 +26,10 @@ func New() (out UUID) {
 	return
 }
 
-func From(in []byte) (out UUID) {
+func FromBytes(in []byte) (out UUID, err error) {
+	if len(in) != 16 {
+		return out, errors.New("uuid: invalid source size")
+	}
 	for index := 0; index < min(len(in), 16); index++ {
 		out[index] = in[index]
 	}
@@ -35,22 +40,7 @@ func From(in []byte) (out UUID) {
 }
 
 func Check(in string) bool {
-	if len(in) != 36 {
-		return false
-	}
-
-	in = strings.ToLower(in)
-	if in[8] != '-' || in[13] != '-' || in[14] != '4' || in[18] != '-' || (in[19] != '8' && in[19] != '9' && in[19] != 'a' && in[19] != 'b') || in[23] != '-' {
-		return false
-	}
-
-	for _, char := range in {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || char == '-') {
-			return false
-		}
-	}
-
-	return true
+	return matcher.MatchString(strings.ToLower(in))
 }
 
 func Unmarshal(in string) (out UUID, err error) {

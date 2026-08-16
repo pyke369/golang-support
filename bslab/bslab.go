@@ -18,8 +18,9 @@ type slab struct {
 }
 
 type Arena struct {
-	name  string
-	slabs map[int]*slab
+	name   string
+	nozero bool
+	slabs  map[int]*slab
 }
 
 type Info struct {
@@ -36,8 +37,8 @@ func init() {
 func New(extra ...map[string]any) *Arena {
 	a := &Arena{slabs: map[int]*slab{}}
 	a.slabs[0] = &slab{}
-	for size := uint(8); size <= 26; size++ {
-		a.slabs[1<<size] = &slab{queue: make(chan []byte, 64<<10)}
+	for size := uint(8); size <= 22; size++ {
+		a.slabs[1<<size] = &slab{max: (16 << 20) / (1 << size), queue: make(chan []byte, (16<<20)/(1<<size))}
 	}
 	if len(extra) > 0 {
 		if value, ok := extra[0]["name"].(string); ok {
@@ -50,6 +51,9 @@ func New(extra ...map[string]any) *Arena {
 				}
 			}
 		}
+		if value, ok := extra[0]["nozero"].(bool); ok {
+			a.nozero = value
+		}
 	}
 
 	return a
@@ -61,21 +65,24 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	if len(extra) != 0 {
 		item = extra[0]
 	}
-	if size <= 0 {
-		return nil
-	}
+	osize := size
 	if size < (1 << 8) {
 		size = (1 << 8)
 	}
 	if item != nil {
 		if cap(item) >= size {
+			if !a.nozero {
+				clear(item[:cap(item)])
+			}
 			out = item[:0]
-		}
-		if out == nil {
+
+		} else {
 			a.Put(item)
 		}
 	}
+
 	if out == nil {
+		want := size
 		bits, power := uint(0), uint(0)
 		if size&(size-1) == 0 {
 			power = 1
@@ -84,35 +91,27 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 			size >>= 1
 			bits++
 		}
-		if bits-power > 26 {
-			return nil
+		if bits-power > 22 {
+			return make([]byte, 0, want)
 		}
 		size = 1 << (bits - power)
 		if slab, exists := a.slabs[size]; exists {
 			atomic.AddUint64(&(slab.get), 1)
-			if slab.max == 0 || atomic.LoadUint64(&(slab.alloc)) < slab.max {
-				select {
-				case item := <-slab.queue:
-					out = item[:0]
+			select {
+			case item := <-slab.queue:
+				out = item[:0]
 
-				default:
+			default:
+				if slab.max == 0 || atomic.LoadUint64(&(slab.alloc)) < slab.max {
 					atomic.AddUint64(&(slab.alloc), 1)
 					out = make([]byte, 0, size)
-				}
-
-			} else {
-				select {
-				case item := <-slab.queue:
-					out = item[:0]
-
-				default:
 				}
 			}
 		}
 		if out == nil {
 			atomic.AddUint64(&(a.slabs[0].get), 1)
-			atomic.AddUint64(&(a.slabs[0].alloc), uint64(size))
-			out = make([]byte, 0, size)
+			atomic.AddUint64(&(a.slabs[0].alloc), uint64(osize))
+			out = make([]byte, 0, osize)
 		}
 	}
 
@@ -123,7 +122,7 @@ func Get(size int, extra ...[]byte) (out []byte) {
 	return Default.Get(size, extra...)
 }
 
-func (a *Arena) Put(in []byte, zeroize ...bool) {
+func (a *Arena) Put(in []byte) {
 	if in == nil || cap(in) <= 0 {
 		return
 	}
@@ -136,13 +135,10 @@ func (a *Arena) Put(in []byte, zeroize ...bool) {
 	size = 1 << (bits - 1)
 	if size > 0 && float64(cap(in))/float64(size) <= 1.25 {
 		if slab, exists := a.slabs[size]; exists {
-			if len(zeroize) == 0 || zeroize[0] {
-				in = in[:cap(in)]
-				for index := 0; index < cap(in); index++ {
-					in[index] = 0
-				}
-			}
 			atomic.AddUint64(&(slab.put), 1)
+			if !a.nozero {
+				clear(in[:cap(in)])
+			}
 			select {
 			case slab.queue <- in:
 

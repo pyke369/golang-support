@@ -32,7 +32,7 @@ type SSHOptions struct {
 	ExecTimeout    time.Duration
 	IdleTimeout    time.Duration
 	Mode           string
-	SubSystem      string
+	Subsystem      string
 	Pty            bool
 	Prompt         string
 	Filter         string
@@ -77,24 +77,24 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 	if options.ExecTimeout == 0 {
 		options.ExecTimeout = 20 * time.Second
 	}
-	options.ExecTimeout = min(2*time.Minute, max(5*time.Second, options.ExecTimeout))
+	options.ExecTimeout = min(5*time.Minute, max(5*time.Second, options.ExecTimeout))
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = time.Minute
 	}
-	options.IdleTimeout = min(time.Minute, max(options.ExecTimeout, options.IdleTimeout))
+	options.IdleTimeout = max(options.ExecTimeout+time.Second, options.IdleTimeout)
 
-	if options.SubSystem != "" && options.SubSystem != "netconf" {
+	if options.Subsystem != "" && options.Subsystem != "netconf" {
 		return nil, errors.New("expect: invalid subsystem")
 	}
 	if _, err := netip.ParseAddrPort(remote); err != nil {
-		if options.SubSystem == "netconf" {
+		if options.Subsystem == "netconf" {
 			remote += ":830"
 
 		} else {
 			remote += ":22"
 		}
 	}
-	switch options.SubSystem {
+	switch options.Subsystem {
 	case "":
 		if options.Prompt == "" {
 			options.Prompt = `^[^\$#]*[\$#]`
@@ -136,6 +136,12 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		remote:  remote,
 		options: options,
 		config: &ssh.ClientConfig{
+			HostKeyAlgorithms: []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512},
+			Config: ssh.Config{
+				KeyExchanges: []string{ssh.KeyExchangeMLKEM768X25519, ssh.KeyExchangeCurve25519, ssh.KeyExchangeECDHP256},
+				Ciphers:      []string{ssh.CipherAES256GCM, ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},
+				MACs:         []string{ssh.HMACSHA256ETM, ssh.HMACSHA512ETM},
+			},
 			User:    credentials.Username,
 			Timeout: options.ConnectTimeout,
 			HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -145,10 +151,6 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 
 				mu.Lock()
 				defer mu.Unlock()
-
-				if options.AcceptHandler != nil {
-					file.Touch(options.KnownHosts)
-				}
 
 				appended := false
 			retry:
@@ -160,7 +162,7 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 				err = value(hostname, remote, key)
 				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !appended && options.AcceptHandler != nil {
 					if options.AcceptHandler(hostname, remote, key) {
-						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "append")
+						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "create append")
 						appended = true
 						goto retry
 					}
@@ -208,6 +210,7 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 				return
 			}
 			n += offset
+			atomic.StoreInt64(&c.last, time.Now().Unix())
 
 			loffset := 0
 			for {
@@ -324,8 +327,8 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			c.Close()
 			return nil, ustr.Wrap(err, "expect")
 		}
-		if c.options.SubSystem != "" {
-			if err = c.session.RequestSubsystem(c.options.SubSystem); err != nil {
+		if c.options.Subsystem != "" {
+			if err = c.session.RequestSubsystem(c.options.Subsystem); err != nil {
 				c.Close()
 				return nil, ustr.Wrap(err, "expect")
 			}
@@ -349,7 +352,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			return nil, ustr.Wrap(err, "expect")
 		}
 
-		if c.options.SubSystem == "netconf" {
+		if c.options.Subsystem == "netconf" {
 			message := ParseXML(lines, map[string]any{"skip": false})
 			hello, exists := message["hello"]
 			if !exists {
@@ -386,9 +389,9 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 	}
 
-	command = strings.TrimSpace(command)
-	switch c.options.SubSystem {
+	switch c.options.Subsystem {
 	case "":
+		command = strings.TrimSpace(ustr.Strip(command, "\x00|\r\n\t"))
 		switch c.options.Mode {
 		case JSON:
 			if !strings.Contains(command, "display json") {
@@ -402,6 +405,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 
 	case "netconf":
+		command = strings.ReplaceAll(command, "]]>]]>", "")
 		if !strings.HasPrefix(command, "<rpc") {
 			id := uuid.New()
 			command = `<rpc message-id="` + id.String() + `">` + "\n" + command
@@ -444,13 +448,48 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			result = ParseJSON(strings.Join(lines, ""))
 
 		case XML:
-			for index, line := range lines {
-				if line != "" && line[0] == '<' {
-					lines = lines[index:]
-					break
+			result = ParseXML(lines, map[string]any{"empty": empty})
+			if c.options.Subsystem == "netconf" {
+				var payload map[string]any
+
+				value := j.Map(result)
+				for {
+					if len(value) == 0 {
+						break
+					}
+					if value, exists := value["rpc-error"]; exists {
+						if avalue := j.Slice(value); len(avalue) != 0 {
+							payload = j.Map(avalue[0])
+
+						} else {
+							payload = j.Map(value)
+						}
+						break
+					}
+					for k := range value {
+						value = j.Map(value[k])
+						break
+					}
+				}
+
+				if payload != nil {
+					message, details := "expect: netconf rpc error", []string{}
+					if value := strings.TrimSpace(j.String(payload["error-message"])); value != "" {
+						details = append(details, value)
+					}
+					for k, v := range j.Map(payload["error-info"]) {
+						if k := strings.TrimSpace(j.String(k)); k != "" {
+							if v := strings.TrimSpace(j.String(v)); v != "" {
+								details = append(details, k+": "+v)
+							}
+						}
+					}
+					if len(details) != 0 {
+						message += ": " + strings.Join(details, " / ")
+					}
+					return nil, errors.New(message)
 				}
 			}
-			result = ParseXML(lines, map[string]any{"empty": empty})
 		}
 	}
 	atomic.StoreInt64(&c.last, time.Now().Unix())

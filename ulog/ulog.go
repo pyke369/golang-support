@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pyke369/golang-support/bslab"
+	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/ustr"
 )
@@ -71,6 +73,7 @@ const (
 )
 
 type ULog struct {
+	roots                 map[string]struct{}
 	syslog, file, console bool
 	syslogHandle          *syslogWriter
 	syslogRemote          string
@@ -101,9 +104,9 @@ type ULog struct {
 }
 
 type fileOutput struct {
-	handle *os.File
-	last   time.Time
-	path   string
+	handle   *os.File
+	modified time.Time
+	path     string
 }
 
 type colorizer struct {
@@ -160,11 +163,31 @@ var (
 	}
 	optionParser   = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
 	templateParser = regexp.MustCompile(`\{\{\s*[^\s\}]+\s*\}\}`)
+	psep           = string(filepath.Separator)
 )
 
-func New(target string, arena ...*bslab.Arena) *ULog {
-	l := &ULog{fileOutputs: map[string]*fileOutput{}, level: LOG_INFO, arena: bslab.Default}
-	if len(arena) != 0 {
+func withinRoots(path string, roots map[string]struct{}) bool {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for root := range roots {
+		if strings.HasPrefix(path, root+psep) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func New(target string, roots []string, arena ...*bslab.Arena) *ULog {
+	l := &ULog{roots: map[string]struct{}{}, fileOutputs: map[string]*fileOutput{}, level: LOG_INFO, arena: bslab.Default}
+	for _, value := range roots {
+		if filepath.IsAbs(value) {
+			l.roots[filepath.Clean(value)] = struct{}{}
+		}
+	}
+	if len(arena) != 0 && arena[0] != nil {
 		l.arena = arena[0]
 	}
 
@@ -178,21 +201,22 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 						if paths, err := filepath.Glob(root); err == nil {
 							entries := []*fileOutput{}
 							for _, path := range paths {
+								if !withinRoots(path, l.roots) {
+									continue
+								}
 								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-									entries = append(entries, &fileOutput{last: info.ModTime(), path: path})
+									entries = append(entries, &fileOutput{modified: info.ModTime(), path: path})
 								}
 							}
 							sort.Slice(entries, func(i, j int) bool {
-								return entries[i].last.After(entries[j].last)
+								return entries[i].modified.After(entries[j].modified)
 							})
 							for index, entry := range entries {
-								if age > 0 && time.Since(entry.last) >= age {
+								if age > 0 && time.Since(entry.modified) >= age {
 									os.Remove(entry.path)
-									os.Remove(filepath.Dir(entry.path))
 								}
 								if count > 0 && index >= count {
 									os.Remove(entry.path)
-									os.Remove(filepath.Dir(entry.path))
 								}
 							}
 						}
@@ -203,10 +227,13 @@ func New(target string, arena ...*bslab.Arena) *ULog {
 						if paths, err := filepath.Glob(root); err == nil {
 							start := time.Now()
 							for _, path := range paths {
+								if !withinRoots(path, l.roots) {
+									continue
+								}
 								if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= age {
 									ok := false
 									if source, err := os.Open(path); err == nil {
-										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR|O_NOFOLLOW, 0o600); err == nil {
+										if target, err := os.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR|file.O_NOFOLLOW, 0o600); err == nil {
 											gzwriter := gzip.NewWriter(target)
 											_, err := io.Copy(gzwriter, source)
 											gzwriter.Close()
@@ -366,7 +393,9 @@ func (l *ULog) Load(target string) *ULog {
 					l.optionUTC = j.Boolean(option[2])
 
 				case "level":
-					l.level = severities[option[2]]
+					if value, exists := severities[option[2]]; exists {
+						l.level = value
+					}
 				}
 			}
 
@@ -415,6 +444,7 @@ func (l *ULog) Load(target string) *ULog {
 			l.consoleColors = false
 		}
 	}
+
 	return l
 }
 
@@ -499,14 +529,18 @@ func (l *ULog) ClearExternal() {
 
 func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 	l.mu.RLock()
-	if l.level < severity || (!l.syslog && l.external == nil && !l.file && !l.console) {
+	ssyslog, sexternal, sfile, sconsole := l.syslog, l.external, l.file, l.console
+	if l.level < severity || (!ssyslog && sexternal == nil && !sfile && !sconsole) {
 		l.mu.RUnlock()
 		return
 	}
+	sfields, sorder, sutc, spath := maps.Clone(l.fields), slices.Clone(l.order), l.optionUTC, l.filePath
 	l.mu.RUnlock()
 
 	structured, content := false, l.arena.Get(1<<10)
-	defer l.arena.Put(content)
+	defer func() {
+		l.arena.Put(content)
+	}()
 
 	templates := map[string]any{
 		"datetime":    now.Format(time.DateTime),
@@ -515,15 +549,13 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		"mstimestamp": now.UnixNano() / int64(time.Millisecond),
 	}
 	if structure, ok := in.(map[string]any); ok {
-		structured = true
-		l.mu.RLock()
-		for key, value := range l.fields {
+		structure, structured = maps.Clone(structure), true
+		for key, value := range sfields {
 			if _, exists := structure[key]; !exists {
 				structure[key] = value
 			}
 		}
 
-		order := slices.Clone(l.order)
 		for okey, value := range structure {
 			key := strings.TrimSpace(okey)
 			if strings.HasPrefix(key, "{{") && strings.HasSuffix(key, "}}") {
@@ -533,11 +565,11 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					if value, ok := value.(string); ok {
 						norder := strings.Fields(value)
 						for _, field := range norder {
-							if index := slices.Index(order, field); index >= 0 {
-								order = slices.Delete(order, index, index+1)
+							if index := slices.Index(sorder, field); index >= 0 {
+								sorder = slices.Delete(sorder, index, index+1)
 							}
 						}
-						order = append(order, norder...)
+						sorder = append(sorder, norder...)
 					}
 
 				} else {
@@ -561,14 +593,21 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		}
 
 		if value, ok := templates["payload"].(string); ok {
-			content = append(content, ustr.Strip(value, "\n\r\t")...)
+			content = append(content,
+				bytes.Map(func(r rune) rune {
+					if r < 0x20 || r == 0x7f {
+						return -1
+					}
+					return r
+				}, []byte(value))...,
+			)
 
 		} else {
 			buffer := bytes.NewBuffer([]byte{'{'})
 			if len(structure) != 0 {
 				encoder := json.NewEncoder(buffer)
 				encoder.SetEscapeHTML(false)
-				for _, key := range order {
+				for _, key := range sorder {
 					if _, exists := structure[key]; exists {
 						if value, err := json.Marshal(key); err == nil {
 							buffer.Write(value)
@@ -580,7 +619,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 					}
 				}
 				for _, key := range j.MapKeys(structure) {
-					if !slices.Contains(order, key) {
+					if !slices.Contains(sorder, key) {
 						if value, err := json.Marshal(key); err == nil {
 							buffer.Write(value)
 							buffer.WriteByte(':')
@@ -595,9 +634,8 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			buffer.WriteByte('}')
 			content = append(content, buffer.Bytes()...)
 		}
-		l.mu.RUnlock()
-
 	}
+
 	if layout, ok := in.(string); ok {
 		if len(a) == 0 {
 			content = fmt.Appendf(content, "%s", layout)
@@ -605,12 +643,19 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		} else {
 			content = fmt.Appendf(content, strings.TrimSpace(layout), a...)
 		}
-		content = bytes.ReplaceAll(content, []byte("\n"), []byte{})
-		content = bytes.ReplaceAll(content, []byte("\r"), []byte{})
-		content = bytes.ReplaceAll(content, []byte("\t"), []byte{})
+		content = bytes.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, content)
 	}
 
-	if l.syslog {
+	if len(content) == 0 {
+		return
+	}
+
+	if ssyslog {
 		l.mu.Lock()
 		if l.syslogHandle == nil {
 			protocol := ""
@@ -621,41 +666,38 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				l.syslogHandle = handle
 			}
 		}
+		handle := l.syslogHandle
 		l.mu.Unlock()
-		l.mu.RLock()
-		if l.syslogHandle != nil {
+		if handle != nil {
 			switch severity {
 			case LOG_ERR:
-				l.syslogHandle.Err(string(content))
+				handle.Err(string(content))
 
 			case LOG_WARNING:
-				l.syslogHandle.Warning(string(content))
+				handle.Warning(string(content))
 
 			case LOG_INFO:
-				l.syslogHandle.Info(string(content))
+				handle.Info(string(content))
 
 			case LOG_DEBUG:
-				l.syslogHandle.Debug(string(content))
+				handle.Debug(string(content))
 			}
 		}
-		l.mu.RUnlock()
 	}
 
-	l.mu.RLock()
-	if l.external != nil {
-		l.external(severityNames[severity], content)
+	if sexternal != nil {
+		sexternal(severityNames[severity], bytes.Clone(content))
 	}
-	l.mu.RUnlock()
 
 	content = append(content, '\n')
-	if l.optionUTC {
+	if sutc {
 		now = now.UTC()
 
 	} else {
 		now = now.Local()
 	}
-	if l.file {
-		path := ustr.Strftime(l.filePath, now)
+	if sfile {
+		path := ustr.Strftime(spath, now)
 		if structured {
 			path = templateParser.ReplaceAllStringFunc(path, func(key string) string {
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
@@ -668,67 +710,72 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			})
 		}
 
-		l.mu.Lock()
-		if _, exists := l.fileOutputs[path]; !exists {
-			if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
-				if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK|O_NOFOLLOW, 0o600); err == nil {
-					l.fileOutputs[path] = &fileOutput{handle: handle}
-				}
-			}
-		}
-		if output, exists := l.fileOutputs[path]; exists {
-			if handle := output.handle; handle != nil {
-				prefix := make([]byte, 0, 128)
-				if l.fileFacility != 0 {
-					prefix = append(prefix, '<')
-					prefix = append(prefix, strconv.Itoa(l.fileFacility|severity)...)
-					prefix = append(prefix, '>')
-					prefix = append(prefix, now.Format(time.Stamp)...)
-					prefix = append(prefix, ' ')
-					prefix = append(prefix, l.syslogName...)
-					prefix = append(prefix, '[')
-					prefix = append(prefix, strconv.Itoa(os.Getpid())...)
-					prefix = append(prefix, []byte{']', ':', ' '}...)
-
-				} else {
-					switch l.fileTime {
-					case TIME_DATETIME:
-						prefix = append(prefix, now.Format(time.DateTime)...)
-
-					case TIME_MSDATETIME:
-						prefix = append(prefix, now.Format(time.DateTime+".000")...)
-
-					case TIME_TIMESTAMP:
-						prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
-
-					case TIME_MSTIMESTAMP:
-						prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
-					}
-					if len(prefix) != 0 {
-						prefix = append(prefix, ' ')
-					}
-					if l.fileSeverity {
-						prefix = append(prefix, severityLabels[severity]...)
+		if !strings.HasSuffix(path, psep) && withinRoots(path, l.roots) {
+			if ext := filepath.Ext(path); ext == "" || ext != filepath.Base(path) {
+				l.mu.Lock()
+				if _, exists := l.fileOutputs[path]; !exists && len(l.fileOutputs) < 64 {
+					if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
+						if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK|file.O_NOFOLLOW, 0o600); err == nil {
+							l.fileOutputs[path] = &fileOutput{handle: handle}
+						}
 					}
 				}
-				handle.Write(prefix)
-				handle.Write(content)
-				l.fileOutputs[path].last = now
-			}
-		}
-		if now.Sub(l.fileLast) >= time.Minute {
-			l.fileLast = now
-			for path, out := range l.fileOutputs {
-				if now.Sub(out.last) >= time.Minute {
-					out.handle.Close()
-					delete(l.fileOutputs, path)
+				if output, exists := l.fileOutputs[path]; exists {
+					if handle := output.handle; handle != nil {
+						prefix := make([]byte, 0, 128)
+						if l.fileFacility != 0 {
+							prefix = append(prefix, '<')
+							prefix = append(prefix, strconv.Itoa(l.fileFacility|severity)...)
+							prefix = append(prefix, '>')
+							prefix = append(prefix, now.Format(time.Stamp)...)
+							prefix = append(prefix, ' ')
+							prefix = append(prefix, l.syslogName...)
+							prefix = append(prefix, '[')
+							prefix = append(prefix, strconv.Itoa(os.Getpid())...)
+							prefix = append(prefix, []byte{']', ':', ' '}...)
+
+						} else {
+							switch l.fileTime {
+							case TIME_DATETIME:
+								prefix = append(prefix, now.Format(time.DateTime)...)
+
+							case TIME_MSDATETIME:
+								prefix = append(prefix, now.Format(time.DateTime+".000")...)
+
+							case TIME_TIMESTAMP:
+								prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+
+							case TIME_MSTIMESTAMP:
+								prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
+							}
+							if len(prefix) != 0 {
+								prefix = append(prefix, ' ')
+							}
+							if l.fileSeverity {
+								prefix = append(prefix, severityLabels[severity]...)
+							}
+						}
+						handle.Write(prefix)
+						handle.Write(content)
+						l.fileOutputs[path].modified = now
+					}
 				}
+				if now.Sub(l.fileLast) >= time.Minute {
+					l.fileLast = now
+					for path, out := range l.fileOutputs {
+						if now.Sub(out.modified) >= time.Minute {
+							out.handle.Close()
+							delete(l.fileOutputs, path)
+						}
+					}
+				}
+				l.mu.Unlock()
 			}
 		}
-		l.mu.Unlock()
 	}
 
-	if l.console {
+	if sconsole {
+		l.mu.Lock()
 		prefix := make([]byte, 0, 128)
 		if l.consoleTime != TIME_NONE {
 			if l.consoleColors {
@@ -766,7 +813,6 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 				content = item.expression.ReplaceAll(content, item.replace)
 			}
 		}
-		l.mu.Lock()
 		l.consoleHandle.Write(prefix)
 		l.consoleHandle.Write(content)
 		l.mu.Unlock()

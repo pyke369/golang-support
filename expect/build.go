@@ -1,75 +1,57 @@
 package expect
 
 import (
+	"bytes"
 	"encoding/xml"
+	"errors"
+	"regexp"
 	"sort"
 	"strings"
-
-	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/rcache"
 )
 
-func BuildXML(command string, parameters ...map[string]string) (out string) {
-	var b strings.Builder
+var matcher = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
 
-	matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+func BuildXML(command string, extra ...any) (out string, err error) {
+	var b bytes.Buffer
+
 	if !matcher.MatchString(command) {
-		return
+		return "", errors.New("expect: invalid command")
 	}
-
 	b.WriteString("<" + command)
-	if len(parameters) > 1 {
-		keys := []string{}
-		for key := range parameters[1] {
-			if !matcher.MatchString(key) {
-				return
+	if len(extra) > 1 {
+		if attributes, ok := extra[1].(map[string]string); ok {
+			keys := []string{}
+			for key := range attributes {
+				if !matcher.MatchString(key) {
+					return "", errors.New("expect: invalid command attribute")
+				}
+				keys = append(keys, key)
 			}
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			b.WriteString(` ` + key + `="`)
-			xml.EscapeText(&b, []byte(parameters[1][key]))
-			b.WriteString(`"`)
+			sort.Strings(keys)
+			for _, key := range keys {
+				b.WriteString(" " + key + `="`)
+				xml.EscapeText(&b, []byte(attributes[key]))
+				b.WriteString(`"`)
+			}
 		}
 	}
 	b.WriteString(">\n")
 
-	if len(parameters) > 0 {
-		keys := []string{}
-		for key := range parameters[0] {
-			if !matcher.MatchString(key) {
-				return
-			}
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			value := parameters[0][key]
-			b.WriteString(`<` + key)
-			if value == "" {
-				b.WriteString("/>\n")
-
-			} else {
-				b.WriteString(">\n")
-				raw := false
-				if len(parameters) > 2 {
-					if value, ok := parameters[2]["raw"]; ok && j.Boolean(value) {
-						raw = true
-					}
-				}
-				if raw && !strings.Contains(value, "</"+key+">") {
-					b.WriteString(value)
-
-				} else {
-					xml.EscapeText(&b, []byte(value))
-				}
-				b.WriteString("\n</" + key + ">\n")
+	if len(extra) > 0 {
+		if value, ok := extra[0].(string); ok {
+			if value := strings.TrimSpace(value); value != "" {
+				b.WriteString(strings.ReplaceAll(value, "><", ">\n<"))
+				b.WriteString("\n")
 			}
 		}
 	}
 
 	b.WriteString("</" + command + ">\n")
 
-	return b.String()
+	var unused any
+	if err := xml.Unmarshal(b.Bytes(), &unused); err != nil {
+		return "", err
+	}
+
+	return b.String(), nil
 }

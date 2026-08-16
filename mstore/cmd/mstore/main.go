@@ -4,14 +4,18 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/mstore"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
+)
+
+var (
+	matcher = regexp.MustCompile(`^\s*(now|end|start)\s*(?:(\+|\-)\s*(\d+)\s*(mo(?:nths?)?|s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?))?\s*$`)
 )
 
 func usage(status int) {
@@ -42,8 +46,7 @@ func bail(err error, status int) {
 }
 
 func decode(in string, start, end time.Time) (out time.Time, err error) {
-	if captures := rcache.Get(`^\s*(now|end|start)\s*(?:(\+|\-)\s*(\d+)\s*(mo(?:nths?)?|s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?))?\s*$`).
-		FindStringSubmatch(strings.ToLower(in)); captures != nil {
+	if captures := matcher.FindStringSubmatch(strings.ToLower(in)); captures != nil {
 		switch captures[1] {
 		case "now":
 			out = time.Now()
@@ -54,7 +57,7 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 		case "end":
 			out = end
 		}
-		if amount, _ := strconv.Atoi(captures[3]); amount != 0 {
+		if amount, err := strconv.Atoi(captures[3]); err == nil && amount > 0 {
 			direction := +1
 			if captures[2] == "-" {
 				direction = -1
@@ -79,6 +82,7 @@ func decode(in string, start, end time.Time) (out time.Time, err error) {
 				out = out.AddDate(0, 0, direction*amount*7)
 			}
 		}
+
 		return
 	}
 	return time.Unix(0, 0), errors.New("mstore: no match")
@@ -98,10 +102,12 @@ func main() {
 		}
 		metrics, err := mstore.NewStore(os.Args[2], true)
 		bail(err, 3)
-		metadata, err := metrics.Metric(os.Args[3]).Metadata()
+		metric, err := metrics.Metric(os.Args[3])
 		bail(err, 4)
-		out, err := json.MarshalIndent(metadata, "", "  ")
+		metadata, err := metric.Metadata()
 		bail(err, 5)
+		out, err := json.MarshalIndent(metadata, "", "  ")
+		bail(err, 6)
 		os.Stdout.Write(out)
 		os.Stdout.WriteString("\n")
 
@@ -111,8 +117,10 @@ func main() {
 		}
 		metrics, err := mstore.NewStore(os.Args[2], true)
 		bail(err, 3)
-		export, err := metrics.Metric(os.Args[3]).Export()
+		metric, err := metrics.Metric(os.Args[3])
 		bail(err, 4)
+		export, err := metric.Export()
+		bail(err, 5)
 		columns, data, names := j.Slice(j.Map(export["metadata"])["columns"]), j.Slice(export["values"]), []string{"date"}
 		for index, column := range columns {
 			column := j.Map(column)
@@ -120,18 +128,20 @@ func main() {
 				hide := true
 			done:
 				for _, line := range data {
-					value := j.Slice(line)[index+1]
-					switch j.String(column["mode"]) {
-					case "gauge", "counter", "increment":
-						if j.Number(value) != 0 {
-							hide = false
-							break done
-						}
+					if value := j.Slice(line); index+1 < len(value) {
+						value := value[index+1]
+						switch j.String(column["mode"]) {
+						case "gauge", "counter", "increment":
+							if j.Number(value) != 0 {
+								hide = false
+								break done
+							}
 
-					case "text", "binary":
-						if j.String(value) != "" {
-							hide = false
-							break done
+						case "text", "binary":
+							if j.String(value) != "" {
+								hide = false
+								break done
+							}
 						}
 					}
 				}
@@ -158,7 +168,7 @@ func main() {
 							values = append(values, strconv.FormatInt(int64(j.Number(value)), 10))
 
 						case "text", "binary":
-							values = append(values, `"`+ustr.Strip(j.String(value), `"=+-@"`)+`"`)
+							values = append(values, `"`+ustr.Strip(j.String(value), `"=+-@`+"\t\r\n")+`"`)
 						}
 					}
 				}
@@ -172,10 +182,12 @@ func main() {
 		}
 		metrics, err := mstore.NewStore(os.Args[2], true)
 		bail(err, 3)
-		export, err := metrics.Metric(os.Args[3]).Export()
+		metric, err := metrics.Metric(os.Args[3])
 		bail(err, 4)
-		metadata, err := json.MarshalIndent(export["metadata"], "  ", "  ")
+		export, err := metric.Export()
 		bail(err, 5)
+		metadata, err := json.MarshalIndent(export["metadata"], "  ", "  ")
+		bail(err, 6)
 		columns, data, lines := j.Slice(j.Map(export["metadata"])["columns"]), j.Slice(export["values"]), []string{
 			"{",
 			`  "metadata": ` + string(metadata) + ",",
@@ -194,7 +206,7 @@ func main() {
 					line += strconv.FormatInt(int64(j.Number(value)), 10)
 
 				case "text", "binary":
-					line += `"` + ustr.Strip(j.String(value), `"\`+"\n\r") + `"`
+					line += `"` + ustr.Strip(j.String(value), "\t\r\n\"\\") + `"`
 				}
 				if vindex < len(values)-2 {
 					line += ","
@@ -222,7 +234,9 @@ func main() {
 		bail(json.Unmarshal(content, &data), 4)
 		metrics, err := mstore.NewStore(os.Args[2])
 		bail(err, 5)
-		bail(metrics.Metric(os.Args[3]).Import(data), 6)
+		metric, err := metrics.Metric(os.Args[3])
+		bail(err, 6)
+		bail(metric.Import(data), 7)
 
 	case "extend":
 		if len(os.Args) < 5 {
@@ -230,21 +244,23 @@ func main() {
 		}
 		metrics, err := mstore.NewStore(os.Args[2])
 		bail(err, 3)
-		export, err := metrics.Metric(os.Args[3]).Export()
+		metric, err := metrics.Metric(os.Args[3])
 		bail(err, 4)
+		export, err := metric.Export()
+		bail(err, 5)
 		columns := j.Slice(j.Map(export["metadata"])["columns"])
 		for _, value := range strings.Split(os.Args[4], ",") {
 			value = strings.TrimSpace(value)
 			parts := strings.Split(value, "@")
 			parts[0] = strings.ToLower(strings.TrimSpace(parts[0]))
 			if mstore.ModeIndexes[parts[0]] == 0 {
-				bail(errors.New("mstore: invalid column type "+parts[0]), 5)
+				bail(errors.New("mstore: invalid column type "+parts[0]), 6)
 			}
 			size, description := 0, ""
 			if len(parts) > 1 {
 				size, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
 				if size != 1 && size != 2 && size != 4 && size != 8 {
-					bail(errors.New("mstore: invalid column size "+strconv.Itoa(size)), 5)
+					bail(errors.New("mstore: invalid column size "+strconv.Itoa(size)), 7)
 				}
 				if len(parts) > 2 {
 					description = strings.TrimSpace(parts[2])
@@ -255,9 +271,11 @@ func main() {
 		j.Map(export["metadata"])["columns"] = columns
 		now := time.Now().UnixNano() / int64(time.Millisecond)
 		target := os.Args[3] + "_" + strconv.FormatInt(now, 10)
-		bail(metrics.Metric(target+"_ext").Import(export), 6)
-		bail(metrics.Rename(os.Args[3], target), 7)
-		bail(metrics.Rename(target+"_ext", os.Args[3]), 8)
+		metric, err = metrics.Metric(target + "_ext")
+		bail(err, 8)
+		bail(metric.Import(export), 9)
+		bail(metrics.Rename(os.Args[3], target), 10)
+		bail(metrics.Rename(target+"_ext", os.Args[3]), 11)
 
 	case "query":
 		if len(os.Args) < 8 {
@@ -319,8 +337,10 @@ func main() {
 			bail(errors.New("mstore: no valid aggregate specified"), 11)
 		}
 		watch := time.Now()
-		result, err := metrics.Metric(os.Args[3]).Get(start, end, interval, columns, true)
+		metric, err := metrics.Metric(os.Args[3])
 		bail(err, 12)
+		result, err := metric.Get(start, end, interval, columns, true)
+		bail(err, 13)
 		result["query"] = map[string]any{
 			"start":    start.Format(time.DateTime),
 			"end":      end.Format(time.DateTime),
@@ -328,7 +348,7 @@ func main() {
 			"duration": time.Since(watch) / time.Microsecond,
 		}
 		content, err := json.MarshalIndent(result, "", "  ")
-		bail(err, 13)
+		bail(err, 14)
 		os.Stdout.Write(content)
 		os.Stdout.WriteString("\n")
 

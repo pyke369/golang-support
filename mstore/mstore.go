@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
-	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/sys/unix"
@@ -51,11 +51,12 @@ const (
 )
 
 type Store struct {
-	prefix  string
-	mu      sync.Mutex
-	metrics map[string]*metric
-	chunks  map[string]*chunk
-	last    time.Time
+	readonly bool
+	prefix   string
+	mu       sync.Mutex
+	metrics  map[string]*metric
+	chunks   map[string]*chunk
+	last     time.Time
 }
 
 type Column struct {
@@ -75,13 +76,15 @@ type metric struct {
 	size        int64
 	columns     []*Column
 	frozen      bool
-	sync.Mutex
+	mu          sync.RWMutex
 }
 
 type chunk struct {
-	last   time.Time
-	handle *os.File
-	data   []byte
+	writable bool
+	last     time.Time
+	metric   *metric
+	handle   *os.File
+	data     []byte
 }
 
 type entry struct {
@@ -131,12 +134,23 @@ var (
 		"percentile": AggregatePercentile,
 		"raw":        AggregateRaw,
 	}
+
+	nameMatcher  = regexp.MustCompile(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
+	monthMatcher = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
 )
 
-func (s *Store) chunk(path string, size int64, create bool) (data []byte, err error) {
+func (s *Store) chunk(m *metric, path string, size int64, extra ...bool) (data []byte, err error) {
+	create := false
+	if len(extra) != 0 {
+		create = extra[0]
+	}
+	if s.readonly && create {
+		return nil, errors.New("mstore: read-only")
+	}
 	if size < 4 {
 		return nil, errors.New("mstore: invalid size")
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if chunk, exists := s.chunks[path]; exists {
@@ -144,13 +158,20 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 			return nil, errors.New("mstore: size mismatch")
 		}
 		chunk.last = time.Now()
-		if !create || chunk.handle != nil {
+		if create && !chunk.writable {
+			if chunk.handle != nil {
+				unix.Munmap(chunk.data)
+				chunk.handle.Close()
+			}
+			delete(s.chunks, path)
+
+		} else if !create || chunk.handle != nil {
 			return chunk.data, nil
 		}
 	}
-	chunk, flags, created := &chunk{}, os.O_RDWR, false
+	chunk, flags, prot, created := &chunk{metric: m}, os.O_RDONLY, unix.PROT_READ, false
 	if create {
-		flags |= os.O_CREATE
+		flags, prot, chunk.writable = os.O_RDWR|os.O_CREATE, unix.PROT_READ|unix.PROT_WRITE, true
 	}
 	if _, err := os.Stat(path); err != nil {
 		if !create {
@@ -165,11 +186,21 @@ func (s *Store) chunk(path string, size int64, create bool) (data []byte, err er
 	if chunk.handle, err = os.OpenFile(path, flags, 0o600); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
-	if err = chunk.handle.Truncate(size); err != nil {
-		chunk.handle.Close()
+	info, err := chunk.handle.Stat()
+	if err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
-	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED); err != nil {
+	if info.Size() != size {
+		if !create {
+			chunk.handle.Close()
+			return nil, errors.New("mstore: size mismatch")
+		}
+		if err := chunk.handle.Truncate(size); err != nil {
+			chunk.handle.Close()
+			return nil, ustr.Wrap(err, "mstore")
+		}
+	}
+	if chunk.data, err = unix.Mmap(int(uintptr(chunk.handle.Fd())), 0, int(size), prot, unix.MAP_SHARED); err != nil {
 		chunk.handle.Close()
 		return nil, ustr.Wrap(err, "mstore")
 	}
@@ -193,22 +224,27 @@ func (s *Store) cleanup() {
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	if now.Sub(s.last) >= time.Minute {
+	if now.Sub(s.last) > 15*time.Second {
 		s.last = now
 		for path, chunk := range s.chunks {
-			if now.Sub(chunk.last) >= time.Minute {
-				if chunk.handle != nil {
-					unix.Munmap(chunk.data)
-					chunk.handle.Close()
+			if now.Sub(chunk.last) >= 15*time.Second {
+				if chunk.metric != nil {
+					chunk.metric.mu.Lock()
+					if chunk.handle != nil {
+						unix.Munmap(chunk.data)
+						chunk.handle.Close()
+					}
+					delete(s.chunks, path)
+					chunk.metric.mu.Unlock()
 				}
-				delete(s.chunks, path)
 			}
 		}
 	}
 }
 
-func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
-	if len(readonly) == 0 || !readonly[0] {
+func NewStore(prefix string, extra ...bool) (store *Store, err error) {
+	readonly := len(extra) != 0 && extra[0]
+	if !readonly {
 		if err := os.MkdirAll(prefix, 0o700); err != nil {
 			return nil, ustr.Wrap(err, "mstore")
 		}
@@ -217,31 +253,34 @@ func NewStore(prefix string, readonly ...bool) (store *Store, err error) {
 		return nil, errors.New("mstore: invalid store")
 	}
 
-	return &Store{prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
+	return &Store{readonly: readonly, prefix: prefix, metrics: map[string]*metric{}, chunks: map[string]*chunk{}}, nil
 }
 
-func (s *Store) Metric(name string) *metric {
-	if !rcache.Get(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`).MatchString(name) {
-		return nil
+func (s *Store) Metric(name string) (m *metric, err error) {
+	if !nameMatcher.MatchString(name) {
+		return nil, errors.New("mstore: invalid metric name")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if metric, exists := s.metrics[name]; exists {
-		return metric
+		return metric, nil
 	}
 	s.metrics[name] = &metric{store: s, name: name}
 
-	return s.metrics[name]
+	return s.metrics[name], nil
 }
 
-func (s *Store) List(prefix string) (names []string) {
+func (s *Store) List(prefix string) (names []string, err error) {
+	if !nameMatcher.MatchString(prefix) {
+		return nil, errors.New("mstore: invalid prefix")
+	}
 	prefix = filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator)))
 	if !strings.HasPrefix(filepath.Clean(prefix)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
 		return
 	}
 
 	names = []string{}
-	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
+	filepath.WalkDir(prefix, func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
 			names = append(names, strings.ReplaceAll(strings.Trim(strings.TrimPrefix(filepath.Dir(path), s.prefix), string(filepath.Separator)), string(filepath.Separator), "."))
 		}
@@ -252,16 +291,22 @@ func (s *Store) List(prefix string) (names []string) {
 }
 
 func (s *Store) Rename(from, to string) error {
+	if !nameMatcher.MatchString(from) {
+		return errors.New("mstore: invalid source metric name")
+	}
+	if !nameMatcher.MatchString(to) {
+		return errors.New("mstore: invalid target metric name")
+	}
 	from = filepath.Join(s.prefix, strings.ReplaceAll(from, ".", string(filepath.Separator)))
 	if !strings.HasPrefix(filepath.Clean(from)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
-		return errors.New("mstore: path traversal detected")
+		return errors.New("mstore: path traversal")
 	}
 	if info, err := os.Stat(from); err != nil || !info.IsDir() {
 		return errors.New("mstore: invalid source metric")
 	}
 	to = filepath.Join(s.prefix, strings.ReplaceAll(to, ".", string(filepath.Separator)))
 	if !strings.HasPrefix(filepath.Clean(to)+string(filepath.Separator), filepath.Clean(s.prefix)+string(filepath.Separator)) {
-		return errors.New("mstore: path traversal detected")
+		return errors.New("mstore: path traversal")
 	}
 	if _, err := os.Stat(to); err == nil {
 		return errors.New("mstore: existing destination metric")
@@ -274,22 +319,23 @@ func (s *Store) Rename(from, to string) error {
 }
 
 func (s *Store) Trim(name string, start, end time.Time) error {
-	return nil
+	return nil // TODO implement
 }
 
 func (s *Store) Delete(name string) error {
-	return nil
+	return nil // TODO implement
 }
 
 func (s *Store) Get(start, end time.Time, interval int64, names map[string][][]int64) (result map[string]any) {
+	// TODO cap max work?
 	result = map[string]any{}
 	if count := len(names); count > 0 {
 		queue := make(chan []any)
 		for name, columns := range names {
 			go func(name string, columns [][]int64) {
-				m := s.Metric(name)
-				if m == nil {
-					queue <- []any{name, map[string]string{"error": "invalid name"}}
+				m, err := s.Metric(name)
+				if err != nil {
+					queue <- []any{name, map[string]string{"error": err.Error()}}
 					return
 				}
 				if value, err := m.Get(start, end, interval, columns); err == nil {
@@ -317,7 +363,7 @@ func (m *metric) meta(create bool) error {
 	if m.path == "" {
 		m.path = filepath.Join(m.store.prefix, strings.ReplaceAll(m.name, ".", string(filepath.Separator)))
 		if !strings.HasPrefix(filepath.Clean(m.path)+string(filepath.Separator), filepath.Clean(m.store.prefix)+string(filepath.Separator)) {
-			return errors.New("mstore: path traversal detected")
+			return errors.New("mstore: path traversal")
 		}
 	}
 	if m.size != 0 {
@@ -334,7 +380,7 @@ func (m *metric) meta(create bool) error {
 			return errors.New("mstore: invalid metadata")
 		}
 		m.interval, m.columns, m.size = int64(binary.BigEndian.Uint16(data[4:])), []*Column{}, 1
-		if m.interval < minInterval {
+		if m.interval < minInterval || m.interval > maxInterval {
 			return errors.New("mstore: invalid interval")
 		}
 		if m.interval > 120 {
@@ -346,8 +392,15 @@ func (m *metric) meta(create bool) error {
 			if size != 1 && size != 2 && size != 4 && size != 8 {
 				return errors.New("mstore: invalid column size")
 			}
+			mode := int64(binary.BigEndian.Uint32(data[offset:]))
+			if _, ok := ModeNames[mode]; !ok {
+				return errors.New("mstore: invalid column mode")
+			}
+			if (mode == ModeText || mode == ModeBinary) && size > 2 {
+				return errors.New("mstore: invalid column size")
+			}
 			m.columns = append(m.columns, &Column{
-				Mode:        int64(binary.BigEndian.Uint32(data[offset:])),
+				Mode:        mode,
 				Size:        size,
 				Description: string(bytes.Trim(data[offset+6:offset+38], "\x00")),
 			})
@@ -405,13 +458,17 @@ func (m *metric) meta(create bool) error {
 	return errors.New("mstore: invalid metric")
 }
 
-func (m *metric) chunk(atime time.Time, create bool) (data []byte, offset, delta int64, err error) {
+func (m *metric) chunk(atime time.Time, extra ...bool) (data []byte, offset, delta int64, err error) {
+	create := false
+	if len(extra) != 0 {
+		create = extra[0]
+	}
 	atime = atime.UTC()
 	start := time.Date(atime.Year(), atime.Month(), 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(atime.Year(), atime.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 	slots := (atime.Unix() - start.Unix()) / m.interval
 	offset, delta = 4+slots*m.size, atime.Unix()-start.Unix()-(slots*m.interval)
-	data, err = m.store.chunk(filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
+	data, err = m.store.chunk(m, filepath.Join(m.path, start.Format("2006-01")), 4+((end.Unix()-start.Unix())/m.interval)*m.size, create)
 
 	return
 }
@@ -422,6 +479,7 @@ func (m *metric) mapping(column int, flush bool) error {
 	}
 	m.columns[column].mu.Lock()
 	defer m.columns[column].mu.Unlock()
+
 	path := filepath.Join(m.path, ".map"+strconv.FormatInt(int64(column), 10))
 	if m.columns[column].mapping != nil {
 		count := len(m.columns[column].mapping[1])
@@ -446,7 +504,8 @@ func (m *metric) mapping(column int, flush bool) error {
 		}
 		return nil
 	}
-	m.columns[column].mapping = []map[int]*entry{map[int]*entry{}, map[int]*entry{}}
+
+	loaded := []map[int]*entry{map[int]*entry{}, map[int]*entry{}}
 	if data, err := os.ReadFile(path); err == nil {
 		size, offset := len(data), 6
 		if size < 10 || binary.BigEndian.Uint32(data[0:]) != magic || crc32.ChecksumIEEE(data[:size-4]) != binary.BigEndian.Uint32(data[size-4:]) {
@@ -462,11 +521,12 @@ func (m *metric) mapping(column int, flush bool) error {
 			}
 			entry := &entry{index: index, value: make([]byte, length)}
 			copy(entry.value, data[offset+2:offset+2+length])
-			m.columns[column].mapping[0][int(crc32.ChecksumIEEE(entry.value))] = entry
-			m.columns[column].mapping[1][index] = entry
+			loaded[0][int(crc32.ChecksumIEEE(entry.value))] = entry
+			loaded[1][index] = entry
 			offset += 2 + length
 		}
 	}
+	m.columns[column].mapping = loaded
 
 	return nil
 }
@@ -588,14 +648,14 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 	}
 	if len(columns) != 0 {
 		filepath.WalkDir(m.path, func(path string, entry fs.DirEntry, err error) error {
-			if entry != nil && entry.Type().IsRegular() && rcache.Get(`^\d{4}-\d{2}$`).MatchString(entry.Name()) {
+			if entry != nil && entry.Type().IsRegular() && monthMatcher.MatchString(entry.Name()) {
 				names = append(names, entry.Name())
 			}
 			return nil
 		})
 		sort.Strings(names)
 		if len(names) != 0 {
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[0]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[0]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
@@ -615,7 +675,7 @@ func (m *metric) Metadata() (metadata map[string]any, err error) {
 					}
 				}
 			}
-			if captures := rcache.Get(`^(\d{4})-(\d{2})$`).FindStringSubmatch(names[len(names)-1]); captures != nil {
+			if captures := monthMatcher.FindStringSubmatch(names[len(names)-1]); captures != nil {
 				year, _ := strconv.Atoi(captures[1])
 				month, _ := strconv.Atoi(captures[2])
 				if year != 0 && month != 0 {
@@ -704,6 +764,9 @@ func (m *metric) Import(in map[string]any) error {
 	if len(columns) == 0 {
 		return errors.New("mstore: empty columns list")
 	}
+	if len(columns) > MaxColumns {
+		return errors.New("mstore: too many columns")
+	}
 	for _, value := range columns {
 		column := j.Map(value)
 		if mode := ModeIndexes[j.String(column["mode"])]; mode != 0 {
@@ -714,7 +777,7 @@ func (m *metric) Import(in map[string]any) error {
 		}
 	}
 	for _, value := range j.Slice(in["values"]) {
-		if entry := j.Slice(value); len(entry) >= 2 {
+		if entry := j.Slice(value); len(entry) == len(columns)+1 {
 			at, err := time.Parse(time.DateTime, j.String(entry[0]))
 			if err != nil {
 				value := int64(j.Number(entry[0]))
@@ -737,14 +800,14 @@ func (m *metric) Put(values ...any) error {
 }
 
 func (m *metric) PutAt(atime time.Time, values ...any) error {
-	m.Lock()
-	defer m.Unlock()
 	if time.Since(atime) < 0 {
 		return errors.New("mstore: metric time in future")
 	}
 	if err := m.meta(true); err != nil {
 		return ustr.Wrap(err, "mstore")
 	}
+
+	m.mu.RLock()
 	data, offset, delta, err := m.chunk(atime, true)
 	if err == nil {
 		header, coffset := false, offset+1
@@ -781,7 +844,7 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 						} else if value, ok := value.([]byte); ok {
 							content = value
 						}
-						if len(content) > 0 && m.mapping(column, false) == nil {
+						if len(content) > 0 && len(content) < 64<<10 && m.mapping(column, false) == nil {
 							key := int(crc32.ChecksumIEEE(content))
 							m.columns[column].mu.Lock()
 							if value, exists := m.columns[column].mapping[0][key]; exists {
@@ -807,21 +870,20 @@ func (m *metric) PutAt(atime time.Time, values ...any) error {
 			}
 		}
 	}
+	m.mu.RUnlock()
 	m.store.cleanup()
 
 	return ustr.Wrap(err, "mstore")
 }
 
 func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, prepend ...bool) (result map[string]any, err error) {
-	m.Lock()
-	defer m.Unlock()
 	if err := m.meta(false); err != nil {
 		return nil, ustr.Wrap(err, "mstore")
 	}
 	result = map[string]any{"range": []int64{0, 0}, "columns": [][]any{}, "values": []any{}}
 	mapping, duplicates := [][]int64{}, map[int64]bool{}
 	for _, column := range columns {
-		if len(column) == 0 || int(column[0]) >= len(m.columns) {
+		if len(column) == 0 || column[0] < 0 || column[0] >= int64(len(m.columns)) {
 			continue
 		}
 		aggregate, lowest, highest := int64(0), int64(math.MinInt64), int64(math.MaxInt64)
@@ -875,10 +937,12 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 		}
 
 		var data []byte
+
 		current, values, steps, msteps, step, offset, ptime := start, []any{}, interval/m.interval, make([]int, len(mapping)), int64(0), int64(0), int64(0)
+		m.mu.RLock()
 		for current.Before(end) {
 			if data == nil {
-				data, offset, _, _ = m.chunk(current, false)
+				data, offset, _, _ = m.chunk(current)
 			}
 			if data != nil {
 				if step == 0 {
@@ -905,11 +969,17 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 
 								case ModeText, ModeBinary:
 									values = append(values, []byte{})
+
+								default:
+									values = append(values, nil)
 								}
 							}
 						}
 					}
 					for index, item := range mapping {
+						if index >= len(values) {
+							break
+						}
 						switch item[1] {
 						case ModeGauge, ModeIncrement:
 							msteps[index]++
@@ -1200,6 +1270,7 @@ func (m *metric) Get(start, end time.Time, interval int64, columns [][]int64, pr
 				values, msteps, step = []any{}, make([]int, len(mapping)), 0
 			}
 		}
+		m.mu.RUnlock()
 	}
 	m.store.cleanup()
 
