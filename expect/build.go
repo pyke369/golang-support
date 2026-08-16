@@ -58,7 +58,7 @@ func BuildXML(command string, parameters ...map[string]string) (out string) {
 						raw = true
 					}
 				}
-				if raw && !strings.Contains(value, "</"+key+">") {
+				if raw && !strings.Contains(value, "</"+key+">") && !strings.Contains(value, "]]>]]>") {
 					b.WriteString(value)
 
 				} else {

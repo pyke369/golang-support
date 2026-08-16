@@ -221,6 +221,7 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 	}
 
 	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if entry.raw == nil {
 		value, err := base64.StdEncoding.DecodeString(entry.Content)
 		if err != nil {
@@ -228,7 +229,6 @@ func Get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 		}
 		entry.raw = value
 	}
-	entry.mu.Unlock()
 
 	content, ctype, modified = entry.raw, entry.Mime, entry.Modified
 	if uncompress {
@@ -249,6 +249,7 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			return
 		}
 		if sttl := ttl / time.Second; sttl > 0 {
+			rw.Header().Set("Vary", "Accept-Encoding")
 			rw.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10)+", public")
 			rw.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
 		}
@@ -257,13 +258,10 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			r.URL.Path += "index"
 		}
 		prefix, resources := path.Dir(r.URL.Path), strings.Split(path.Base(r.URL.Path), "+")
-		if len(resources) > 10 {
-			resources = resources[:10]
-		}
+		resources = resources[:min(8, len(resources))]
 
 		content, ctype, modified, check, size, uncompress := []byte{}, "", int64(0), uint32(0), uint32(0), true
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && r.Header.Get("Range") == "" {
-			rw.Header().Set("Content-Encoding", "gzip")
 			uncompress = false
 		}
 		for index, resource := range resources {
@@ -276,6 +274,9 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 			}
 
 			if pcontent, pmime, pmodified, err := Get(pack, rpath, uncompress); err == nil {
+				if !uncompress {
+					rw.Header().Set("Content-Encoding", "gzip")
+				}
 				if len(resources) > 1 && !uncompress {
 					if len(pcontent) < 18 {
 						rw.WriteHeader(http.StatusInternalServerError)
@@ -325,7 +326,6 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool) http.Handle
 
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("Content-Type", ctype)
-		rw.Header().Set("Content-Length", strconv.Itoa(len(content)))
 		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))
 	})
 }

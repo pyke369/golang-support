@@ -13,7 +13,7 @@ A collection of Go utility/support libraries.
   Dynamic TLS certificate loader. Watches certificate files for modification (every 15 seconds), supports inline in-memory certs, SNI-based matching via regex, and produces a tls.Config with GetCertificate hook. Forces TLS 1.3 minimum.
 
 - expect:
-  SSH client automation library with text/JSON/XML output modes, NETCONF subsystem support (RFC 6241), idle timeout, host key auto-accept, XML/JSON parsing, and a Mapper for extracting structured data.
+  SSH client automation library with text/JSON/XML output modes, NETCONF subsystem support (RFC 6241), idle timeout, host key accept handler, XML/JSON parsing, and a Mapper for extracting structured data.
 
 - file:
   Filesystem utility functions: Read (line-by-line with regex filter/capture), Write (create/append/truncate), Touch, Exists, IsRegular, IsDir, Link, Sum (SHA-256), Copy.

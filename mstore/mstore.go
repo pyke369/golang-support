@@ -241,7 +241,7 @@ func (s *Store) List(prefix string) (names []string) {
 	}
 
 	names = []string{}
-	filepath.WalkDir(filepath.Join(s.prefix, strings.ReplaceAll(prefix, ".", string(filepath.Separator))), func(path string, entry fs.DirEntry, err error) error {
+	filepath.WalkDir(prefix, func(path string, entry fs.DirEntry, err error) error {
 		if entry != nil && entry.Name() == ".meta" {
 			names = append(names, strings.ReplaceAll(strings.Trim(strings.TrimPrefix(filepath.Dir(path), s.prefix), string(filepath.Separator)), string(filepath.Separator), "."))
 		}

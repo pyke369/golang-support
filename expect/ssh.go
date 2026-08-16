@@ -77,7 +77,7 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 	if options.ExecTimeout == 0 {
 		options.ExecTimeout = 20 * time.Second
 	}
-	options.ExecTimeout = min(2*time.Minute, max(5*time.Second, options.ExecTimeout))
+	options.ExecTimeout = min(5*time.Minute, max(5*time.Second, options.ExecTimeout))
 	if options.IdleTimeout == 0 {
 		options.IdleTimeout = time.Minute
 	}
@@ -136,6 +136,12 @@ func NewSSHConn(remote string, credentials *SSHCredentials, options *SSHOptions)
 		remote:  remote,
 		options: options,
 		config: &ssh.ClientConfig{
+			HostKeyAlgorithms: []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512},
+			Config: ssh.Config{
+				KeyExchanges: []string{ssh.KeyExchangeMLKEM768X25519, ssh.KeyExchangeCurve25519, ssh.KeyExchangeECDHP256, ssh.KeyExchangeDH14SHA256},
+				Ciphers:      []string{ssh.CipherAES256GCM, ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},
+				MACs:         []string{ssh.HMACSHA256ETM, ssh.HMACSHA512ETM},
+			},
 			User:    credentials.Username,
 			Timeout: options.ConnectTimeout,
 			HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -208,6 +214,7 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 				return
 			}
 			n += offset
+			atomic.StoreInt64(&c.last, time.Now().Unix())
 
 			loffset := 0
 			for {

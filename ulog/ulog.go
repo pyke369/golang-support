@@ -596,8 +596,8 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 			content = append(content, buffer.Bytes()...)
 		}
 		l.mu.RUnlock()
-
 	}
+
 	if layout, ok := in.(string); ok {
 		if len(a) == 0 {
 			content = fmt.Appendf(content, "%s", layout)
@@ -608,6 +608,10 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		content = bytes.ReplaceAll(content, []byte("\n"), []byte{})
 		content = bytes.ReplaceAll(content, []byte("\r"), []byte{})
 		content = bytes.ReplaceAll(content, []byte("\t"), []byte{})
+	}
+
+	if len(content) == 0 {
+		return
 	}
 
 	if l.syslog {
@@ -669,7 +673,7 @@ func (l *ULog) Log(now time.Time, severity int, in any, a ...any) {
 		}
 
 		l.mu.Lock()
-		if _, exists := l.fileOutputs[path]; !exists {
+		if _, exists := l.fileOutputs[path]; !exists && len(l.fileOutputs) < 64 {
 			if os.MkdirAll(filepath.Dir(path), 0o700) == nil {
 				if handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK|O_NOFOLLOW, 0o600); err == nil {
 					l.fileOutputs[path] = &fileOutput{handle: handle}

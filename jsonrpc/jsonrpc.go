@@ -826,7 +826,6 @@ func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out 
 		}
 		out = int64(value * math.Pow(scale, float64(strings.Index("_KMGTP", captures[2]))))
 		return max(min(out, highest), max(0, lowest))
-
 	}
 
 	return fallback
@@ -885,5 +884,5 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 		value = fallback
 	}
 
-	return time.Duration(max(min(value, highest), max(0, lowest))) * time.Second
+	return time.Duration(max(min(value, min(highest, float64(math.MaxInt64/int64(time.Second)))), max(0, lowest))) * time.Second
 }

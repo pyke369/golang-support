@@ -31,8 +31,18 @@ type DYNACERT struct {
 
 func (d *DYNACERT) Add(match, public, private string) {
 	d.mu.Lock()
-	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
-	d.mu.Unlock()
+	defer d.mu.Unlock()
+
+	match = strings.TrimSpace(match)
+	if match != "" && match != "*" {
+		if match[0] != '^' {
+			match = "^" + match
+		}
+		if match[len(match)-1] != '$' {
+			match += "$"
+		}
+	}
+	d.certs = append(d.certs, &cert{match: match, public: strings.TrimSpace(public), private: strings.TrimSpace(private)})
 	atomic.StoreInt64(&d.last, time.Now().Add(-time.Minute).UnixNano())
 }
 
@@ -44,7 +54,16 @@ func (d *DYNACERT) Inline(match string, public, private []byte) error {
 	if err != nil {
 		return ustr.Wrap(err, "dynacert")
 	}
-	d.certs = append(d.certs, &cert{match: strings.TrimSpace(match), inline: true, cert: &value})
+	match = strings.TrimSpace(match)
+	if match != "" && match != "*" {
+		if match[0] != '^' {
+			match = "^" + match
+		}
+		if match[len(match)-1] != '$' {
+			match += "$"
+		}
+	}
+	d.certs = append(d.certs, &cert{match: match, inline: true, cert: &value})
 
 	return nil
 }

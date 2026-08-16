@@ -1202,7 +1202,7 @@ func (p *Peer) encodeAttributes(in map[string]any) (out []byte) {
 					} else {
 						asn4 := false
 						for _, asn := range path {
-							if asn > 65536 {
+							if asn > 65535 {
 								asn, asn4 = 23456, true
 							}
 							out = binary.BigEndian.AppendUint16(out, uint16(asn))

@@ -23,6 +23,7 @@ import (
 
 type UConfig struct {
 	size      int
+	maxsize   int
 	inline    bool
 	roots     []string
 	input     string
@@ -227,8 +228,11 @@ func expand(in []byte, extra ...int) (out []byte) {
 }
 
 func New(in string, extra ...map[string]any) (config *UConfig, err error) {
-	inline, roots, arena := false, []string{}, bslab.Default
+	maxsize, inline, roots, arena := 4<<20, false, []string{}, bslab.Default
 	if len(extra) != 0 && extra[0] != nil {
+		if value, ok := extra[0]["maxsize"].(int); ok {
+			maxsize = max(64<<10, min(value, 16<<20))
+		}
 		if value, ok := extra[0]["inline"].(bool); ok {
 			inline = value
 		}
@@ -239,7 +243,7 @@ func New(in string, extra ...map[string]any) (config *UConfig, err error) {
 			arena = value
 		}
 	}
-	config = &UConfig{size: 64 << 10, inline: inline, roots: roots, input: in, separator: ".", arena: arena}
+	config = &UConfig{size: 64 << 10, maxsize: maxsize, inline: inline, roots: roots, input: in, separator: ".", arena: arena}
 	err = config.Load(in)
 
 	return config, ustr.Wrap(err, "uconfig")
@@ -325,6 +329,9 @@ func (c *UConfig) Load(in string) error {
 					payload = slices.Delete(payload, cstart, cindex)
 					cindex = cstart
 					length, cstart, cmode = len(payload), -1, -1
+					if length > c.maxsize {
+						return errors.New("size exceeded")
+					}
 					continue
 				}
 			}
@@ -528,6 +535,9 @@ func (c *UConfig) Load(in string) error {
 						}
 						c.arena.Put(insert)
 						length, mstart = len(payload), -1
+						if length > c.maxsize {
+							return errors.New("size exceeded")
+						}
 						continue
 					}
 				}
