@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"net/netip"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pyke369/golang-support/file"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
@@ -259,7 +261,7 @@ func wnbits(bits, value0, value1 int, data []byte) {
 }
 
 func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
-	// layout header + signature placeholder + description
+	// layout header + checksum + description
 	d.mu.Lock()
 	d.data = []byte{'P', 'F', 'D', 'B', 0, (VERSION >> 16) & 0xff, (VERSION >> 8) & 0xff, (VERSION & 0xff),
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'D', 'E', 'S', 'C', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
@@ -543,11 +545,12 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 }
 
 func (d *PrefixDB) Load(path string) error {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() > 1<<30 {
-		return errors.New("prefixdb: too large")
+	handle, err := os.OpenFile(path, os.O_RDONLY|file.O_NOFOLLOW, 0)
+	if err != nil {
+		return ustr.Wrap(err, "prefixdb")
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(handle, 256<<20))
+	handle.Close()
 	if err != nil {
 		return ustr.Wrap(err, "prefixdb")
 	}
@@ -651,7 +654,8 @@ func (d *PrefixDB) Load(path string) error {
 			section[2] < 48 || section[2] > size ||
 			section[0]+section[2] > size ||
 			section[3] < 0 || section[3] > section[4] ||
-			(index < 4 && uint64(section[1])*uint64(section[3]) > uint64(section[0])) {
+			(index < 4 && uint64(section[1])*uint64(section[3]) > uint64(section[0])) ||
+			uint64(n.Nodes[1])*uint64((2*n.Nodes[3])/8) > uint64(n.Nodes[0]) {
 			return errors.New("prefixdb: corrupted section " + []string{"STRS", "NUMS", "PAIR", "CLUS", "MAPS", "NODE"}[index])
 		}
 	}
@@ -670,6 +674,9 @@ func (d *PrefixDB) Load(path string) error {
 }
 
 func rpbits(data []byte) (section, index, size int, last bool) {
+	if index < 0 {
+		return 0, 0, 0, true
+	}
 	if len(data) == 0 {
 		return 0, 0, 1, true
 	}
@@ -682,7 +689,7 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 		if data[0]&0x08 != 0 {
 			size = int(data[0] & 0x07)
 			if len(data) < size+1 {
-				return
+				return 0, 0, 0, true
 			}
 			for nibble := 1; nibble <= size; nibble++ {
 				index |= int(data[nibble]) << (uint(size-nibble) * 8)
@@ -698,8 +705,15 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 }
 
 func rnbits(bits, index, down int, data []byte) int {
-	if bits >= 8 && bits <= 32 && bits%4 == 0 && (down == 0 || down == 1) && len(data) >= (index+1)*(bits/4) {
-		offset := index * (bits / 4)
+	if index < 0 || bits < 8 || bits > 32 || bits%4 != 0 {
+		return index
+	}
+	width := bits / 4
+	if uint64(index)+1 > uint64(len(data))/uint64(width) {
+		return index
+	}
+	if (down == 0 || down == 1) && uint64(len(data)) >= uint64(index+1)*uint64(width) {
+		offset := index * width
 		switch bits {
 		case 8:
 			return int(data[offset+down])
@@ -755,7 +769,7 @@ func rbytes(width int, data []byte) (value int) {
 
 func (d *PrefixDB) rstring(index int) string {
 	count, offset, width := d.Strings[1], d.Strings[2], d.Strings[3]
-	if index >= count {
+	if index < 0 || index >= count {
 		return ""
 	}
 	start, end := rbytes(width, d.data[offset+(index*width):]), 0
@@ -773,7 +787,7 @@ func (d *PrefixDB) rstring(index int) string {
 }
 
 func (d *PrefixDB) rnumber(index int) float64 {
-	if index >= d.Numbers[1] {
+	if index < 0 || index >= d.Numbers[1] {
 		return 0.0
 	}
 
@@ -781,7 +795,7 @@ func (d *PrefixDB) rnumber(index int) float64 {
 }
 
 func (d *PrefixDB) rpair(index int, pairs map[string]any) {
-	if index < d.Pairs[1] {
+	if index >= 0 && index < d.Pairs[1] {
 		pair := binary.BigEndian.Uint64(d.data[d.Pairs[2]+(index*8):])
 		if key := d.rstring(int((pair >> 32) & 0x0fffffff)); key != "" {
 			switch (pair & 0xf0000000) >> 28 {
@@ -802,64 +816,67 @@ func (d *PrefixDB) rpair(index int, pairs map[string]any) {
 }
 
 func (d *PrefixDB) rcluster(index int, pairs map[string]any) {
-	count, offset, width := d.Clusters[1], d.Clusters[2], d.Clusters[3]
-	if index < count {
-		start, end := rbytes(width, d.data[offset+(index*width):]), 0
-		if index < count-1 {
-			end = rbytes(width, d.data[offset+(index+1)*width:])
+	count := d.Clusters[1]
+	if index < 0 || index >= count {
+		return
+	}
 
-		} else {
-			end = d.Clusters[0] - (count * width)
+	offset, width := d.Clusters[2], d.Clusters[3]
+	start, end := rbytes(width, d.data[offset+(index*width):]), 0
+	if index < count-1 {
+		end = rbytes(width, d.data[offset+(index+1)*width:])
+
+	} else {
+		end = d.Clusters[0] - (count * width)
+	}
+	if start < 0 || end < start || offset+(count*width)+end > len(d.data) {
+		return
+	}
+	start += offset + (count * width)
+	end += offset + (count * width)
+	key := ""
+	for start < end {
+		section, index, size, _ := rpbits(d.data[start:min(end, len(d.data))])
+		if size <= 0 {
+			break
 		}
-		if start < 0 || end < start || offset+(count*width)+end > len(d.data) {
-			return
-		}
-		start += offset + (count * width)
-		end += offset + (count * width)
-		key := ""
-		for start < end {
-			section, index, size, _ := rpbits(d.data[start:])
-			if size <= 0 {
-				break
+		switch section {
+		case 1:
+			if key != "" {
+				pairs[key] = d.rstring(index)
+				key = ""
+
+			} else {
+				key = d.rstring(index)
 			}
-			switch section {
-			case 1:
-				if key != "" {
-					pairs[key] = d.rstring(index)
-					key = ""
 
-				} else {
-					key = d.rstring(index)
-				}
-
-			case 2:
-				if key != "" {
-					pairs[key] = d.rnumber(index)
-					key = ""
-				}
-
-			case 3:
-				if key != "" {
-					pairs[key] = true
-					key = ""
-				}
-			case 4:
-				if key != "" {
-					pairs[key] = false
-					key = ""
-				}
-
-			case 5:
-				if key != "" {
-					pairs[key] = nil
-					key = ""
-				}
-
-			case 6:
-				d.rpair(index, pairs)
+		case 2:
+			if key != "" {
+				pairs[key] = d.rnumber(index)
+				key = ""
 			}
-			start += size
+
+		case 3:
+			if key != "" {
+				pairs[key] = true
+				key = ""
+			}
+		case 4:
+			if key != "" {
+				pairs[key] = false
+				key = ""
+			}
+
+		case 5:
+			if key != "" {
+				pairs[key] = nil
+				key = ""
+			}
+
+		case 6:
+			d.rpair(index, pairs)
 		}
+		start += size
 	}
 }
 
@@ -891,7 +908,7 @@ func (d *PrefixDB) Lookup(value string, out map[string]any) {
 				offset += d.Maps[2]
 				key := ""
 				for offset < d.Maps[2]+d.Maps[0] {
-					section, index, size, last := rpbits(d.data[offset:])
+					section, index, size, last := rpbits(d.data[offset:min(d.Maps[2]+d.Maps[0], len(d.data))])
 					if size <= 0 {
 						break
 					}

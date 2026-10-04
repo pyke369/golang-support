@@ -26,16 +26,16 @@ func Ranges(now time.Time, values []string) bool {
 	}
 	ranges := []timeRange{}
 	for _, path := range values {
-		entry, invalid := timeRange{times: [2]int{-1, -1}}, false
+		entry := timeRange{times: [2]int{-1, -1}}
 		for _, value := range strings.Fields(path) {
 			if captures := dateMatcher.FindStringSubmatch(value); len(captures) == 4 {
 				if captures[1] == "" && captures[3] == "" {
-					invalid = true
+					return false
 				}
 				lower, err1 := time.Parse("2006-01-02", captures[1])
 				upper, err2 := time.Parse("2006-01-02", captures[3])
 				if (captures[1] != "" && err1 != nil) || (captures[3] != "" && err2 != nil) {
-					invalid = true
+					return false
 				}
 
 				if captures[2] == "" {
@@ -53,7 +53,7 @@ func Ranges(now time.Time, values []string) bool {
 			} else if captures := dayMatcher.FindStringSubmatch(strings.ToLower(value)); len(captures) == 4 {
 				lower, upper := days[captures[1]], days[captures[3]]
 				if (lower == 0 && upper == 0) || (lower != 0 && upper != 0 && upper < lower) {
-					invalid = true
+					return false
 				}
 
 				if captures[2] == "" {
@@ -73,27 +73,27 @@ func Ranges(now time.Time, values []string) bool {
 				if captures[1] != "" {
 					hour, err := strconv.ParseInt(captures[1], 10, 64)
 					if err != nil || hour < 0 || hour > 23 {
-						invalid = true
+						return false
 					}
 					minute, err := strconv.ParseInt(captures[2], 10, 64)
 					if err != nil || minute < 0 || minute > 59 {
-						invalid = true
+						return false
 					}
 					lower = int(hour)*3600 + int(minute)*60
 				}
 				if captures[4] != "" {
 					hour, err := strconv.ParseInt(captures[4], 10, 64)
 					if err != nil || hour < 0 || hour > 23 {
-						invalid = true
+						return false
 					}
 					minute, err := strconv.ParseInt(captures[5], 10, 64)
 					if err != nil || minute < 0 || minute > 59 {
-						invalid = true
+						return false
 					}
 					upper = int(hour)*3600 + int(minute)*60
 				}
 				if (lower == -1 && upper == -1) || (lower != -1 && upper != -1 && upper < lower) {
-					invalid = true
+					return false
 				}
 
 				if captures[3] == "" {
@@ -109,20 +109,15 @@ func Ranges(now time.Time, values []string) bool {
 				}
 
 			} else {
-				invalid = true
-			}
-
-			if invalid {
-				break
+				return false
 			}
 		}
 
-		if !invalid && ((!entry.dates[0].IsZero() || !entry.dates[1].IsZero()) || (entry.days[0] != 0 || entry.days[1] != 0) || (entry.times[0] != 0 || entry.times[1] != 0)) {
+		if (!entry.dates[0].IsZero() || !entry.dates[1].IsZero()) || (entry.days[0] != 0 || entry.days[1] != 0) || (entry.times[0] != -1 || entry.times[1] != -1) {
 			ranges = append(ranges, entry)
 		}
 	}
 
-	now = now.UTC()
 	day, stamp := int(now.Weekday()), now.Hour()*3600+now.Minute()*60+now.Second()
 	if day == 0 {
 		day = 7

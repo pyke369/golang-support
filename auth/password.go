@@ -9,7 +9,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"math"
+	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +35,7 @@ var (
 	}
 	seqs = [][]rune{
 		[]rune("abcdefghijklmnopqrstuvwxyz"),
-		[]rune("01234567890"),
+		[]rune("0123456789"),
 		[]rune("qwertyuiop"),
 		[]rune("asdfghjkl"),
 		[]rune("zxcvbnm"),
@@ -41,6 +43,7 @@ var (
 		[]rune("qsdfghjklm"),
 		[]rune("wxcvbn"),
 	}
+	accept = make(chan struct{}, max(1, runtime.NumCPU()/2))
 
 	// see https://akkadia.org/drepper/SHA-crypt.txt
 	cryptMatcher = regexp.MustCompile(`^[./0-9A-Za-z]{8,22}$`)
@@ -66,7 +69,9 @@ func crypt512(in, salt string, rounds int) (out string, err error) {
 	salt = strings.TrimSpace(salt)
 	if salt == "" {
 		value := make([]byte, 12)
-		_, _ = rand.Read(value)
+		if _, err := rand.Read(value); err != nil {
+			panic("auth: entropy source failure")
+		}
 		salt = cryptBase64.EncodeToString(value)
 
 	} else if !cryptMatcher.MatchString(salt) || len(salt) > 16 {
@@ -177,10 +182,6 @@ func crypt512(in, salt string, rounds int) (out string, err error) {
 	return out + string(C[:86]), nil
 }
 
-func Crypt512(in, salt string) (out string, err error) {
-	return crypt512(in, salt, 100000)
-}
-
 func pbkdf2(in, salt string, hash, iter, length int) (out string, err error) {
 	if len(in) > 128 {
 		return "", errors.New("auth: password is too long")
@@ -188,7 +189,7 @@ func pbkdf2(in, salt string, hash, iter, length int) (out string, err error) {
 	if iter <= 0 {
 		return "", errors.New("auth: invalid iter parameter")
 	}
-	iter = min(2000000, max(10000, iter))
+	iter = min(2000000, max(210000, iter))
 	if length < 12 {
 		return "", errors.New("auth: invalid key length")
 	}
@@ -198,7 +199,9 @@ func pbkdf2(in, salt string, hash, iter, length int) (out string, err error) {
 	salt = strings.TrimSpace(salt)
 	if salt == "" {
 		bsalt = make([]byte, 16)
-		_, _ = rand.Read(bsalt)
+		if _, err := rand.Read(bsalt); err != nil {
+			panic("auth: entropy source failure")
+		}
 		salt = base64.RawStdEncoding.EncodeToString(bsalt)
 
 	} else {
@@ -248,21 +251,21 @@ func Bcrypt(in string) (out string, err error) {
 	return bcrypt(in, 12)
 }
 
-func argon2(in, salt string, memory, time, threads int) (out string, err error) {
+func argon2(in, salt string, memory, cost, threads int) (out string, err error) {
 	if len(in) > 128 {
 		return "", errors.New("auth: password is too long")
 	}
 	if memory <= 0 {
 		return "", errors.New("auth: invalid memory parameter")
 	}
-	if time <= 0 {
-		return "", errors.New("auth: invalid time parameter")
+	if cost <= 0 {
+		return "", errors.New("auth: invalid cost parameter")
 	}
 	if threads <= 0 {
 		return "", errors.New("auth: invalid threads parameter")
 	}
 	memory = min(256<<10, max(8<<10, memory))
-	time = min(8, max(1, time))
+	cost = min(8, max(1, cost))
 	threads = min(4, max(1, threads))
 
 	var bsalt []byte
@@ -270,7 +273,9 @@ func argon2(in, salt string, memory, time, threads int) (out string, err error) 
 	salt = strings.TrimSpace(salt)
 	if salt == "" {
 		bsalt = make([]byte, 16)
-		_, _ = rand.Read(bsalt)
+		if _, err := rand.Read(bsalt); err != nil {
+			panic("auth: entropy source failure")
+		}
 		salt = base64.RawStdEncoding.EncodeToString(bsalt)
 
 	} else {
@@ -281,30 +286,46 @@ func argon2(in, salt string, memory, time, threads int) (out string, err error) 
 		bsalt = value
 	}
 
-	return "$argon2id$v=19" + "$m=" + strconv.Itoa(memory) + ",t=" + strconv.Itoa(time) + ",p=" + strconv.Itoa(threads) + "$" + salt +
-		"$" + base64.RawStdEncoding.EncodeToString(a2.IDKey([]byte(in), bsalt, uint32(time), uint32(memory), uint8(threads), 32)), nil
+	return "$argon2id$v=19" + "$m=" + strconv.Itoa(memory) + ",t=" + strconv.Itoa(cost) + ",p=" + strconv.Itoa(threads) + "$" + salt +
+		"$" + base64.RawStdEncoding.EncodeToString(a2.IDKey([]byte(in), bsalt, uint32(cost), uint32(memory), uint8(threads), 32)), nil
 }
 
 func Argon2(in, salt string) (out string, err error) {
 	return argon2(in, salt, 19<<10, 2, 1)
 }
 
-func Password(in string, values []string) (pass bool, entry string) {
+func Password(in string, values []string) (entry string, err error) {
 	parts := strings.SplitN(in, ":", 2)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return false, ""
+		return "", errors.New("auth: invalid parameter")
 	}
 	login, password := strings.TrimSpace(parts[0]), parts[1]
+	if len(login) > 64 {
+		return "", errors.New("auth: login is too long")
+	}
 
-	defer func(start time.Time) {
-		if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
-			time.Sleep(400*time.Millisecond - elapsed)
+	select {
+	case accept <- struct{}{}:
+
+	case <-time.After(2 * time.Second):
+		return "", os.ErrDeadlineExceeded
+	}
+
+	kdf := false
+	defer func() {
+		<-accept
+		if !kdf {
+			PBKDF2(password, "")
 		}
-	}(time.Now())
+	}()
 
-	for _, value := range values {
+	for _, value := range values[:min(1000, len(values))] {
 		parts := strings.Split(value, ":")
 		if len(parts) < 2 {
+			continue
+		}
+		parts[0] = strings.TrimSpace(parts[0])
+		if len(parts[0]) > 64 {
 			continue
 		}
 		lhash, chash, check := uhash.Sum256([]byte(login)), uhash.Sum256([]byte(parts[0])), parts[1]
@@ -322,15 +343,17 @@ func Password(in string, values []string) (pass bool, entry string) {
 				}
 				rounds, salt := 5000, parts[2]
 				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
-					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
-						rounds = value
+					value, err := strconv.Atoi(parts[2][7:])
+					if err != nil || value < 0 {
+						continue
 					}
-					salt = parts[3]
+					rounds, salt = value, parts[3]
 				}
-				if rounds >= 100000 && rounds <= 1000000 {
+				if rounds >= 100000 && rounds <= 200000 {
+					kdf = true
 					if encrypted, err := crypt512(password, salt, rounds); err == nil {
 						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-							return true, entry
+							return entry, nil
 						}
 					}
 				}
@@ -346,9 +369,10 @@ func Password(in string, values []string) (pass bool, entry string) {
 					}
 					if iter <= 1000000 && ((hash == 256 && iter >= 600000) || (hash == 512 && iter >= 210000)) {
 						if value, err := base64.RawStdEncoding.DecodeString(parts[4]); err == nil && len(value) >= 16 && len(value) <= 64 {
+							kdf = true
 							if encrypted, err := pbkdf2(password, parts[3], hash, iter, len(value)); err == nil {
 								if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-									return true, entry
+									return entry, nil
 								}
 							}
 						}
@@ -359,9 +383,13 @@ func Password(in string, values []string) (pass bool, entry string) {
 				if fips140.Enabled() {
 					continue
 				}
+				if len(password) > 72 {
+					continue
+				}
 				if cost, err := bc.Cost([]byte(check)); err == nil && cost >= 10 && cost <= 15 {
+					kdf = true
 					if bc.CompareHashAndPassword([]byte(check), []byte(password)) == nil {
-						return true, entry
+						return entry, nil
 					}
 				}
 
@@ -369,7 +397,7 @@ func Password(in string, values []string) (pass bool, entry string) {
 				if fips140.Enabled() || len(parts) != 6 || parts[2] != "v=19" || parts[4] == "" || parts[5] == "" {
 					continue
 				}
-				memory, time, threads := 0, 0, 0
+				memory, cost, threads := 0, 0, 0
 				for _, part := range strings.Split(parts[3], ",") {
 					part = strings.TrimSpace(part)
 					switch {
@@ -380,7 +408,7 @@ func Password(in string, values []string) (pass bool, entry string) {
 
 					case strings.HasPrefix(part, "t="):
 						if value, err := strconv.Atoi(strings.TrimPrefix(part, "t=")); err == nil {
-							time = value
+							cost = value
 						}
 
 					case strings.HasPrefix(part, "p="):
@@ -390,24 +418,29 @@ func Password(in string, values []string) (pass bool, entry string) {
 					}
 				}
 
-				if memory <= 32<<10 && time <= 8 && threads <= 4 {
-					if encrypted, err := argon2(password, parts[4], memory, time, threads); err == nil {
+				if memory >= 19<<10 && memory <= 32<<10 && cost >= 2 && cost <= 4 && threads >= 1 && threads <= 2 {
+					if encrypted, err := argon2(password, parts[4], memory, cost, threads); err == nil {
+						kdf = true
 						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
-							return true, entry
+							return entry, nil
 						}
 					}
 				}
 			}
 		}
+
+		if kdf {
+			break
+		}
 	}
 
-	return false, ""
+	return "", errors.New("invalid credentials")
 }
 
-func PasswordFile(in, path string) (pass bool, entry string) {
+func PasswordFile(in, path string) (entry string, err error) {
 	lines, err := file.Read(path, map[string]any{"options": "empty comment trim"})
 	if err != nil {
-		return false, ""
+		return "", err
 	}
 
 	return Password(in, lines)
@@ -461,6 +494,12 @@ func passwordPrune(runes, seq []rune) []rune {
 }
 
 func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) {
+	runes := []rune(in)
+	if len(runes) > 128 {
+		runes = runes[:128]
+		in = string(runes)
+	}
+
 	pool, chars, contains := 0, map[rune]struct{}{}, make([]bool, len(sets))
 	for _, char := range in {
 		chars[char] = struct{}{}
@@ -483,7 +522,6 @@ func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) 
 		}
 	}
 
-	runes := []rune(in)
 	for index := 2; index < len(runes); {
 		if runes[index] == runes[index-1] && runes[index-1] == runes[index-2] {
 			copy(runes[index:], runes[index+1:])
@@ -497,12 +535,15 @@ func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) 
 		runes = passwordPrune(runes, seq)
 	}
 	if len(extra) != 0 {
-		for _, seq := range extra[0] {
+		for _, seq := range extra[0][:min(16, len(extra[0]))] {
 			runes = passwordPrune(runes, []rune(seq))
 			runes = passwordPrune(runes, []rune(ustr.Reverse(seq)))
 		}
 	}
 
+	if pool <= 1 {
+		return 0, false
+	}
 	entropy = float64(len(runes)) * math.Log2(float64(pool))
 
 	return entropy, entropy >= 65.0

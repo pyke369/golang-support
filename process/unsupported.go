@@ -2,6 +2,10 @@
 
 package process
 
+import (
+	"github.com/pyke369/golang-support/ustr"
+)
+
 type TASK struct {
 	Pid      int
 	Threads  []int
@@ -10,10 +14,9 @@ type TASK struct {
 }
 
 func Task(in string) (out []*TASK) {
-	// noop
 	return
 }
 
-func Affinity(pids, cores []int) {
-	// noop
+func Affinity(pids, cores []int) error {
+	return nil, ustr.Wrap(errors.ErrUnsupported, "process")
 }

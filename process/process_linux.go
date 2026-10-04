@@ -20,7 +20,11 @@ type TASK struct {
 }
 
 func Task(in string) (out []*TASK) {
-	matcher := rcache.Get(in)
+	matcher, err := rcache.Get(in)
+	if err != nil {
+		return
+	}
+
 	if entries, err := filepath.Glob("/proc/[0-9]*"); err == nil {
 		for _, entry := range entries {
 			if content, err := os.ReadFile(filepath.Join(entry, "cmdline")); err == nil && len(content) != 0 {
@@ -55,12 +59,16 @@ func Task(in string) (out []*TASK) {
 	return
 }
 
-func Affinity(pids, cores []int) {
+func Affinity(pids, cores []int) error {
 	set := unix.CPUSet{}
 	for _, core := range cores {
 		set.Set(core)
 	}
 	for _, pid := range pids {
-		unix.SchedSetaffinity(pid, &set)
+		if err := unix.SchedSetaffinity(pid, &set); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }

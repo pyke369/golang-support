@@ -26,6 +26,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/pyke369/golang-support/bslab"
+	n "github.com/pyke369/golang-support/net"
+	p "github.com/pyke369/golang-support/process"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 	"golang.org/x/net/http/httpproxy"
@@ -88,43 +90,15 @@ type Socket struct {
 var (
 	splitter = regexp.MustCompile("[, ]+")
 	proxy    func(*u.URL) (*u.URL, error)
-	gnow     int64
 )
 
 func init() {
 	proxy = httpproxy.FromEnvironment().ProxyFunc()
-	atomic.StoreInt64(&gnow, time.Now().UnixNano())
-	go func() {
-		for {
-			atomic.StoreInt64(&gnow, time.Now().UnixNano())
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
 }
 
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
-	if config == nil {
-		config = &Config{}
-	}
-	if config.Proxy == nil {
-		config.Proxy = proxy
-	}
-	config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
-	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-	config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
-	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	if config.ReadBufferSize != 0 {
-		config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
-	}
-	if config.WriteBufferSize != 0 {
-		config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
-	}
-	if config.Arena == nil {
-		config.Arena = bslab.Default
-	}
+	config = normalize(config)
+
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	url, err := u.Parse(endpoint)
 	if err != nil {
@@ -155,7 +129,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		request.Header.Add(name, value)
 	}
 
-	start, scheme, address := time.Now(), url.Scheme, url.Host
+	start, scheme, address := p.Now(), url.Scheme, url.Host
 	if rproxy != nil {
 		scheme, address = rproxy.Scheme, rproxy.Host
 	}
@@ -168,27 +142,26 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 
 	if tconn, ok := conn.(*net.TCPConn); ok {
 		if config.ReadBufferSize != 0 {
-			tconn.SetReadBuffer(config.ReadBufferSize)
+			if err := tconn.SetReadBuffer(config.ReadBufferSize); err != nil {
+				return nil, ustr.Wrap(err, "uws")
+			}
 		}
 		if config.WriteBufferSize != 0 {
-			tconn.SetWriteBuffer(config.WriteBufferSize)
+			if err := tconn.SetWriteBuffer(config.WriteBufferSize); err != nil {
+				return nil, ustr.Wrap(err, "uws")
+			}
 		}
 	}
 	if scheme == "https" {
-		if config.TLSConfig == nil {
-			config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-
-		} else {
-			config.TLSConfig = config.TLSConfig.Clone()
-		}
-		config.TLSConfig.MinVersion = tls.VersionTLS13
-		if config.TLSConfig.ServerName == "" {
-			config.TLSConfig.ServerName = address
+		tconfig := config.TLSConfig.Clone()
+		tconfig.MinVersion = tls.VersionTLS13
+		if tconfig.ServerName == "" {
+			tconfig.ServerName = address
 			if value, _, err := net.SplitHostPort(address); err == nil {
-				config.TLSConfig.ServerName = value
+				tconfig.ServerName = value
 			}
 		}
-		conn = tls.Client(conn, config.TLSConfig)
+		conn = tls.Client(conn, tconfig)
 		if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 			conn.Close()
 			return nil, ustr.Wrap(err, "uws")
@@ -218,7 +191,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			request.SetBasicAuth(user.Username(), password)
 		}
 
-		if err := conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start))); err != nil {
+		if err := conn.SetWriteDeadline(p.Now().Add(config.ConnectTimeout - time.Since(start))); err != nil {
 			conn.Close()
 			return nil, ustr.Wrap(err, "uws")
 		}
@@ -226,7 +199,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 			conn.Close()
 			return nil, ustr.Wrap(err, "uws")
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout)); err != nil {
+		if err := conn.SetReadDeadline(p.Now().Add(config.ConnectTimeout)); err != nil {
 			conn.Close()
 			return nil, ustr.Wrap(err, "uws")
 		}
@@ -243,15 +216,10 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		}
 
 		if url.Scheme == "https" {
-			if config.TLSConfig == nil {
-				config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-
-			} else {
-				config.TLSConfig = config.TLSConfig.Clone()
-			}
-			config.TLSConfig.MinVersion = tls.VersionTLS13
-			config.TLSConfig.ServerName = host
-			conn = tls.Client(conn, config.TLSConfig)
+			tconfig := config.TLSConfig.Clone()
+			tconfig.MinVersion = tls.VersionTLS13
+			tconfig.ServerName = host
+			conn = tls.Client(conn, tconfig)
 			if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 				conn.Close()
 				return nil, ustr.Wrap(err, "uws")
@@ -259,7 +227,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		}
 	}
 
-	if err := conn.SetWriteDeadline(time.Now().Add(config.ConnectTimeout - time.Since(start))); err != nil {
+	if err := conn.SetWriteDeadline(p.Now().Add(config.ConnectTimeout - time.Since(start))); err != nil {
 		conn.Close()
 		return nil, ustr.Wrap(err, "uws")
 	}
@@ -267,7 +235,7 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		conn.Close()
 		return nil, ustr.Wrap(err, "uws")
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(config.ConnectTimeout)); err != nil {
+	if err := conn.SetReadDeadline(p.Now().Add(config.ConnectTimeout)); err != nil {
 		conn.Close()
 		return nil, ustr.Wrap(err, "uws")
 	}
@@ -313,9 +281,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 }
 
 func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bool, ws *Socket) {
-	if config == nil {
-		config = &Config{}
-	}
+	config = normalize(config)
+
 	if strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") && strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
 		handled = true
 		if r.Method != http.MethodGet {
@@ -357,12 +324,19 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 			}
 		}
 		origin := r.Header.Get("Origin")
-		if strings.EqualFold(origin, "null") {
-			origin = ""
-		}
 		if config.OriginHandler == nil {
+			if strings.EqualFold(origin, "null") {
+				rw.WriteHeader(http.StatusForbidden)
+				return
+			}
+			rscheme := "http"
+			if r.TLS != nil {
+				rscheme += "s"
+			}
 			url, err := u.Parse(origin)
-			if err != nil || url.Scheme == "" || url.Host == "" || (url.Scheme == "https" && r.TLS == nil) || (url.Scheme == "http" && r.TLS != nil) || !strings.EqualFold(url.Host, r.Host) {
+			if err != nil || url.Scheme == "" || url.Host == "" ||
+				(url.Scheme == "https" && r.TLS == nil) || (url.Scheme == "http" && r.TLS != nil) ||
+				!strings.EqualFold(n.Normalize(url.Scheme, url.Host), n.Normalize(rscheme, r.Host)) {
 				rw.WriteHeader(http.StatusForbidden)
 				return
 			}
@@ -379,24 +353,6 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 		rw.WriteHeader(http.StatusSwitchingProtocols)
 		if conn, reader, err := rw.(http.Hijacker).Hijack(); err == nil {
 			_ = conn.SetDeadline(time.Time{})
-			if config == nil {
-				config = &Config{}
-			}
-			config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
-			config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-			config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
-			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-			if config.ReadBufferSize != 0 {
-				config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
-			}
-			if config.WriteBufferSize != 0 {
-				config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
-			}
-			if config.Arena == nil {
-				config.Arena = bslab.Default
-			}
 			if tconn, ok := conn.(*net.TCPConn); ok {
 				if config.ReadBufferSize != 0 {
 					tconn.SetReadBuffer(config.ReadBufferSize)
@@ -494,8 +450,8 @@ func (s *Socket) Close(code int) {
 				payload = append(payload, rmask())
 			}
 			if code != 0 {
-				if code == ERROR_ABNORMAL {
-					code = ERROR_INTERNAL
+				if !((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 1012 && code <= 1014) || (code >= 3000 && code <= 4999)) {
+					code = ERROR_PROTOCOL
 				}
 				payload[0][1] |= 2
 				payload = append(payload, []byte{0, 0})
@@ -519,7 +475,7 @@ func (s *Socket) send(payload net.Buffers) (err error) {
 	if !s.connected.Load() || s.errored.Load() {
 		return errors.New(`uws: not connected`)
 	}
-	if err := s.conn.SetWriteDeadline(time.UnixMicro(atomic.LoadInt64(&gnow) / int64(time.Microsecond)).Add(time.Duration(s.config.WriteTimeout))); err != nil {
+	if err := s.conn.SetWriteDeadline(p.Now().Add(time.Duration(s.config.WriteTimeout))); err != nil {
 		return ustr.Wrap(err, "uws")
 	}
 	if _, err = payload.WriteTo(s.conn); err != nil {
@@ -537,8 +493,8 @@ func (s *Socket) receive(buffered io.Reader) {
 	)
 
 	fin, opcode, bcontrol, size, mask, smask := byte(0), byte(0), false, -1, make([]byte, 4), 0
-	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
-	roffset, woffset, read, buffer := 0, 0, 0, bslab.Get(s.config.ReadSize)
+	seen, code, dmode, dsize, doffset, dlast := p.Now(), 0, byte(0), 0, 0, false
+	roffset, woffset, read, buffer := 0, 0, 0, s.config.Arena.Get(s.config.ReadSize)
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
 		smask += 4
@@ -551,7 +507,7 @@ close:
 			roffset = 0
 		}
 
-		if err := s.conn.SetReadDeadline(time.UnixMicro(atomic.LoadInt64(&gnow) / int64(time.Microsecond)).Add(time.Duration(s.config.ProbeTimeout))); err != nil {
+		if err := s.conn.SetReadDeadline(p.Now().Add(time.Duration(s.config.ProbeTimeout))); err != nil {
 			code = ERROR_PROTOCOL
 			break close
 		}
@@ -564,7 +520,7 @@ close:
 		}
 
 		if read > 0 {
-			seen = atomic.LoadInt64(&gnow)
+			seen = p.Now()
 			woffset += read
 		readmore:
 			for {
@@ -654,7 +610,8 @@ close:
 				if size >= 0 {
 					if !bcontrol && dmode != 0 {
 						if data == nil {
-							data = s.config.Arena.Get(dsize)
+							data = s.config.Arena.Get(max(1, dsize))
+							data = data[:0]
 						}
 						highest := min(woffset-roffset, size)
 						if len(data)+highest > s.config.MessageSize {
@@ -688,7 +645,7 @@ close:
 
 					} else {
 						if control == nil {
-							control = bslab.Get(132)
+							control = s.config.Arena.Get(132)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)
@@ -719,7 +676,7 @@ close:
 									break close
 								}
 							}
-							bslab.Put(control)
+							s.config.Arena.Put(control)
 							size, control = -1, nil
 						}
 					}
@@ -753,14 +710,14 @@ close:
 			break close
 		}
 
-		if atomic.LoadInt64(&gnow)-seen >= int64(s.config.InactiveTimeout) {
+		if time.Since(seen) >= s.config.InactiveTimeout {
 			code = ERROR_PROTOCOL
 			break close
 		}
 	}
-	bslab.Put(buffer)
+	s.config.Arena.Put(buffer)
 	if control != nil {
-		bslab.Put(control)
+		s.config.Arena.Put(control)
 	}
 	if data != nil {
 		s.config.Arena.Put(data)
@@ -768,19 +725,51 @@ close:
 	s.Close(code)
 }
 
-func rmask() []byte {
-	value := []byte{0, 0, 0, 0}
-	_, _ = rand.Read(value)
+func normalize(config *Config) *Config {
+	cval := func(value, fallback, lowest, highest int) int {
+		if value == 0 {
+			value = fallback
+		}
 
-	return value
-}
-
-func cval(value, fallback, lowest, highest int) int {
-	if value == 0 {
-		value = fallback
+		return min(max(value, lowest), highest)
 	}
 
-	return min(max(value, lowest), highest)
+	if config == nil {
+		config = &Config{}
+	}
+	if config.Proxy == nil {
+		config.Proxy = proxy
+	}
+	if config.TLSConfig == nil {
+		config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+	}
+	config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
+	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
+	config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
+	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
+	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	if config.ReadBufferSize != 0 {
+		config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
+	}
+	if config.WriteBufferSize != 0 {
+		config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
+	}
+	if config.Arena == nil {
+		config.Arena = bslab.Default
+	}
+
+	return config
+}
+
+func rmask() []byte {
+	value := []byte{0, 0, 0, 0}
+	if _, err := rand.Read(value); err != nil {
+		panic("uws: entropy source failure")
+	}
+
+	return value
 }
 
 func xor(mask, data []byte) {
@@ -788,7 +777,7 @@ func xor(mask, data []byte) {
 		return
 	}
 
-	smask := bytes.Repeat(mask, max(len(mask), min(4<<10, len(data)))/len(mask))
+	smask := bytes.Repeat(mask, max(len(mask), min(64, len(data)))/len(mask))
 	for index := 0; index < len(data); index += len(smask) {
 		subtle.XORBytes(data[index:], data[index:], smask)
 	}

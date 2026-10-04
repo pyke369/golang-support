@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
-	"net/url"
+	u "net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -334,16 +334,21 @@ func mkasn() {
 
 func rlookup(remote, value string, out map[string]any) {
 	if remote != "" && value != "" && out != nil {
-		if request, err := http.NewRequest(http.MethodGet, remote+"?remote="+url.QueryEscape(value), http.NoBody); err == nil {
-			if response, err := client.Do(request); err == nil {
-				body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-				response.Body.Close()
-				if err == nil && len(body) < 4<<10 {
-					data := map[string]any{}
-					if json.Unmarshal(body, &data) == nil {
-						for key, value := range data {
-							if _, exists := out[key]; !exists {
-								out[key] = value
+		if url, err := u.Parse(remote); err == nil {
+			query := url.Query()
+			query.Set("remote", value)
+			url.RawQuery = query.Encode()
+			if request, err := http.NewRequest(http.MethodGet, url.String(), http.NoBody); err == nil {
+				if response, err := client.Do(request); err == nil {
+					body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+					response.Body.Close()
+					if err == nil && len(body) < 4<<10 {
+						data := map[string]any{}
+						if json.Unmarshal(body, &data) == nil {
+							for key, value := range data {
+								if _, exists := out[key]; !exists {
+									out[key] = value
+								}
 							}
 						}
 					}
