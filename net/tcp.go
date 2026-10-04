@@ -5,21 +5,24 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"io"
 	"maps"
 	"net"
 	"os"
+	"regexp"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
 
 var (
+	sniMatcher  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
 	proxyHeader = []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
-	proxyTable  = crc32.MakeTable(crc32.Castagnoli)
 )
 
 type TCPAddr struct {
@@ -48,20 +51,23 @@ type TCPOptions struct {
 	ReusePort   bool
 	ReadBuffer  int
 	WriteBuffer int
+	MaxConn     int
 	Callback    func(net.Conn)
 	Proxy       func(*TCPConn, ProxyState) bool
 	TLS         func(*TCPConn, string, []byte) bool
 }
 
 type TCPConn struct {
-	options  *TCPOptions
-	conn     *net.TCPConn
-	proxied  atomic.Bool
-	tlsed    atomic.Bool
-	hijacked atomic.Bool
-	local    atomic.Pointer[TCPAddr]
-	remote   atomic.Pointer[TCPAddr]
-	attrs    atomic.Pointer[map[int][]byte]
+	options   *TCPOptions
+	conn      *net.TCPConn
+	listener  *TCPListener
+	closeOnce sync.Once
+	proxied   atomic.Bool
+	tlsed     atomic.Bool
+	hijacked  atomic.Bool
+	local     atomic.Pointer[TCPAddr]
+	remote    atomic.Pointer[TCPAddr]
+	attrs     atomic.Pointer[map[int][]byte]
 }
 
 func (c *TCPConn) Read(b []byte) (n int, err error) {
@@ -74,91 +80,93 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	if c.options.Proxy != nil && !c.proxied.Swap(true) {
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
-			if n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
+			if size > len(b) || n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
+				c.Close()
+				return 0, net.ErrClosed
+			}
+			if b[12] == 0x21 && !c.options.Proxy(c, ProxyValidatePeer) {
 				c.Close()
 				return 0, net.ErrClosed
 			}
 
-			if b[12] == 0x21 && c.options.Proxy(c, ProxyValidatePeer) {
-				switch {
-				case b[13] == 0x11 && offset <= size-12: // ipv4
-					c.remote.Store(&TCPAddr{
-						addr: net.IPv4(b[offset], b[offset+1], b[offset+2], b[offset+3]).String(),
-						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+8:]))),
-					})
-					c.local.Store(&TCPAddr{
-						addr: net.IPv4(b[offset+4], b[offset+5], b[offset+6], b[offset+7]).String(),
-						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+10:]))),
-					})
-					offset += 12
+			switch {
+			case b[13] == 0x11 && offset <= size-12: // ipv4
+				c.remote.Store(&TCPAddr{
+					addr: net.IPv4(b[offset], b[offset+1], b[offset+2], b[offset+3]).String(),
+					port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+8:]))),
+				})
+				c.local.Store(&TCPAddr{
+					addr: net.IPv4(b[offset+4], b[offset+5], b[offset+6], b[offset+7]).String(),
+					port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+10:]))),
+				})
+				offset += 12
 
-				case b[13] == 0x21 && offset <= size-36: // ipv6
-					c.remote.Store(&TCPAddr{
-						addr: net.IP(b[offset : offset+16]).String(),
-						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+32:]))),
-					})
-					c.local.Store(&TCPAddr{
-						addr: net.IP(b[offset+16 : offset+32]).String(),
-						port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+34:]))),
-					})
-					offset += 36
+			case b[13] == 0x21 && offset <= size-36: // ipv6
+				c.remote.Store(&TCPAddr{
+					addr: net.IP(b[offset : offset+16]).String(),
+					port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+32:]))),
+				})
+				c.local.Store(&TCPAddr{
+					addr: net.IP(b[offset+16 : offset+32]).String(),
+					port: ustr.Int(int(binary.BigEndian.Uint16(b[offset+34:]))),
+				})
+				offset += 36
 
-				default:
+			default:
+				c.Close()
+				return 0, net.ErrClosed
+			}
+			if !c.options.Proxy(c, ProxyValidateAddresses) {
+				c.Close()
+				return 0, net.ErrClosed
+			}
+
+			var attrs map[int][]byte
+
+			for offset <= size-3 { // tlvs
+				if offset+3 > size {
 					c.Close()
 					return 0, net.ErrClosed
 				}
-				if !c.options.Proxy(c, ProxyValidateAddresses) {
+				key, length := int(b[offset]), int(binary.BigEndian.Uint16(b[offset+1:]))
+				if offset+3+length > size {
 					c.Close()
 					return 0, net.ErrClosed
 				}
-
-				var attrs map[int][]byte
-
-				for offset <= size-3 { // tlvs
-					if offset+3 > size {
-						c.Close()
-						return 0, net.ErrClosed
+				if key != 4 { // NOOP
+					if attrs == nil {
+						attrs = map[int][]byte{}
 					}
-					key, length := int(b[offset]), int(binary.BigEndian.Uint16(b[offset+1:]))
-					if offset+3+length > size {
-						c.Close()
-						return 0, net.ErrClosed
-					}
-					if key != 4 { // NOOP
-						if attrs == nil {
-							attrs = map[int][]byte{}
-						}
-						value := make([]byte, length)
-						copy(value, b[offset+3:offset+3+length])
-						attrs[key] = value
-						if key == 3 { // CRC32C
-							if length != 4 {
-								c.Close()
-								return 0, net.ErrClosed
-							}
-							copy(b[offset+3:], []byte{0, 0, 0, 0})
-						}
-					}
-					offset += 3 + length
-				}
-				if attrs != nil {
-					if value, exists := attrs[3]; exists && len(value) == 4 { // CRC32C
-						delete(attrs, 3)
-						if crc32.Checksum(b[:size], proxyTable) != binary.BigEndian.Uint32(value) {
-							c.remote.Store(nil)
-							c.local.Store(nil)
-							attrs = nil
+					value := make([]byte, length)
+					copy(value, b[offset+3:offset+3+length])
+					attrs[key] = value
+					if key == 3 { // CRC32C
+						if length != 4 {
 							c.Close()
 							return 0, net.ErrClosed
 						}
+						copy(b[offset+3:], []byte{0, 0, 0, 0})
 					}
-					c.attrs.Store(&attrs)
 				}
+				offset += 3 + length
+			}
+			if attrs != nil {
+				if value, exists := attrs[3]; exists && len(value) == 4 { // CRC32C
+					delete(attrs, 3)
+					if uhash.Sum32(b[:size]) != binary.BigEndian.Uint32(value) {
+						c.remote.Store(nil)
+						c.local.Store(nil)
+						attrs = nil
+						c.Close()
+						return 0, net.ErrClosed
+					}
+				}
+				c.attrs.Store(&attrs)
+			}
 
-				if !c.options.Proxy(c, ProxyValidateAttributes) {
-					c.Close()
-					return 0, net.ErrClosed
-				}
+			if !c.options.Proxy(c, ProxyValidateAttributes) {
+				c.Close()
+				return 0, net.ErrClosed
 			}
 
 			if n > size {
@@ -191,6 +199,9 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 									end := min(offset+2+int(binary.BigEndian.Uint16(b[offset:])), n)
 									offset += 2
 									for offset < end-4 { // extensions
+										if length < 0 || offset+4+length > end {
+											break
+										}
 										key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
 										if key == 0x0000 { // SNI
 											if length < 5 || offset+4+length >= end {
@@ -200,7 +211,12 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 											if int(binary.BigEndian.Uint16(sni)) != length-2 || sni[2] != 0 || int(binary.BigEndian.Uint16(sni[3:])) != length-5 {
 												break
 											}
-											if c.options.TLS(c, string(sni[5:]), b[:n]) {
+											name := strings.TrimSuffix(strings.ToLower(string(sni[5:])), ".")
+											if !sniMatcher.MatchString(name) || len(name) > 253 {
+												c.Close()
+												return 0, net.ErrClosed
+											}
+											if c.options.TLS(c, name, b[:n]) {
 												c.hijacked.Store(true)
 												return 0, net.ErrClosed
 											}
@@ -229,11 +245,31 @@ func (c *TCPConn) Close() error {
 		return nil
 	}
 
-	return c.conn.Close()
+	err := c.conn.Close()
+	c.closeOnce.Do(func() {
+		if c.listener.accept != nil {
+			<-c.listener.accept
+		}
+	})
+
+	return err
 }
 
-func (c *TCPConn) Close2() error {
-	return c.conn.Close()
+// if true is returned by the TLS() callback, Close() above is a no-op. the
+// new owner of the connection must call CloseHijacked() when done with it.
+func (c *TCPConn) CloseHijacked() error {
+	if !c.hijacked.Load() {
+		return nil
+	}
+
+	err := c.conn.Close()
+	c.closeOnce.Do(func() {
+		if c.listener.accept != nil {
+			<-c.listener.accept
+		}
+	})
+
+	return err
 }
 
 func (c *TCPConn) LocalAddr() net.Addr {
@@ -284,13 +320,80 @@ func (c *TCPConn) Attr(attr int) []byte {
 }
 
 type TCPListener struct {
-	options  *TCPOptions
-	listener *net.TCPListener
+	options   *TCPOptions
+	listener  *net.TCPListener
+	accept    chan struct{}
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func NewTCPListener(network, address string, extra ...*TCPOptions) (listener *TCPListener, err error) {
+	options := &TCPOptions{}
+	if len(extra) != 0 && extra[0] != nil {
+		options = extra[0]
+	}
+	config := net.ListenConfig{
+		Control: func(network, address string, conn syscall.RawConn) (err error) {
+			cerr := conn.Control(func(handle uintptr) {
+				if options.ReuseAddr {
+					if rerr := reuseAddr(handle); rerr != nil {
+						err = rerr
+					}
+				}
+				if err == nil {
+					if options.ReusePort {
+						if rerr := reusePort(handle); rerr != nil {
+							err = rerr
+						}
+					}
+				}
+			})
+			if cerr != nil {
+				return cerr
+			}
+			return
+		},
+	}
+	clistener, err := config.Listen(context.Background(), network, address)
+	if err != nil {
+		return nil, err
+	}
+
+	listener = &TCPListener{options: options, listener: clistener.(*net.TCPListener), closed: make(chan struct{})}
+	if options.MaxConn > 0 && options.MaxConn < 4<<10 {
+		listener.accept = make(chan struct{}, options.MaxConn)
+	}
+
+	return
+}
+
+func (l *TCPListener) Close() error {
+	err := l.listener.Close()
+	l.closeOnce.Do(func() { close(l.closed) })
+
+	return err
 }
 
 func (l *TCPListener) Accept() (net.Conn, error) {
+	if l.accept != nil {
+		select {
+		case <-l.closed:
+			for {
+				c, err := l.listener.AcceptTCP()
+				if err != nil {
+					return nil, err
+				}
+				c.Close()
+			}
+
+		case l.accept <- struct{}{}:
+		}
+	}
 	conn, err := l.listener.AcceptTCP()
 	if err != nil {
+		if l.accept != nil {
+			<-l.accept
+		}
 		return nil, err
 	}
 	conn.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3})
@@ -306,52 +409,18 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 		}
 	}
 
-	return &TCPConn{options: l.options, conn: conn}, nil
-}
-
-func (l *TCPListener) Close() error {
-	return l.listener.Close()
+	return &TCPConn{options: l.options, conn: conn, listener: l}, nil
 }
 
 func (l *TCPListener) Addr() (addr net.Addr) {
 	return l.listener.Addr()
 }
 
-func NewTCPListener(network, address string, extra ...*TCPOptions) (listener *TCPListener, err error) {
-	options := &TCPOptions{}
-	if len(extra) != 0 && extra[0] != nil {
-		options = extra[0]
-	}
-	config := net.ListenConfig{
-		Control: func(network, address string, conn syscall.RawConn) (err error) {
-			conn.Control(func(handle uintptr) {
-				if options.ReuseAddr {
-					if rerr := reuseAddr(handle); rerr != nil {
-						err = rerr
-					}
-				}
-				if options.ReusePort {
-					if rerr := reusePort(handle); rerr != nil {
-						err = rerr
-					}
-				}
-			})
-			return
-		},
-	}
-	clistener, err := config.Listen(context.Background(), network, address)
-	if err != nil {
-		return nil, err
-	}
-
-	return &TCPListener{options: options, listener: clistener.(*net.TCPListener)}, nil
-}
-
 type TCPFuzzer struct {
 	conn *net.TCPConn
 }
 
-func NewTCPFuzze(conn *net.TCPConn) (fuzzer *TCPFuzzer, err error) {
+func NewTCPFuzzer(conn *net.TCPConn) (fuzzer *TCPFuzzer, err error) {
 	if conn == nil {
 		return nil, errors.New("conn is nil")
 	}
@@ -407,14 +476,14 @@ func (f *TCPFuzzer) SetLinger(sec int) error {
 func (f *TCPFuzzer) SetNoDelay(noDelay bool) error {
 	return nil
 }
-func (f *TCPFuzzer) SetReadBuffer(bytes int) error {
-	return f.conn.SetReadBuffer(bytes)
+func (f *TCPFuzzer) SetReadBuffer(size int) error {
+	return f.conn.SetReadBuffer(size)
 }
 func (f *TCPFuzzer) SetReadDeadline(t time.Time) error {
 	return f.conn.SetReadDeadline(t)
 }
-func (f *TCPFuzzer) SetWriteBuffer(bytes int) error {
-	return f.conn.SetWriteBuffer(bytes)
+func (f *TCPFuzzer) SetWriteBuffer(size int) error {
+	return f.conn.SetWriteBuffer(size)
 }
 func (f *TCPFuzzer) SetWriteDeadline(t time.Time) error {
 	return f.conn.SetWriteDeadline(t)

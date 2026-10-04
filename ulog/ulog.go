@@ -5,7 +5,9 @@ import (
 	"compress/gzip"
 	"container/list"
 	"encoding/json"
+	// jv2 "encoding/json/v2"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"os"
@@ -19,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
+	p "github.com/pyke369/golang-support/process"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -72,35 +74,37 @@ const (
 )
 
 type ULog struct {
-	root                  string
-	syslog, file, console bool
-	syslogHandle          *syslogWriter
-	syslogRemote          string
-	syslogName            string
-	syslogFacility        int
-	fileOutputs           map[string]*list.Element
-	filePath              string
-	fileTime              int
-	fileSeverity          bool
-	fileFacility          int
-	consoleHandle         *os.File
-	consoleTime           int
-	consoleSeverity       bool
-	consoleColors         bool
-	optionUTC             bool
-	purgePath             string
-	purgeAge              time.Duration
-	purgeCount            int
-	compressPath          string
-	compressAge           time.Duration
-	level                 int
-	fields                map[string]any
-	order                 []string
-	external              func(string, []byte)
-	arena                 *bslab.Arena
-	mu                    sync.RWMutex
-	done                  chan struct{}
-	lru                   *list.List
+	root            string
+	mu              sync.RWMutex
+	syslog          bool
+	file            bool
+	console         bool
+	syslogRemote    string
+	syslogName      string
+	syslogFacility  int
+	syslogHandle    *syslogWriter
+	filePath        string
+	fileTime        int
+	fileSeverity    bool
+	fileFacility    int
+	fileOutputs     map[string]*list.Element
+	lru             *list.List
+	consoleTime     int
+	consoleSeverity bool
+	consoleColors   bool
+	consoleHandle   *os.File
+	optionUTC       bool
+	optionLevel     int
+	purgePath       string
+	purgeAge        time.Duration
+	purgeCount      int
+	compressPath    string
+	compressAge     time.Duration
+	done            chan struct{}
+	content         []byte
+	prefix          []byte
+	fields          map[string]any
+	order           []string
 }
 
 type fileOutput struct {
@@ -110,8 +114,8 @@ type fileOutput struct {
 }
 
 type colorizer struct {
-	expression *regexp.Regexp
-	replace    []byte
+	matcher *regexp.Regexp
+	replace []byte
 }
 
 var (
@@ -133,12 +137,6 @@ var (
 		"info":    LOG_INFO,
 		"debug":   LOG_DEBUG,
 	}
-	severityNames = map[int]string{
-		LOG_ERR:     "error",
-		LOG_WARNING: "warning",
-		LOG_INFO:    "info",
-		LOG_DEBUG:   "debug",
-	}
 	severityLabels = map[int]string{
 		LOG_ERR:     "ERRO ",
 		LOG_WARNING: "WARN ",
@@ -151,7 +149,7 @@ var (
 		LOG_INFO:    "\x1b[36m",
 		LOG_DEBUG:   "\x1b[32m",
 	}
-	structureColors = []*colorizer{
+	colorizers = []*colorizer{
 		&colorizer{regexp.MustCompile(`"(err(:?or)?|reason)":`), []byte("\"\x1b[31m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"(warn(:?ing)?)":`), []byte("\"\x1b[33m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)":`), []byte("\"\x1b[38;5;250m$1\x1b[m\":")},
@@ -161,54 +159,210 @@ var (
 		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[33mfalse\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
 	}
+	entryMatcher    = regexp.MustCompile(`(file|console|syslog|option|purge|compress)\s*\(([^\)]*)\)`)
 	optionMatcher   = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
 	templateMatcher = regexp.MustCompile(`\{\{\s*[^\s\}]+\s*\}\}`)
+	nameMatcher     = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 )
 
-func New(target string, root string, arena ...*bslab.Arena) *ULog {
+func New(target, root string) *ULog {
 	root = filepath.Clean(root)
-	if !filepath.IsAbs(root) {
-		if value, err := filepath.Abs(root); err == nil {
-			root = value
+	if value, err := file.Abs(root); err == nil {
+		root = value
+	}
+	l := &ULog{
+		root:        root,
+		fileOutputs: map[string]*list.Element{},
+		lru:         list.New(),
+		done:        make(chan struct{}),
+		content:     make([]byte, 4<<10),
+		prefix:      make([]byte, 32),
+	}
+
+	go func(l *ULog) {
+		ticker, last := time.NewTicker(10*time.Second), time.Now()
+		for {
+			select {
+			case <-ticker.C:
+
+			case <-l.done:
+				ticker.Stop()
+				return
+			}
+
+			go func() {
+				l.mu.Lock()
+				for path, element := range l.fileOutputs {
+					output := element.Value.(*fileOutput)
+					if time.Since(output.active) >= time.Minute {
+						output.handle.Close()
+						delete(l.fileOutputs, path)
+						l.lru.Remove(element)
+					}
+				}
+				l.mu.Unlock()
+			}()
+
+			if time.Since(last) < 10*time.Minute {
+				continue
+			}
+			last = time.Now()
+
+			go func() {
+				l.mu.RLock()
+
+				go func(sroot, purge string, age time.Duration, count int) {
+					if purge == "" || (age <= 0 && count <= 0) {
+						return
+					}
+
+					root, err := os.OpenRoot(sroot)
+					if err != nil {
+						return
+					}
+					defer root.Close()
+					purge = filepath.Clean(purge)
+					if value, err := file.Abs(purge); err == nil {
+						purge = value
+					}
+					purge = strings.TrimPrefix(purge, sroot+file.Sep)
+					paths, err := fs.Glob(root.FS(), purge)
+					if err != nil {
+						return
+					}
+					paths = paths[:min(1000, len(paths))]
+
+					entries := []*fileOutput{}
+					for _, path := range paths {
+						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() {
+							entries = append(entries, &fileOutput{active: info.ModTime(), path: path})
+						}
+					}
+					sort.Slice(entries, func(i, j int) bool {
+						return entries[i].active.After(entries[j].active)
+					})
+
+					for index, entry := range entries {
+						if (age > 0 && time.Since(entry.active) >= age) || (count > 0 && index >= count) {
+							root.Remove(entry.path)
+						}
+					}
+				}(l.root, l.purgePath, l.purgeAge, l.purgeCount)
+
+				go func(sroot, compress string, age time.Duration) {
+					if compress == "" || age <= 0 {
+						return
+					}
+
+					root, err := os.OpenRoot(sroot)
+					if err != nil {
+						return
+					}
+					defer root.Close()
+					compress = filepath.Clean(compress)
+					if value, err := file.Abs(compress); err == nil {
+						compress = value
+					}
+					compress = strings.TrimPrefix(compress, sroot+file.Sep)
+					paths, err := fs.Glob(root.FS(), compress)
+					if err != nil {
+						return
+					}
+					paths = paths[:min(1000, len(paths))]
+
+					start := time.Now()
+					for _, path := range paths {
+						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= age {
+							ok := false
+							if source, err := root.Open(path); err == nil {
+								if target, err := root.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600); err == nil {
+									gzwriter := gzip.NewWriter(target)
+									_, err1 := io.Copy(gzwriter, source)
+									err2 := gzwriter.Close()
+									target.Close()
+									if err1 == nil && err2 == nil {
+										if err := root.Chtimes(path+".gz", time.Time{}, info.ModTime()); err == nil {
+											ok = true
+										}
+									}
+								}
+								source.Close()
+							}
+							if ok {
+								root.Remove(path)
+
+							} else {
+								root.Remove(path + ".gz")
+							}
+						}
+
+						if time.Since(start) >= 5*time.Minute {
+							break
+						}
+					}
+				}(l.root, l.compressPath, l.compressAge)
+
+				l.mu.RUnlock()
+			}()
 		}
-	}
-	l := &ULog{root: root, fileOutputs: map[string]*list.Element{}, level: LOG_INFO, arena: bslab.Default, lru: list.New()}
-	if len(arena) != 0 && arena[0] != nil {
-		l.arena = arena[0]
-	}
+	}(l)
 
 	return l.Load(target)
 }
 
 func (l *ULog) Load(target string) *ULog {
-	l.Close()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	select {
+	case <-l.done:
+		return l
+
+	default:
+	}
+
 	l.syslog = false
-	l.syslogRemote = ""
-	l.syslogName = filepath.Base(os.Args[0])
-	l.syslogFacility = LOG_DAEMON
 	l.file = false
+	l.console = false
+
+	name := os.Args[0]
+	if value, err := os.Executable(); err == nil {
+		name = value
+	}
+	l.syslogRemote = ""
+	l.syslogName = ustr.Strip(name, "\r\n\t<>[] \x00")
+	l.syslogFacility = LOG_DAEMON
+
 	l.filePath = ""
 	l.fileTime = TIME_DATETIME
 	l.fileSeverity = true
 	l.fileFacility = 0
-	l.console = false
+
 	l.consoleTime = TIME_DATETIME
 	l.consoleSeverity = true
 	l.consoleColors = true
 	l.consoleHandle = os.Stderr
+
 	l.optionUTC = false
+	l.optionLevel = LOG_INFO
+
 	l.purgePath = ""
 	l.purgeAge = 0
 	l.purgeCount = 0
 	l.compressPath = ""
 	l.compressAge = 0
-	l.level = LOG_INFO
-	l.done = make(chan struct{})
 
-	for _, target := range regexp.MustCompile(`(file|console|syslog|option|purge|compress)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
+	if l.syslogHandle != nil {
+		l.syslogHandle.Close()
+		l.syslogHandle = nil
+	}
+	for path, element := range l.fileOutputs {
+		element.Value.(*fileOutput).handle.Close()
+		delete(l.fileOutputs, path)
+	}
+	l.lru = l.lru.Init()
+
+	for _, target := range entryMatcher.FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
 		case "syslog":
 			l.syslog = true
@@ -221,7 +375,7 @@ func (l *ULog) Load(target string) *ULog {
 					}
 
 				case "name":
-					l.syslogName = option[2]
+					l.syslogName = ustr.Strip(option[2], "\r\n\t<>[] \x00")
 
 				case "facility":
 					l.syslogFacility = facilities[strings.ToLower(option[2])]
@@ -266,11 +420,6 @@ func (l *ULog) Load(target string) *ULog {
 			for _, option := range optionMatcher.FindAllStringSubmatch(target[2], -1) {
 				option[2] = strings.ToLower(option[2])
 				switch strings.ToLower(option[1]) {
-				case "output":
-					if option[2] == "stdout" {
-						l.consoleHandle = os.Stdout
-					}
-
 				case "time":
 					switch {
 					case option[2] == "datetime":
@@ -294,6 +443,11 @@ func (l *ULog) Load(target string) *ULog {
 
 				case "colors":
 					l.consoleColors = j.Boolean(option[2])
+
+				case "output":
+					if option[2] == "stdout" {
+						l.consoleHandle = os.Stdout
+					}
 				}
 			}
 
@@ -306,7 +460,7 @@ func (l *ULog) Load(target string) *ULog {
 
 				case "level":
 					if value, exists := severities[option[2]]; exists {
-						l.level = value
+						l.optionLevel = value
 					}
 				}
 			}
@@ -354,157 +508,27 @@ func (l *ULog) Load(target string) *ULog {
 		}
 	}
 
-	go func(l *ULog) {
-		ticker, last := time.NewTicker(10*time.Second), time.Now()
-		for {
-			select {
-			case <-ticker.C:
-
-			case <-l.done:
-				ticker.Stop()
-				return
-			}
-
-			go func() {
-				l.mu.Lock()
-				for path, element := range l.fileOutputs {
-					output := element.Value.(*fileOutput)
-					if time.Since(output.active) >= time.Minute {
-						output.handle.Close()
-						delete(l.fileOutputs, path)
-						l.lru.Remove(element)
-					}
-				}
-				l.mu.Unlock()
-			}()
-
-			if time.Since(last) < 10*time.Minute {
-				continue
-			}
-			last = time.Now()
-
-			go func() {
-				l.mu.RLock()
-
-				go func(purge string, age time.Duration, count int) {
-					if purge == "" || (age <= 0 && count <= 0) {
-						return
-					}
-
-					root, err := os.OpenRoot(l.root)
-					if err != nil {
-						return
-					}
-					defer root.Close()
-					paths, err := filepath.Glob(purge)
-					if err != nil {
-						return
-					}
-					entries := []*fileOutput{}
-					for _, path := range paths {
-						if !filepath.IsAbs(path) {
-							if value, err := filepath.Abs(path); err == nil {
-								path = value
-							}
-						}
-						if info, err := root.Stat(strings.TrimPrefix(path, l.root+file.Sep)); err == nil && info.Mode().IsRegular() {
-							entries = append(entries, &fileOutput{active: info.ModTime(), path: path})
-						}
-					}
-					sort.Slice(entries, func(i, j int) bool {
-						return entries[i].active.After(entries[j].active)
-					})
-
-					for index, entry := range entries {
-						if (age > 0 && time.Since(entry.active) >= age) || (count > 0 && index >= count) {
-							for entry.path != l.root {
-								root.Remove(entry.path)
-								entry.path = filepath.Dir(entry.path)
-							}
-						}
-					}
-				}(l.purgePath, l.purgeAge, l.purgeCount)
-
-				go func(compress string, age time.Duration) {
-					if compress == "" || age <= 0 {
-						return
-					}
-
-					root, err := os.OpenRoot(l.root)
-					if err != nil {
-						return
-					}
-					defer root.Close()
-					paths, err := filepath.Glob(compress)
-					if err != nil {
-						return
-					}
-
-					start := time.Now()
-					for _, path := range paths {
-						if !filepath.IsAbs(path) {
-							if value, err := filepath.Abs(path); err == nil {
-								path = value
-							}
-						}
-						path = strings.TrimPrefix(path, l.root+file.Sep)
-						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() /*&& time.Since(info.ModTime()) >= age*/ {
-							ok := false
-							if source, err := root.Open(path); err == nil {
-								if target, err := root.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600); err == nil {
-									gzwriter := gzip.NewWriter(target)
-									_, err1 := io.Copy(gzwriter, source)
-									err2 := gzwriter.Close()
-									target.Close()
-									if err1 == nil && err2 == nil {
-										if err := root.Chtimes(path+".gz", time.Time{}, info.ModTime()); err == nil {
-											ok = true
-										}
-									}
-								}
-								source.Close()
-							}
-							if ok {
-								root.Remove(path)
-
-							} else {
-								root.Remove(path + ".gz")
-							}
-						}
-
-						if time.Since(start) >= 5*time.Minute {
-							break
-						}
-					}
-				}(l.compressPath, l.compressAge)
-
-				l.mu.RUnlock()
-			}()
-		}
-	}(l)
-
 	return l
 }
 
 func (l *ULog) Close() {
 	l.mu.Lock()
-	if l.done != nil {
-		close(l.done)
-		l.done = nil
+	defer l.mu.Unlock()
+
+	select {
+	case <-l.done:
+		return
+
+	default:
 	}
-	for path, element := range l.fileOutputs {
-		element.Value.(*fileOutput).handle.Close()
-		delete(l.fileOutputs, path)
-	}
-	if l.lru != nil {
-		l.lru = l.lru.Init()
-	}
+	close(l.done)
+
 	if l.syslogHandle != nil {
 		l.syslogHandle.Close()
-		l.syslogHandle = nil
 	}
-	time.Sleep(time.Second / 5)
-	l.mu.Unlock()
+	for _, element := range l.fileOutputs {
+		element.Value.(*fileOutput).handle.Close()
+	}
 }
 
 func (l *ULog) SetLevel(level string) {
@@ -512,16 +536,16 @@ func (l *ULog) SetLevel(level string) {
 	level = strings.ToLower(level)
 	switch level {
 	case "error":
-		l.level = LOG_ERR
+		l.optionLevel = LOG_ERR
 
 	case "warning":
-		l.level = LOG_WARNING
+		l.optionLevel = LOG_WARNING
 
 	case "info":
-		l.level = LOG_INFO
+		l.optionLevel = LOG_INFO
 
 	case "debug":
-		l.level = LOG_DEBUG
+		l.optionLevel = LOG_DEBUG
 	}
 	l.mu.Unlock()
 }
@@ -536,9 +560,14 @@ func (l *ULog) SetField(key string, value any) {
 }
 
 func (l *ULog) SetFields(fields map[string]any) {
+	l.mu.Lock()
 	for key, value := range fields {
-		l.SetField(key, value)
+		if l.fields == nil {
+			l.fields = map[string]any{}
+		}
+		l.fields[key] = value
 	}
+	l.mu.Unlock()
 }
 
 func (l *ULog) ClearFields() {
@@ -559,47 +588,37 @@ func (l *ULog) ClearOrder() {
 	l.mu.Unlock()
 }
 
-func (l *ULog) SetExternal(external func(string, []byte)) {
-	l.mu.Lock()
-	l.external = external
-	l.mu.Unlock()
-}
-
-func (l *ULog) ClearExternal() {
-	l.mu.Lock()
-	l.external = nil
-	l.mu.Unlock()
-}
-
 func (l *ULog) Log(now time.Time, severity int, in any) {
-	l.mu.RLock()
-	ssyslog, sexternal, sfile, sconsole := l.syslog, l.external, l.file, l.console
-	if l.done == nil || l.level < severity || (!ssyslog && sexternal == nil && !sfile && !sconsole) {
-		l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.optionLevel < severity || (!l.syslog && !l.file && !l.console) {
 		return
 	}
-	sfields, sorder, sutc, spath := maps.Clone(l.fields), slices.Clone(l.order), l.optionUTC, l.filePath
-	l.mu.RUnlock()
+	select {
+	case <-l.done:
+		return
 
-	structured, content := false, l.arena.Get(1<<10)
-	defer func() {
-		l.arena.Put(content)
-	}()
-
-	templates := map[string]any{
-		"datetime":    now.Format(time.DateTime),
-		"msdatetime":  now.Format(time.DateTime + ".000"),
-		"timestamp":   now.Unix(),
-		"mstimestamp": now.UnixNano() / int64(time.Millisecond),
+	default:
 	}
+
+	structured, templates := false, map[string]any{
+		"datetime":    ustr.Strftime("%F %T", now).String(),
+		"msdatetime":  ustr.Strftime("%F %T.%=", now).String(),
+		"timestamp":   ustr.Strftime("%s", now).String(),
+		"mstimestamp": ustr.Strftime("%s%=", now).String(),
+	}
+
+	l.content = l.content[:0]
 	if structure, ok := in.(map[string]any); ok {
 		structure, structured = maps.Clone(structure), true
-		for key, value := range sfields {
+		for key, value := range l.fields {
 			if _, exists := structure[key]; !exists {
 				structure[key] = value
 			}
 		}
 
+		sorder := slices.Clone(l.order)
 		for okey, value := range structure {
 			key := strings.TrimSpace(okey)
 			if strings.HasPrefix(key, "{{") && strings.HasSuffix(key, "}}") {
@@ -621,6 +640,20 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 				}
 			}
 		}
+		for key, value := range templates {
+			if value, ok := value.(string); ok {
+				if strings.HasPrefix(value, "{{") && strings.HasSuffix(value, "}}") {
+					if value = strings.ToLower(strings.TrimSpace(value[2 : len(value)-2])); value != key {
+						if value, ok := templates[value]; ok {
+							templates[key] = value
+
+						} else {
+							delete(templates, key)
+						}
+					}
+				}
+			}
+		}
 
 		for key, value := range structure {
 			if value, ok := value.(string); ok {
@@ -637,13 +670,13 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 		}
 
 		if value, ok := templates["payload"].(string); ok {
-			content = append(content,
-				bytes.Map(func(r rune) rune {
+			l.content = append(l.content,
+				bytes.TrimSpace(bytes.Map(func(r rune) rune {
 					if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
 						return -1
 					}
 					return r
-				}, []byte(value))...,
+				}, []byte(value)))...,
 			)
 
 		} else {
@@ -673,28 +706,31 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 						}
 					}
 				}
-				buffer.Truncate(buffer.Len() - 1)
+				if buffer.Len() > 1 {
+					buffer.Truncate(buffer.Len() - 1)
+				}
 			}
 			buffer.WriteByte('}')
-			content = append(content, buffer.Bytes()...)
+			l.content = append(l.content, buffer.Bytes()...)
 		}
 	}
 
 	if value, ok := in.(string); ok {
-		content = append(content, bytes.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
-				return -1
-			}
-			return r
-		}, []byte(value))...)
+		l.content = append(l.content,
+			bytes.TrimSpace(bytes.Map(func(r rune) rune {
+				if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
+					return -1
+				}
+				return r
+			}, []byte(value)))...,
+		)
 	}
 
-	if len(content) == 0 {
+	if len(l.content) == 0 {
 		return
 	}
 
-	if ssyslog {
-		l.mu.Lock()
+	if l.syslog {
 		if l.syslogHandle == nil {
 			protocol := ""
 			if l.syslogRemote != "" {
@@ -704,64 +740,58 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 				l.syslogHandle = handle
 			}
 		}
-		handle := l.syslogHandle
-		l.mu.Unlock()
-		if handle != nil {
+		if l.syslogHandle != nil {
 			switch severity {
 			case LOG_ERR:
-				handle.Err(string(content))
+				l.syslogHandle.Err(string(l.content))
 
 			case LOG_WARNING:
-				handle.Warning(string(content))
+				l.syslogHandle.Warning(string(l.content))
 
 			case LOG_INFO:
-				handle.Info(string(content))
+				l.syslogHandle.Info(string(l.content))
 
 			case LOG_DEBUG:
-				handle.Debug(string(content))
+				l.syslogHandle.Debug(string(l.content))
 			}
 		}
 	}
 
-	if sexternal != nil {
-		sexternal(severityNames[severity], bytes.Clone(content))
-	}
-
-	content = append(content, '\n')
-	if sutc {
+	l.content = append(l.content, '\n')
+	if l.optionUTC {
 		now = now.UTC()
 
 	} else {
 		now = now.Local()
 	}
-	if sfile {
-		path := ustr.Strftime(spath, now)
+
+	if l.file {
+		path := ustr.Strftime(l.filePath, now).String()
 		if structured {
 			path = templateMatcher.ReplaceAllStringFunc(path, func(key string) string {
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
 				if value, ok := templates[key]; ok {
 					if value, ok := value.(string); ok {
-						return value
+						if value := nameMatcher.ReplaceAllString(value, "_"); value != "." && value != ".." && !strings.HasPrefix(value, ".") {
+							return value
+						}
 					}
 				}
 				return ""
 			})
 		}
 
-		if !filepath.IsAbs(path) {
-			if value, err := filepath.Abs(path); err == nil {
-				path = value
-			}
+		if value, err := file.Abs(path); err == nil {
+			path = value
 		}
 		if ext := filepath.Ext(path); ext == "" || ext != filepath.Base(path) {
-			l.mu.Lock()
 			if output, exists := l.fileOutputs[path]; !exists {
 				if os.MkdirAll(l.root, 0o700) == nil {
 					if root, err := os.OpenRoot(l.root); err == nil {
 						rpath := strings.TrimPrefix(path, l.root+file.Sep)
 						if root.MkdirAll(filepath.Dir(rpath), 0o700) == nil {
 							if handle, err := root.OpenFile(rpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o600); err == nil {
-								if len(l.fileOutputs) >= 64 {
+								if len(l.fileOutputs) >= 256 {
 									if value := l.lru.Back(); value != nil {
 										if value := l.lru.Remove(value); value != nil {
 											output := value.(*fileOutput)
@@ -770,7 +800,7 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 										}
 									}
 								}
-								l.fileOutputs[path] = l.lru.PushFront(&fileOutput{path: path, active: time.Now(), handle: handle})
+								l.fileOutputs[path] = l.lru.PushFront(&fileOutput{path: path, active: p.Now(), handle: handle})
 							}
 						}
 						root.Close()
@@ -783,121 +813,111 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 
 			if element, exists := l.fileOutputs[path]; exists {
 				output := element.Value.(*fileOutput)
-				prefix := make([]byte, 0, 128)
+				l.prefix = l.prefix[:0]
 				if l.fileFacility != 0 {
-					prefix = append(prefix, '<')
-					prefix = append(prefix, strconv.Itoa(l.fileFacility|severity)...)
-					prefix = append(prefix, '>')
-					prefix = append(prefix, now.Format(time.Stamp)...)
-					prefix = append(prefix, ' ')
-					prefix = append(prefix, l.syslogName...)
-					prefix = append(prefix, '[')
-					prefix = append(prefix, strconv.Itoa(os.Getpid())...)
-					prefix = append(prefix, []byte{']', ':', ' '}...)
+					l.prefix = append(l.prefix, '<')
+					l.prefix = append(l.prefix, strconv.Itoa(l.fileFacility|severity)...)
+					l.prefix = append(l.prefix, '>')
+					l.prefix = append(l.prefix, now.Format(time.Stamp)...)
+					l.prefix = append(l.prefix, ' ')
+					l.prefix = append(l.prefix, l.syslogName...)
+					l.prefix = append(l.prefix, '[')
+					l.prefix = append(l.prefix, strconv.Itoa(os.Getpid())...)
+					l.prefix = append(l.prefix, []byte{']', ':', ' '}...)
 
 				} else {
 					switch l.fileTime {
 					case TIME_DATETIME:
-						prefix = append(prefix, now.Format(time.DateTime)...)
+						l.prefix = ustr.Strftime("%F %T", now, l.prefix)
 
 					case TIME_MSDATETIME:
-						prefix = append(prefix, now.Format(time.DateTime+".000")...)
+						l.prefix = ustr.Strftime("%F %T.%=", now, l.prefix)
 
 					case TIME_TIMESTAMP:
-						prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+						l.prefix = ustr.Strftime("%s", now, l.prefix)
 
 					case TIME_MSTIMESTAMP:
-						prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
+						l.prefix = ustr.Strftime("%s%=", now, l.prefix)
 					}
-					if len(prefix) != 0 {
-						prefix = append(prefix, ' ')
+					if len(l.prefix) != 0 {
+						l.prefix = append(l.prefix, ' ')
 					}
 					if l.fileSeverity {
-						prefix = append(prefix, severityLabels[severity]...)
+						l.prefix = append(l.prefix, severityLabels[severity]...)
 					}
 				}
-				_, _ = output.handle.Write(prefix)
-				_, _ = output.handle.Write(content)
-				output.active = time.Now()
+				_, _ = output.handle.Write(l.prefix)
+				_, _ = output.handle.Write(l.content)
+				output.active = p.Now()
 			}
-
-			l.mu.Unlock()
 		}
 	}
 
-	if sconsole {
-		l.mu.Lock()
-		prefix := make([]byte, 0, 128)
+	if l.console {
+		l.prefix = l.prefix[:0]
 		if l.consoleTime != TIME_NONE {
 			if l.consoleColors {
-				prefix = append(prefix, "\x1b[38;5;250m"...)
+				l.prefix = append(l.prefix, "\x1b[38;5;250m"...)
 			}
 			switch l.consoleTime {
 			case TIME_DATETIME:
-				prefix = append(prefix, now.Format(time.DateTime)...)
+				l.prefix = ustr.Strftime("%F %T", now, l.prefix)
 
 			case TIME_MSDATETIME:
-				prefix = append(prefix, now.Format(time.DateTime+".000")...)
+				l.prefix = ustr.Strftime("%F %T.%=", now, l.prefix)
 
 			case TIME_TIMESTAMP:
-				prefix = append(prefix, strconv.FormatInt(now.Unix(), 10)...)
+				l.prefix = ustr.Strftime("%s", now, l.prefix)
 
 			case TIME_MSTIMESTAMP:
-				prefix = append(prefix, strconv.FormatInt(now.UnixNano()/int64(time.Millisecond), 10)...)
+				l.prefix = ustr.Strftime("%s%=", now, l.prefix)
 			}
 			if l.consoleColors {
-				prefix = append(prefix, "\x1b[m"...)
+				l.prefix = append(l.prefix, "\x1b[m"...)
 			}
-			prefix = append(prefix, ' ')
+			l.prefix = append(l.prefix, ' ')
 		}
 		if l.consoleSeverity {
 			if l.consoleColors {
-				prefix = append(prefix, severityColors[severity]...)
+				l.prefix = append(l.prefix, severityColors[severity]...)
 			}
-			prefix = append(prefix, severityLabels[severity]...)
+			l.prefix = append(l.prefix, severityLabels[severity]...)
 			if l.consoleColors {
-				prefix = append(prefix, "\x1b[m"...)
+				l.prefix = append(l.prefix, "\x1b[m"...)
 			}
 		}
-		if structured && l.consoleColors {
-			for _, item := range structureColors {
-				content = item.expression.ReplaceAll(content, item.replace)
+
+		if structured && l.consoleColors && len(l.content) <= 4<<10 {
+			for _, colorizer := range colorizers {
+				l.content = colorizer.matcher.ReplaceAll(l.content, colorizer.replace)
 			}
 		}
-		l.consoleHandle.Write(prefix)
-		l.consoleHandle.Write(content)
-		l.mu.Unlock()
+		l.consoleHandle.Write(l.prefix)
+		l.consoleHandle.Write(l.content)
 	}
 }
 
 func (l *ULog) Error(in any) {
-	l.Log(time.Now(), LOG_ERR, in)
+	l.Log(p.Now(), LOG_ERR, in)
 }
-
 func (l *ULog) Warn(in any) {
-	l.Log(time.Now(), LOG_WARNING, in)
+	l.Log(p.Now(), LOG_WARNING, in)
 }
-
 func (l *ULog) Info(in any) {
-	l.Log(time.Now(), LOG_INFO, in)
+	l.Log(p.Now(), LOG_INFO, in)
 }
-
 func (l *ULog) Debug(in any) {
-	l.Log(time.Now(), LOG_DEBUG, in)
+	l.Log(p.Now(), LOG_DEBUG, in)
 }
-
 func (l *ULog) ErrorTime(now time.Time, in any) {
 	l.Log(now, LOG_ERR, in)
 }
-
 func (l *ULog) WarnTime(now time.Time, in any) {
 	l.Log(now, LOG_WARNING, in)
 }
-
 func (l *ULog) InfoTime(now time.Time, in any) {
 	l.Log(now, LOG_INFO, in)
 }
-
 func (l *ULog) DebugTime(now time.Time, in any) {
 	l.Log(now, LOG_DEBUG, in)
 }

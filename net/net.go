@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	v4reserved = []netip.Prefix{}
-	v6reserved = []netip.Prefix{}
+	reservedV4 = []netip.Prefix{}
+	reservedV6 = []netip.Prefix{}
 )
 
 func init() {
@@ -34,7 +34,7 @@ func init() {
 		"240.0.0.0/4",
 		"255.255.255.255/32",
 	} {
-		v4reserved = append(v4reserved, netip.MustParsePrefix(prefix))
+		reservedV4 = append(reservedV4, netip.MustParsePrefix(prefix))
 	}
 
 	// https://www.iana.org/assignments/iana-ipv6-special-registry
@@ -42,7 +42,6 @@ func init() {
 		"::/128",
 		"::1/128",
 		"::/96",
-		"::ffff:0:0/96",
 		"64:ff9b::/96",
 		"64:ff9b:1::/48",
 		"100::/64",
@@ -67,7 +66,7 @@ func init() {
 		"fec0::/10",
 		"ff00::/8",
 	} {
-		v6reserved = append(v6reserved, netip.MustParsePrefix(prefix))
+		reservedV6 = append(reservedV6, netip.MustParsePrefix(prefix))
 	}
 }
 
@@ -78,6 +77,21 @@ func Address(in string) (out string) {
 	}
 
 	return
+}
+
+func Normalize(scheme, in string) (out string) {
+	host, port, err := net.SplitHostPort(in)
+	if err != nil {
+		return in
+	}
+	if scheme == "http" && port == "80" {
+		return host
+	}
+	if scheme == "https" && port == "443" {
+		return host
+	}
+
+	return in
 }
 
 func Loopback(in string) bool {
@@ -91,14 +105,14 @@ func Loopback(in string) bool {
 func Reserved(in netip.Addr) bool {
 	in = in.Unmap()
 	if in.Is4() {
-		for _, prefix := range v4reserved {
+		for _, prefix := range reservedV4 {
 			if prefix.Contains(in) {
 				return true
 			}
 		}
 
 	} else {
-		for _, prefix := range v6reserved {
+		for _, prefix := range reservedV6 {
 			if prefix.Contains(in) {
 				return true
 			}

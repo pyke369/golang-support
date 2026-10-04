@@ -6,7 +6,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const O_NOFOLLOW = unix.O_NOFOLLOW
+const (
+	O_NOFOLLOW = unix.O_NOFOLLOW
+)
 
 func Space(in string) (total, free, occupied uint64) {
 	var info unix.Statfs_t

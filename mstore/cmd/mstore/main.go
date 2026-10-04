@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	matcher = regexp.MustCompile(`^\s*(now|end|start)\s*(?:(\+|\-)\s*(\d+)\s*(mo(?:nths?)?|s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?))?\s*$`)
+	timeMatcher = regexp.MustCompile(`^\s*(now|end|start)\s*(?:(\+|\-)\s*(\d+)\s*(mo(?:nths?)?|s(?:ec(?:onds?)?)?|m(?:in(?:utes?)?)?|h(?:ours?)?|d(?:ays?)?|w(?:eeks?)?))?\s*$`)
 )
 
 func usage(status int) {
@@ -46,7 +46,7 @@ func bail(err error, status int) {
 }
 
 func decode(in string, start, end time.Time) (out time.Time, err error) {
-	if captures := matcher.FindStringSubmatch(strings.ToLower(in)); captures != nil {
+	if captures := timeMatcher.FindStringSubmatch(strings.ToLower(in)); captures != nil {
 		switch captures[1] {
 		case "now":
 			out = time.Now()
