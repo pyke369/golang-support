@@ -3,7 +3,7 @@ package ustr
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
+	"fmt"
 	"math"
 	"net"
 	"sort"
@@ -30,7 +30,7 @@ func Wrap(err error, msg string) error {
 		return nil
 	}
 	if !strings.HasPrefix(err.Error(), msg+": ") {
-		return errors.New(msg + ": " + err.Error())
+		return fmt.Errorf("%s: %w", msg, err)
 	}
 
 	return err
