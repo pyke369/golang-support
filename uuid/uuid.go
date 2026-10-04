@@ -14,9 +14,8 @@ import (
 type UUID [16]byte
 
 var (
-	zero    = UUID{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	hex     = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
-	uhex    = map[byte]byte{'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'a': 10, 'b': 11, 'c': 12, 'd': 13, 'e': 14, 'f': 15, 'A': 10, 'B': 11, 'C': 12, 'D': 13, 'E': 14, 'F': 15}
+	uhex    = map[byte]byte{'0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'a': 10, 'b': 11, 'c': 12, 'd': 13, 'e': 14, 'f': 15}
 	offsets = []int{0, 9, 14, 19, 24, 37}
 	checker = []byte{
 		'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x',
@@ -55,8 +54,14 @@ var (
 	errSize   = errors.New("uuid: invalid size")
 	mu        sync.Mutex
 	last      uint64
-	lastts    uint64
 )
+
+func Nil() UUID {
+	return UUID{}
+}
+func Max() UUID {
+	return UUID{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+}
 
 func New(extra ...bool) (out UUID) {
 	v7 := false
@@ -71,19 +76,22 @@ func New(extra ...bool) (out UUID) {
 		msec := nsec / 1000000
 		sub := nsec - (1000000 * msec)
 		ts := ((1000*sec + msec) << 12) + ((sub * 4096) / 1000000)
-		if last <= sec && ts <= lastts {
-			ts = lastts + 1
+		if ts <= last {
+			ts = last + 1
 		}
-		last = sec
-		lastts = ts
+		last = ts
 		mu.Unlock()
 
 		binary.BigEndian.PutUint64(out[0:8], ((ts<<4)&0xffff_ffff_ffff_0000)|(ts&0x0ffff))
 		out[6] = (out[6] & 0x0f) | 0x70
-		_, _ = rand.Read(out[8:])
+		if _, err := rand.Read(out[8:]); err != nil {
+			panic("uuid: entropy source failure")
+		}
 
 	} else {
-		_, _ = rand.Read(out[:])
+		if _, err := rand.Read(out[:]); err != nil {
+			panic("uuid: entropy source failure")
+		}
 		out[6] = (out[6] & 0x0f) | 0x40
 	}
 	out[8] = (out[8] & 0x3f) | 0x80
@@ -91,15 +99,27 @@ func New(extra ...bool) (out UUID) {
 	return
 }
 
-func Check(in string) bool {
+func CheckStrict(in string) bool {
+	return Check(in, true)
+}
+
+func Check(in string, extra ...bool) bool {
 	if len(in) != 36 {
 		return false
 	}
+
+	// Nil and Max uuids check ok in non-strict mode
+	if len(extra) == 0 || !extra[0] {
+		if in == "00000000-0000-0000-0000-000000000000" || in == "ffffffff-ffff-ffff-ffff-ffffffffffff" {
+			return true
+		}
+	}
+
 	for i := 0; i < 36; i++ {
 		c := in[i]
 		switch checker[i] {
 		case 'x':
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
 				return false
 			}
 
@@ -109,12 +129,12 @@ func Check(in string) bool {
 			}
 
 		case 'v':
-			if c != '4' && c != '7' {
+			if c < '1' || c > '8' || c == '2' {
 				return false
 			}
 
 		case 'f':
-			if c != '8' && c != '9' && c != 'a' && c != 'A' && c != 'b' && c != 'B' {
+			if c != '8' && c != '9' && c != 'a' && c != 'b' {
 				return false
 			}
 		}
@@ -157,8 +177,8 @@ func FromBytes(in []byte) (out UUID, err error) {
 		return out, errSize
 	}
 	copy(out[:], in)
-	if !Check(out.String()) {
-		return zero, errFormat
+	if !CheckStrict(out.String()) {
+		return out, errFormat
 	}
 
 	return
@@ -201,18 +221,18 @@ func (u UUID) Encode() string {
 
 func Decode(in string) (out UUID, err error) {
 	if len(in) != 22 {
-		return zero, errFormat
+		return out, errFormat
 	}
 
 	value := big.NewInt(0)
 	for _, c := range in {
 		if c > 0xff || ubase58[c] == 0xff {
-			return zero, errFormat
+			return out, errFormat
 		}
 		value.Mul(value, base)
 		value.Add(value, big.NewInt(int64(ubase58[c])))
 		if value.Cmp(over) > 0 {
-			return zero, errFormat
+			return out, errFormat
 		}
 	}
 
@@ -221,8 +241,8 @@ func Decode(in string) (out UUID, err error) {
 		bytes = append(make([]byte, 16-len(bytes)), bytes...)
 	}
 	copy(out[:], bytes)
-	if !Check(out.String()) {
-		return zero, errFormat
+	if !CheckStrict(out.String()) {
+		return out, errFormat
 	}
 
 	return
