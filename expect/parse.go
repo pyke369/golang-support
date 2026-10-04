@@ -11,6 +11,12 @@ import (
 	"github.com/pyke369/golang-support/rcache"
 )
 
+var (
+	indexMatcher = rcache.Get(`^\[(\d+)\]$`)
+	rangeMatcher = rcache.Get(`^\[(-?\d+(?:,-?\d+)*|(\d+)-(\d+)|\*)\]$`)
+	nodeMatcher  = rcache.Get(`^<([^\s>]+).*>$`)
+)
+
 func flattenJSON(in []any) (out any) {
 	for _, element := range in {
 		if fields, ok := element.(map[string]any); ok {
@@ -89,10 +95,10 @@ func ParseJSON(in string) (out map[string]any) {
 	return
 }
 
-func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
+func nextXML(in any, path []string) (out, parent any) {
 	out, parent = in, in
 	for _, part := range path {
-		if captures := matcher.FindStringSubmatch(part); captures != nil {
+		if captures := indexMatcher.FindStringSubmatch(part); captures != nil {
 			index, _ := strconv.Atoi(captures[1])
 			if value, ok := out.([]any); !ok || index >= len(value) {
 				return nil, nil
@@ -118,7 +124,6 @@ func nextXML(matcher *regexp.Regexp, in any, path []string) (out, parent any) {
 func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 	var (
 		data        []byte
-		matcher     = rcache.Get(`^\[(\d+)\]$`)
 		empty, skip = false, true
 		raw         = []string{}
 	)
@@ -132,18 +137,22 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 			skip = value
 		}
 		if value, ok := extra[0]["raw"].([]string); ok {
-			raw = value
+			raw = value[:min(16, len(value))]
 		}
 	}
 	if skip && len(in) >= 2 {
-		if captures := rcache.Get(`^<([^\s>]+).*>$`).FindStringSubmatch(in[0]); len(captures) >= 2 && strings.HasPrefix(in[len(in)-1], "</"+captures[1]) {
+		if captures := nodeMatcher.FindStringSubmatch(in[0]); len(captures) >= 2 && strings.HasPrefix(in[len(in)-1], "</"+captures[1]) {
 			in = in[1 : len(in)-1]
 		}
 	}
 	content := strings.Join(in, "\n")
 	for _, tag := range raw {
-		content = rcache.Get(`(?i)(<`+regexp.QuoteMeta(strings.TrimSpace(tag))+`[^>]*>)`).ReplaceAllString(content, "${1}<![CDATA[")
-		content = rcache.Get(`(?i)(</`+regexp.QuoteMeta(strings.TrimSpace(tag))+`>)`).ReplaceAllString(strings.ReplaceAll(content, "]]>", ""), "]]>${1}")
+		if matcher, err := rcache.GetErr(`(?i)(<` + regexp.QuoteMeta(strings.TrimSpace(tag)) + `[^>]*>)`); err == nil {
+			content = matcher.ReplaceAllString(content, "${1}<![CDATA[")
+		}
+		if matcher, err := rcache.GetErr(`(?i)(</` + regexp.QuoteMeta(strings.TrimSpace(tag)) + `>)`); err == nil {
+			content = matcher.ReplaceAllString(strings.ReplaceAll(content, "]]>", ""), "]]>${1}")
+		}
 	}
 
 	path, decoder := []string{}, xml.NewDecoder(strings.NewReader(content))
@@ -156,7 +165,7 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 		switch node := token.(type) {
 		case xml.StartElement:
 			name := node.Name.Local
-			if current, _ := nextXML(matcher, out, path); current != nil {
+			if current, _ := nextXML(out, path); current != nil {
 				element := map[string]any{}
 				for _, attribute := range node.Attr {
 					if !strings.HasPrefix(attribute.Name.Local, "xmlns") {
@@ -187,13 +196,13 @@ func ParseXML(in []string, extra ...map[string]any) (out map[string]any) {
 			steps, last, index := 0, "", 0
 			if len(path) >= 1 {
 				steps, last = 1, path[len(path)-1]
-				if captures := matcher.FindStringSubmatch(last); captures != nil && len(path) >= 2 {
+				if captures := indexMatcher.FindStringSubmatch(last); captures != nil && len(path) >= 2 {
 					steps, last = 2, path[len(path)-2]
 					index, _ = strconv.Atoi(captures[1])
 				}
 			}
 
-			if current, parent := nextXML(matcher, out, path); current != nil && steps != 0 {
+			if current, parent := nextXML(out, path); current != nil && steps != 0 {
 				if len(data) != 0 {
 					if value, ok := current.(map[string]any); ok && len(value) != 0 {
 						value["#data"] = string(data)
@@ -241,8 +250,9 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 	separator := "/"
 	out = map[string]any{}
 	if matcher == nil {
-		matcher = rcache.Get(`^\[(-?\d+(?:,-?\d+)*|(\d+)-(\d+)|\*)\]$`)
+		matcher = rangeMatcher
 	}
+
 	for key, path := range mapping {
 		out[key] = nil
 		parts, current := strings.Split(strings.Trim(path, separator), separator), in
@@ -310,10 +320,12 @@ func Mapper(matcher *regexp.Regexp, in any, mapping map[string]string) (out map[
 			} else {
 				if next, ok := current.(map[string]any); ok {
 					if part[0] == '~' {
-						imatcher, indexes := rcache.Get(strings.TrimSpace(part[1:])), []string{}
-						for index := range next {
-							if imatcher.MatchString(index) {
-								indexes = append(indexes, index)
+						indexes := []string{}
+						if matcher, err := rcache.GetErr(strings.TrimSpace(strings.TrimPrefix(part, "~"))); err == nil {
+							for index := range next {
+								if matcher.MatchString(index) {
+									indexes = append(indexes, index)
+								}
 							}
 						}
 						if len(indexes) > 1 {

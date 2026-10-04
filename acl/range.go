@@ -1,10 +1,11 @@
 package acl
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pyke369/golang-support/rcache"
 )
 
 type timeRange struct {
@@ -14,9 +15,9 @@ type timeRange struct {
 }
 
 var (
-	dateMatcher = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})?(-)?(\d{4}-\d{2}-\d{2})?$`)
-	dayMatcher  = regexp.MustCompile(`^(mon|tue|wed|thu|fri|sat|sun)?(-)?(mon|tue|wed|thu|fri|sat|sun)?$`)
-	timeMatcher = regexp.MustCompile(`^(?:(\d{2}):(\d{2}))?(-)?(?:(\d{2}):(\d{2}))?$`)
+	dateMatcher = rcache.Get(`^(\d{4}-\d{2}-\d{2})?(-)?(\d{4}-\d{2}-\d{2})?$`)
+	dayMatcher  = rcache.Get(`^(mon|tue|wed|thu|fri|sat|sun)?(-)?(mon|tue|wed|thu|fri|sat|sun)?$`)
+	timeMatcher = rcache.Get(`^(?:(\d{2}):(\d{2}))?(-)?(?:(\d{2}):(\d{2}))?$`)
 	days        = map[string]int{"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
 )
 
@@ -117,12 +118,11 @@ func Ranges(now time.Time, values []string) bool {
 			}
 		}
 
-		if !invalid && ((!entry.dates[0].IsZero() || !entry.dates[1].IsZero()) || (entry.days[0] != 0 || entry.days[1] != 0) || (entry.times[0] != 0 || entry.times[1] != 0)) {
+		if !invalid && ((!entry.dates[0].IsZero() || !entry.dates[1].IsZero()) || (entry.days[0] != 0 || entry.days[1] != 0) || (entry.times[0] != -1 || entry.times[1] != -1)) {
 			ranges = append(ranges, entry)
 		}
 	}
 
-	now = now.UTC()
 	day, stamp := int(now.Weekday()), now.Hour()*3600+now.Minute()*60+now.Second()
 	if day == 0 {
 		day = 7

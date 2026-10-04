@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-func CIDR(in string, values []string) bool {
+func CIDR(in string, values []string) (pass bool, err error) {
 	if len(values) == 0 {
-		return false
+		return false, nil
 	}
 
 	if value, err := netip.ParseAddrPort(in); err == nil {
 		in = value.Addr().String()
 	}
 	if remote, err := netip.ParseAddr(in); err == nil {
-		remote = remote.Unmap()
+		remote = remote.Unmap().WithZone("")
 		for _, value := range values {
 			value = strings.TrimSpace(value)
 			if _, err := netip.ParsePrefix(value); err != nil {
@@ -37,11 +37,14 @@ func CIDR(in string, values []string) bool {
 					}
 				}
 				if prefix.Contains(remote) {
-					return true
+					return true, nil
 				}
+
+			} else {
+				return false, err
 			}
 		}
 	}
 
-	return false
+	return false, nil
 }

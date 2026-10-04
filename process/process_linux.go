@@ -20,7 +20,11 @@ type TASK struct {
 }
 
 func Task(in string) (out []*TASK) {
-	matcher := rcache.Get(in)
+	matcher, err := rcache.GetErr(in)
+	if err != nil {
+		return
+	}
+
 	if entries, err := filepath.Glob("/proc/[0-9]*"); err == nil {
 		for _, entry := range entries {
 			if content, err := os.ReadFile(filepath.Join(entry, "cmdline")); err == nil && len(content) != 0 {

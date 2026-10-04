@@ -5,19 +5,60 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
-var matcher = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+var (
+	commandMatcher = rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+)
+
+func CheckCommand(reader io.Reader, length int, command string) (err error) {
+	decoder, depth := xml.NewDecoder(reader), 1
+
+	token, err := decoder.Token()
+	if err != nil {
+		return ustr.Wrap(err, "expect")
+	}
+	if value, ok := token.(xml.StartElement); !ok || value.Name.Local != command {
+		return errors.New("expect: invalid root element")
+	}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return ustr.Wrap(err, "expect")
+			}
+			break
+		}
+		switch token.(type) {
+		case xml.StartElement:
+			depth++
+
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return errors.New("expect: unbalanced elements")
+			}
+			if depth == 0 && decoder.InputOffset() < int64(length-1) {
+				return errors.New("expect: root element early closing")
+			}
+
+		case xml.Directive, xml.ProcInst:
+			return errors.New("expect: directives not allowed")
+		}
+	}
+
+	return nil
+}
 
 func BuildCommand(command string, extra ...any) (out string, err error) {
 	var b bytes.Buffer
 
-	if !matcher.MatchString(command) {
+	if !commandMatcher.MatchString(command) {
 		return "", errors.New("expect: invalid command")
 	}
 	b.WriteString("<" + command)
@@ -25,7 +66,7 @@ func BuildCommand(command string, extra ...any) (out string, err error) {
 		if attributes, ok := extra[1].(map[string]string); ok {
 			keys := []string{}
 			for key := range attributes {
-				if !matcher.MatchString(key) {
+				if !commandMatcher.MatchString(key) {
 					return "", errors.New("expect: invalid command attribute")
 				}
 				keys = append(keys, key)
@@ -51,32 +92,8 @@ func BuildCommand(command string, extra ...any) (out string, err error) {
 
 	b.WriteString("</" + command + ">\n")
 
-	decoder, depth := xml.NewDecoder(bytes.NewReader(b.Bytes())), 1
-	token, err := decoder.Token()
-	if err != nil {
+	if err := CheckCommand(bytes.NewReader(b.Bytes()), b.Len(), command); err != nil {
 		return "", ustr.Wrap(err, "expect")
-	}
-	if value, ok := token.(xml.StartElement); !ok || value.Name.Local != command {
-		return "", errors.New("expect: invalid XML root element")
-	}
-	for {
-		token, err := decoder.Token()
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return "", ustr.Wrap(err, "expect")
-			}
-			break
-		}
-		switch token.(type) {
-		case xml.StartElement:
-			depth++
-
-		case xml.EndElement:
-			depth--
-			if depth <= 0 && decoder.InputOffset() < int64(b.Len()-1) {
-				return "", errors.New("expect: XML root element early closing")
-			}
-		}
 	}
 
 	return b.String(), nil

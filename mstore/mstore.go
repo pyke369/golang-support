@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 
 	"golang.org/x/sys/unix"
@@ -138,8 +138,8 @@ var (
 		"raw":        AggregateRaw,
 	}
 
-	nameMatcher  = regexp.MustCompile(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
-	monthMatcher = regexp.MustCompile(`^(\d{4})-(\d{2})$`)
+	nameMatcher  = rcache.Get(`^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$`)
+	monthMatcher = rcache.Get(`^(\d{4})-(\d{2})$`)
 )
 
 func (s *Store) chunk(m *metric, path string, size int64, extra ...bool) (data []byte, err error) {

@@ -23,19 +23,36 @@ func RandKey(size int, extra ...string) (out string, err error) {
 	if size <= 0 || size > 256 {
 		return "", errors.New("uhash: invalid size")
 	}
-	encoding := "hex"
+	encoding, raw := "hex", false
 	if len(extra) != 0 {
-		encoding = strings.ToLower(extra[0])
+		value := strings.ToLower(extra[0])
+		if strings.Contains(value, "raw") {
+			raw = true
+		}
+		if strings.Contains(value, "std") {
+			encoding = "std"
+		}
+		if strings.Contains(value, "url") {
+			encoding = "url"
+		}
 	}
 
 	value := make([]byte, size)
 	_, _ = rand.Read(value)
 	switch encoding {
 	case "std":
-		out = base64.RawStdEncoding.EncodeToString(value)
+		if raw {
+			out = base64.RawStdEncoding.EncodeToString(value)
+		} else {
+			out = base64.StdEncoding.EncodeToString(value)
+		}
 
 	case "url":
-		out = base64.RawURLEncoding.EncodeToString(value)
+		if raw {
+			out = base64.RawURLEncoding.EncodeToString(value)
+		} else {
+			out = base64.URLEncoding.EncodeToString(value)
+		}
 
 	default:
 		out = hex.EncodeToString(value)

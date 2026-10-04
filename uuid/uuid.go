@@ -55,7 +55,6 @@ var (
 	errSize   = errors.New("uuid: invalid size")
 	mu        sync.Mutex
 	last      uint64
-	lastts    uint64
 )
 
 func New(extra ...bool) (out UUID) {
@@ -71,11 +70,10 @@ func New(extra ...bool) (out UUID) {
 		msec := nsec / 1000000
 		sub := nsec - (1000000 * msec)
 		ts := ((1000*sec + msec) << 12) + ((sub * 4096) / 1000000)
-		if last <= sec && ts <= lastts {
-			ts = lastts + 1
+		if ts <= last {
+			ts = last + 1
 		}
-		last = sec
-		lastts = ts
+		last = ts
 		mu.Unlock()
 
 		binary.BigEndian.PutUint64(out[0:8], ((ts<<4)&0xffff_ffff_ffff_0000)|(ts&0x0ffff))

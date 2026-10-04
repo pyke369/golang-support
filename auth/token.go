@@ -15,12 +15,12 @@ import (
 	"errors"
 	"maps"
 	"math/big"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	j "github.com/pyke369/golang-support/jsonrpc"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -42,7 +42,7 @@ var (
 		string(AlgES256): AlgES256,
 		string(AlgEDDSA): AlgEDDSA,
 	}
-	claimMatcher = regexp.MustCompile(`^[0-9a-zA-Z_]{3,64}$`)
+	claimMatcher = rcache.Get(`^[0-9a-zA-Z_]{3,64}$`)
 )
 
 func TokenEncode(kid, key string, alg Alg, expire time.Time, claims map[string]any) (out string, err error) {
@@ -135,7 +135,7 @@ func TokenEncode(kid, key string, alg Alg, expire time.Time, claims map[string]a
 			signature, err = rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 
 		} else {
-			signature, err = rsa.SignPSS(rand.Reader, key, crypto.SHA256, sum[:], &rsa.PSSOptions{SaltLength: 32})
+			signature, err = rsa.SignPSS(rand.Reader, key, crypto.SHA256, sum[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
 		}
 		if err != nil {
 			return "", ustr.Wrap(err, "auth")
@@ -189,20 +189,20 @@ func TokenEncode(kid, key string, alg Alg, expire time.Time, claims map[string]a
 	return string(token), nil
 }
 
-func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ...time.Duration) (out map[string]any, err error) {
+func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ...any) (out map[string]any, err error) {
 	if len(token) > 4<<10 {
 		return nil, errors.New("auth: size exceeded")
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("auth: no key provided")
+		return nil, errors.New("auth: missing key")
 	}
 	if claims == nil {
-		return nil, errors.New("auth: no claim provided")
+		return nil, errors.New("auth: missing claims")
 	}
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("auth: invalid token format")
+		return nil, errors.New("auth: invalid format")
 	}
 
 	decoded, err := base64.RawURLEncoding.DecodeString(parts[0])
@@ -214,29 +214,37 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 		return nil, ustr.Wrap(err, "auth")
 	}
 	if header["crit"] != nil {
-		return nil, errors.New("auth: crit not supported")
+		return nil, errors.New("auth: unsupported crit claim")
 	}
 	if j.String(header["typ"]) != "JWT" {
-		return nil, errors.New("auth: invalid 'typ' claim")
+		return nil, errors.New("auth: invalid typ claim")
 	}
 	alg, exists := algs[j.String(header["alg"])]
 	if !exists {
-		return nil, errors.New("auth: unsupported 'alg' claim")
+		return nil, errors.New("auth: unsupported alg")
+	}
+	if len(extra) > 1 {
+		if value, ok := extra[1].(Alg); !ok || alg != value {
+			return nil, errors.New("auth: alg mismatch")
+		}
 	}
 	if _, exists := keys[alg]; !exists {
 		return nil, errors.New("auth: invalid key")
 	}
 
 	kid, key := j.String(header["kid"]), ""
+	if kid != "" && !claimMatcher.MatchString(kid) {
+		return nil, errors.New("auth: invalid kid claim")
+	}
 	if kmap := j.StringMap(keys[alg]); len(kmap) != 0 {
 		if kid == "" {
-			return nil, errors.New("auth: invalid 'kid' claim")
+			return nil, errors.New("auth: invalid kid claim")
 		}
 		key = strings.TrimSpace(kmap[kid])
 
 	} else {
 		if kid != "" {
-			return nil, errors.New("auth: invalid 'kid' claim")
+			return nil, errors.New("auth: invalid kid claim")
 		}
 		key = strings.TrimSpace(j.String(keys[alg]))
 	}
@@ -280,7 +288,7 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 					}
 
 				case AlgEDDSA:
-					if key, ok := key.(ed25519.PublicKey); ok && len(decoded) == 64 {
+					if key, ok := key.(ed25519.PublicKey); ok && len(key) == ed25519.PublicKeySize && len(decoded) == ed25519.SignatureSize {
 						pass = ed25519.Verify(key, input, decoded)
 					}
 				}
@@ -311,16 +319,21 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 
 	skew := 30 * time.Second
 	if len(extra) != 0 {
-		skew = max(0, min(2*time.Minute, extra[0]))
+		if value, ok := extra[0].(time.Duration); ok {
+			skew = max(0, min(2*time.Minute, value))
+
+		} else {
+			return nil, errors.New("auth: invalid skew")
+		}
 	}
 	if time.Now().Add(skew).Before(time.Unix(int64(iat), 0)) {
-		return nil, errors.New("auth: invalid 'iat' claim")
+		return nil, errors.New("auth: invalid iat")
 	}
 	if time.Now().Add(-skew).After(time.Unix(int64(exp), 0)) {
 		return nil, errors.New("auth: expired")
 	}
 	if exp <= iat || exp-iat > 3600*24*365 {
-		return nil, errors.New("auth: invalid 'exp' claim")
+		return nil, errors.New("auth: invalid exp claim")
 	}
 	if value := j.Number(rclaims["nbf"]); value != 0 {
 		if time.Now().Add(skew).Before(time.Unix(int64(value), 0)) {
@@ -328,7 +341,7 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 		}
 	}
 	if j.String(claims["iss"]) != iss {
-		return nil, errors.New("auth: invalid 'iss' claim")
+		return nil, errors.New("auth: invalid iss claim")
 	}
 	pass = false
 	for _, value := range j.StringSlice(claims["aud"], true) {
@@ -338,7 +351,7 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 		}
 	}
 	if !pass {
-		return nil, errors.New("auth: invalid 'aud' claim")
+		return nil, errors.New("auth: invalid aud claim")
 	}
 
 	for k, v := range claims {
@@ -347,7 +360,7 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 		}
 		claim := j.StringSlice(rclaims[k], true)
 		if len(claim) == 0 {
-			return nil, errors.New("auth: missing '" + k + "' claim")
+			return nil, errors.New("auth: missing " + k + " claim")
 		}
 		pass = false
 		for _, value := range j.StringSlice(v, true) {
@@ -357,7 +370,7 @@ func TokenDecode(token string, keys map[Alg]any, claims map[string]any, extra ..
 			}
 		}
 		if !pass {
-			return nil, errors.New("auth: invalid '" + k + "' claim")
+			return nil, errors.New("auth: invalid " + k + " claim")
 		}
 	}
 

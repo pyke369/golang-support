@@ -74,7 +74,7 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 	if c.options.Proxy != nil && !c.proxied.Swap(true) {
 		if n >= 16 && bytes.Equal(b[:12], proxyHeader) {
 			size, offset := 16+int(binary.BigEndian.Uint16(b[14:])), 16
-			if n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
+			if size > len(b) || n < size || (b[12] != 0x20 && b[12] != 0x21) || (b[12] == 0x21 && b[13] != 0x11 && b[13] != 0x21) {
 				c.Close()
 				return 0, net.ErrClosed
 			}
@@ -191,6 +191,9 @@ func (c *TCPConn) Read(b []byte) (n int, err error) {
 									end := min(offset+2+int(binary.BigEndian.Uint16(b[offset:])), n)
 									offset += 2
 									for offset < end-4 { // extensions
+										if length < 0 || offset+4+length > end {
+											break
+										}
 										key, length := int(binary.BigEndian.Uint16(b[offset:])), int(binary.BigEndian.Uint16(b[offset+2:]))
 										if key == 0x0000 { // SNI
 											if length < 5 || offset+4+length >= end {

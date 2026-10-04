@@ -19,6 +19,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var (
+	environMatcher = rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+)
+
 func Self() string {
 	if path, err := os.Executable(); err == nil {
 		return path
@@ -57,9 +61,8 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 			cmd.Stdin = value
 		}
 		if value, ok := extra[0]["environ"].(map[string]string); ok {
-			matcher := rcache.Get(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 			for key, value := range value {
-				if matcher.MatchString(key) && !strings.Contains(value, "\x00") {
+				if environMatcher.MatchString(key) && !strings.Contains(value, "\x00") {
 					cmd.Env = append(cmd.Env, key+"="+value)
 				}
 			}
@@ -71,7 +74,10 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 			options = ustr.Options(value)
 		}
 		if value, ok := extra[0]["match"].(string); ok {
-			matcher = rcache.Get(strings.TrimSpace(value))
+			matcher, err = rcache.GetErr(strings.TrimSpace(value))
+			if err != nil {
+				return nil, ustr.Wrap(err, "process")
+			}
 			if value, ok := extra[0]["separator"].(string); ok {
 				capture, separator = true, value
 			}
@@ -80,12 +86,12 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 
 	if combined {
 		if content, err = cmd.CombinedOutput(); err != nil {
-			return nil, err
+			return nil, ustr.Wrap(err, "process")
 		}
 
 	} else {
 		if content, err = cmd.Output(); err != nil {
-			return nil, err
+			return nil, ustr.Wrap(err, "process")
 		}
 	}
 
@@ -93,11 +99,11 @@ func Exec(command string, params []string, extra ...map[string]any) (lines []str
 		var data any
 
 		if err := json.Unmarshal(content, &data); err != nil {
-			return nil, err
+			return nil, ustr.Wrap(err, "process")
 		}
 		content, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
-			return nil, err
+			return nil, ustr.Wrap(err, "process")
 		}
 		return strings.Split(string(content), "\n"), nil
 	}

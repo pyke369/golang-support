@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	u "net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pyke369/golang-support/bslab"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 	"golang.org/x/net/http/httpproxy"
@@ -86,7 +86,7 @@ type Socket struct {
 }
 
 var (
-	splitter = regexp.MustCompile("[, ]+")
+	splitter = rcache.Get("[, ]+")
 	proxy    func(*u.URL) (*u.URL, error)
 	gnow     int64
 )
@@ -103,28 +103,8 @@ func init() {
 }
 
 func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
-	if config == nil {
-		config = &Config{}
-	}
-	if config.Proxy == nil {
-		config.Proxy = proxy
-	}
-	config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
-	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-	config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
-	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-	if config.ReadBufferSize != 0 {
-		config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
-	}
-	if config.WriteBufferSize != 0 {
-		config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
-	}
-	if config.Arena == nil {
-		config.Arena = bslab.Default
-	}
+	config = normalize(config)
+
 	endpoint = strings.Replace(strings.Replace(endpoint, "ws:", "http:", 1), "wss:", "https:", 1)
 	url, err := u.Parse(endpoint)
 	if err != nil {
@@ -175,20 +155,15 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		}
 	}
 	if scheme == "https" {
-		if config.TLSConfig == nil {
-			config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-
-		} else {
-			config.TLSConfig = config.TLSConfig.Clone()
-		}
-		config.TLSConfig.MinVersion = tls.VersionTLS13
-		if config.TLSConfig.ServerName == "" {
-			config.TLSConfig.ServerName = address
+		tconfig := config.TLSConfig.Clone()
+		tconfig.MinVersion = tls.VersionTLS13
+		if tconfig.ServerName == "" {
+			tconfig.ServerName = address
 			if value, _, err := net.SplitHostPort(address); err == nil {
-				config.TLSConfig.ServerName = value
+				tconfig.ServerName = value
 			}
 		}
-		conn = tls.Client(conn, config.TLSConfig)
+		conn = tls.Client(conn, tconfig)
 		if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 			conn.Close()
 			return nil, ustr.Wrap(err, "uws")
@@ -243,15 +218,10 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 		}
 
 		if url.Scheme == "https" {
-			if config.TLSConfig == nil {
-				config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-
-			} else {
-				config.TLSConfig = config.TLSConfig.Clone()
-			}
-			config.TLSConfig.MinVersion = tls.VersionTLS13
-			config.TLSConfig.ServerName = host
-			conn = tls.Client(conn, config.TLSConfig)
+			tconfig := config.TLSConfig.Clone()
+			tconfig.MinVersion = tls.VersionTLS13
+			tconfig.ServerName = host
+			conn = tls.Client(conn, tconfig)
 			if err := conn.(*tls.Conn).HandshakeContext(ctx); err != nil {
 				conn.Close()
 				return nil, ustr.Wrap(err, "uws")
@@ -313,9 +283,8 @@ func Dial(endpoint, origin string, config *Config) (ws *Socket, err error) {
 }
 
 func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bool, ws *Socket) {
-	if config == nil {
-		config = &Config{}
-	}
+	config = normalize(config)
+
 	if strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") && strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
 		handled = true
 		if r.Method != http.MethodGet {
@@ -357,10 +326,11 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 			}
 		}
 		origin := r.Header.Get("Origin")
-		if strings.EqualFold(origin, "null") {
-			origin = ""
-		}
 		if config.OriginHandler == nil {
+			if strings.EqualFold(origin, "null") {
+				rw.WriteHeader(http.StatusForbidden)
+				return
+			}
 			url, err := u.Parse(origin)
 			if err != nil || url.Scheme == "" || url.Host == "" || (url.Scheme == "https" && r.TLS == nil) || (url.Scheme == "http" && r.TLS != nil) || !strings.EqualFold(url.Host, r.Host) {
 				rw.WriteHeader(http.StatusForbidden)
@@ -379,24 +349,6 @@ func Handle(rw http.ResponseWriter, r *http.Request, config *Config) (handled bo
 		rw.WriteHeader(http.StatusSwitchingProtocols)
 		if conn, reader, err := rw.(http.Hijacker).Hijack(); err == nil {
 			_ = conn.SetDeadline(time.Time{})
-			if config == nil {
-				config = &Config{}
-			}
-			config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
-			config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
-			config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
-			config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
-			config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
-			config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
-			if config.ReadBufferSize != 0 {
-				config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
-			}
-			if config.WriteBufferSize != 0 {
-				config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
-			}
-			if config.Arena == nil {
-				config.Arena = bslab.Default
-			}
 			if tconn, ok := conn.(*net.TCPConn); ok {
 				if config.ReadBufferSize != 0 {
 					tconn.SetReadBuffer(config.ReadBufferSize)
@@ -538,7 +490,7 @@ func (s *Socket) receive(buffered io.Reader) {
 
 	fin, opcode, bcontrol, size, mask, smask := byte(0), byte(0), false, -1, make([]byte, 4), 0
 	seen, code, dmode, dsize, doffset, dlast := atomic.LoadInt64(&gnow), 0, byte(0), 0, 0, false
-	roffset, woffset, read, buffer := 0, 0, 0, bslab.Get(s.config.ReadSize)
+	roffset, woffset, read, buffer := 0, 0, 0, s.config.Arena.Get(s.config.ReadSize)
 	buffer = buffer[:cap(buffer)]
 	if !s.client {
 		smask += 4
@@ -654,7 +606,8 @@ close:
 				if size >= 0 {
 					if !bcontrol && dmode != 0 {
 						if data == nil {
-							data = s.config.Arena.Get(dsize)
+							data = s.config.Arena.Get(max(1, dsize))
+							data = data[:0]
 						}
 						highest := min(woffset-roffset, size)
 						if len(data)+highest > s.config.MessageSize {
@@ -688,7 +641,7 @@ close:
 
 					} else {
 						if control == nil {
-							control = bslab.Get(132)
+							control = s.config.Arena.Get(132)
 						}
 						highest := min(woffset-roffset, size)
 						control = append(control, buffer[roffset:roffset+highest]...)
@@ -719,7 +672,7 @@ close:
 									break close
 								}
 							}
-							bslab.Put(control)
+							s.config.Arena.Put(control)
 							size, control = -1, nil
 						}
 					}
@@ -758,14 +711,52 @@ close:
 			break close
 		}
 	}
-	bslab.Put(buffer)
+	s.config.Arena.Put(buffer)
 	if control != nil {
-		bslab.Put(control)
+		s.config.Arena.Put(control)
 	}
 	if data != nil {
 		s.config.Arena.Put(data)
 	}
 	s.Close(code)
+}
+
+func normalize(config *Config) *Config {
+	cval := func(value, fallback, lowest, highest int) int {
+		if value == 0 {
+			value = fallback
+		}
+
+		return min(max(value, lowest), highest)
+	}
+
+	if config == nil {
+		config = &Config{}
+	}
+	if config.Proxy == nil {
+		config.Proxy = proxy
+	}
+	if config.TLSConfig == nil {
+		config.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+	}
+	config.ReadSize = cval(config.ReadSize, 64<<10, 4<<10, 1<<20)
+	config.FragmentSize = cval(config.FragmentSize, 64<<10, 4<<10, 1<<20)
+	config.MessageSize = cval(config.MessageSize, 64<<10, 4<<10, 4<<20)
+	config.ConnectTimeout = time.Duration(cval(int(config.ConnectTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.ProbeTimeout = time.Duration(cval(int(config.ProbeTimeout), int(15*time.Second), int(1*time.Second), int(30*time.Second)))
+	config.InactiveTimeout = time.Duration(cval(int(config.InactiveTimeout), int(3*config.ProbeTimeout), int(config.ProbeTimeout+time.Second), int(5*config.ProbeTimeout)))
+	config.WriteTimeout = time.Duration(cval(int(config.WriteTimeout), int(10*time.Second), int(1*time.Second), int(30*time.Second)))
+	if config.ReadBufferSize != 0 {
+		config.ReadBufferSize = cval(config.ReadBufferSize, 1<<20, 4<<10, 4<<20)
+	}
+	if config.WriteBufferSize != 0 {
+		config.WriteBufferSize = cval(config.WriteBufferSize, 1<<20, 4<<10, 4<<20)
+	}
+	if config.Arena == nil {
+		config.Arena = bslab.Default
+	}
+
+	return config
 }
 
 func rmask() []byte {
@@ -775,20 +766,12 @@ func rmask() []byte {
 	return value
 }
 
-func cval(value, fallback, lowest, highest int) int {
-	if value == 0 {
-		value = fallback
-	}
-
-	return min(max(value, lowest), highest)
-}
-
 func xor(mask, data []byte) {
 	if len(mask) == 0 || len(data) == 0 {
 		return
 	}
 
-	smask := bytes.Repeat(mask, max(len(mask), min(4<<10, len(data)))/len(mask))
+	smask := bytes.Repeat(mask, max(len(mask), min(64, len(data)))/len(mask))
 	for index := 0; index < len(data); index += len(smask) {
 		subtle.XORBytes(data[index:], data[index:], smask)
 	}

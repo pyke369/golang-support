@@ -2,6 +2,7 @@ package dynacert
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 )
 
@@ -30,12 +32,13 @@ type dynacert struct {
 	certs  []*cert
 	reload chan struct{}
 	done   chan struct{}
+	exited chan struct{}
 }
 
 func New() (d *dynacert) {
-	d = &dynacert{reload: make(chan struct{}, 1), done: make(chan struct{})}
+	d = &dynacert{reload: make(chan struct{}, 1), done: make(chan struct{}), exited: make(chan struct{})}
 	go func(d *dynacert) {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		for {
 			select {
 			case <-d.reload:
@@ -44,6 +47,7 @@ func New() (d *dynacert) {
 
 			case <-d.done:
 				ticker.Stop()
+				close(d.exited)
 				return
 			}
 
@@ -53,9 +57,14 @@ func New() (d *dynacert) {
 			for _, entry := range certs {
 				if entry.public != "" && entry.private != "" {
 					if info, err := os.Stat(entry.public); err == nil {
-						if info.ModTime().Unix() != atomic.LoadInt64(&entry.modified) {
+						if info.ModTime().UnixNano() != atomic.LoadInt64(&entry.modified) {
 							if value, err := tls.LoadX509KeyPair(entry.public, entry.private); err == nil {
-								atomic.StoreInt64(&entry.modified, info.ModTime().Unix())
+								if value.Leaf == nil && len(value.Certificate) > 0 {
+									if leaf, err := x509.ParseCertificate(value.Certificate[0]); err == nil {
+										value.Leaf = leaf
+									}
+								}
+								atomic.StoreInt64(&entry.modified, info.ModTime().UnixNano())
 								entry.cert.Store(&value)
 							}
 						}
@@ -76,6 +85,7 @@ func New() (d *dynacert) {
 func (d *dynacert) Close() {
 	if !d.closed.Swap(true) {
 		close(d.done)
+		<-d.exited
 	}
 	d.Clear()
 }
@@ -106,10 +116,10 @@ func (d *dynacert) add(match, public, private string, certificate *tls.Certifica
 	}
 	if strings.HasPrefix(match, "~") {
 		rmatch := strings.TrimSpace(strings.TrimPrefix(match, "~"))
-		if rmatch == "" {
-			return errors.New("dynacert: empty matching regexp")
+		if rmatch == "" || len(rmatch) > 256 {
+			return errors.New("dynacert: invalid regexp")
 		}
-		matcher, err = regexp.Compile("^(?:" + strings.TrimSuffix(strings.TrimPrefix(rmatch, "^"), "$") + ")$")
+		matcher, err = rcache.GetErr("^(?:" + strings.TrimRight(strings.TrimLeft(rmatch, "^"), "$") + ")$")
 		if err != nil {
 			return ustr.Wrap(err, "dynacert")
 		}
@@ -158,6 +168,11 @@ func (d *dynacert) Inline(match string, public, private []byte) error {
 	if err != nil {
 		return ustr.Wrap(err, "dynacert")
 	}
+	if value.Leaf == nil && len(value.Certificate) > 0 {
+		if leaf, err := x509.ParseCertificate(value.Certificate[0]); err == nil {
+			value.Leaf = leaf
+		}
+	}
 
 	return d.add(match, "", "", &value)
 }
@@ -176,6 +191,14 @@ func (d *dynacert) Count() int {
 	return len(d.certs)
 }
 
+func valid(c *tls.Certificate) bool {
+	if c == nil || c.Leaf == nil {
+		return false
+	}
+	now := time.Now()
+	return !now.Before(c.Leaf.NotBefore) && !now.After(c.Leaf.NotAfter)
+}
+
 func (d *dynacert) GetCertificate(hello *tls.ClientHelloInfo) (out *tls.Certificate, err error) {
 	var fallback *cert
 
@@ -191,6 +214,9 @@ func (d *dynacert) GetCertificate(hello *tls.ClientHelloInfo) (out *tls.Certific
 		if value, _, err := net.SplitHostPort(name); err == nil {
 			name = value
 		}
+		if len(name) > 253 {
+			name = ""
+		}
 	}
 	for pass := 1; pass <= 2; pass++ {
 		for _, entry := range d.certs {
@@ -202,14 +228,14 @@ func (d *dynacert) GetCertificate(hello *tls.ClientHelloInfo) (out *tls.Certific
 			}
 			if (pass == 1 && entry.matcher == nil && name == entry.match) ||
 				(pass == 2 && entry.matcher != nil && entry.matcher.MatchString(name)) {
-				if value := entry.cert.Load(); value != nil {
+				if value := entry.cert.Load(); valid(value) {
 					return value, nil
 				}
 			}
 		}
 	}
 	if fallback != nil {
-		if value := fallback.cert.Load(); value != nil {
+		if value := fallback.cert.Load(); valid(value) {
 			return value, nil
 		}
 	}

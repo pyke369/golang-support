@@ -6,11 +6,10 @@ A collection of Go utility libraries.
 - dynacert
 - expect
 - file
-- fqdn
 - jsonrpc
 - mstore
-- net
 - multiflag
+- net
 - prefixdb
 - process
 - rcache

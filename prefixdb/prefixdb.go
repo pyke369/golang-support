@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"net/netip"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pyke369/golang-support/file"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
@@ -543,11 +545,12 @@ func (d *PrefixDB) Save(path, description string) (content []byte, err error) {
 }
 
 func (d *PrefixDB) Load(path string) error {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() > 1<<30 {
-		return errors.New("prefixdb: too large")
+	handle, err := os.OpenFile(path, os.O_RDONLY|file.O_NOFOLLOW, 0)
+	if err != nil {
+		return ustr.Wrap(err, "prefixdb")
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(handle, 256<<20))
+	handle.Close()
 	if err != nil {
 		return ustr.Wrap(err, "prefixdb")
 	}
@@ -670,6 +673,9 @@ func (d *PrefixDB) Load(path string) error {
 }
 
 func rpbits(data []byte) (section, index, size int, last bool) {
+	if index < 0 {
+		return 0, 0, 0, true
+	}
 	if len(data) == 0 {
 		return 0, 0, 1, true
 	}
@@ -698,7 +704,7 @@ func rpbits(data []byte) (section, index, size int, last bool) {
 }
 
 func rnbits(bits, index, down int, data []byte) int {
-	if bits >= 8 && bits <= 32 && bits%4 == 0 && (down == 0 || down == 1) && len(data) >= (index+1)*(bits/4) {
+	if index >= 0 && bits >= 8 && bits <= 32 && bits%4 == 0 && (down == 0 || down == 1) && len(data) >= (index+1)*(bits/4) {
 		offset := index * (bits / 4)
 		switch bits {
 		case 8:
@@ -755,7 +761,7 @@ func rbytes(width int, data []byte) (value int) {
 
 func (d *PrefixDB) rstring(index int) string {
 	count, offset, width := d.Strings[1], d.Strings[2], d.Strings[3]
-	if index >= count {
+	if index < 0 || index >= count {
 		return ""
 	}
 	start, end := rbytes(width, d.data[offset+(index*width):]), 0
@@ -773,7 +779,7 @@ func (d *PrefixDB) rstring(index int) string {
 }
 
 func (d *PrefixDB) rnumber(index int) float64 {
-	if index >= d.Numbers[1] {
+	if index < 0 || index >= d.Numbers[1] {
 		return 0.0
 	}
 
@@ -781,7 +787,7 @@ func (d *PrefixDB) rnumber(index int) float64 {
 }
 
 func (d *PrefixDB) rpair(index int, pairs map[string]any) {
-	if index < d.Pairs[1] {
+	if index >= 0 && index < d.Pairs[1] {
 		pair := binary.BigEndian.Uint64(d.data[d.Pairs[2]+(index*8):])
 		if key := d.rstring(int((pair >> 32) & 0x0fffffff)); key != "" {
 			switch (pair & 0xf0000000) >> 28 {

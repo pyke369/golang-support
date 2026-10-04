@@ -9,12 +9,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pyke369/golang-support/file"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 	a2 "golang.org/x/crypto/argon2"
@@ -33,7 +33,7 @@ var (
 	}
 	seqs = [][]rune{
 		[]rune("abcdefghijklmnopqrstuvwxyz"),
-		[]rune("01234567890"),
+		[]rune("0123456789"),
 		[]rune("qwertyuiop"),
 		[]rune("asdfghjkl"),
 		[]rune("zxcvbnm"),
@@ -43,7 +43,7 @@ var (
 	}
 
 	// see https://akkadia.org/drepper/SHA-crypt.txt
-	cryptMatcher = regexp.MustCompile(`^[./0-9A-Za-z]{8,22}$`)
+	cryptMatcher = rcache.Get(`^[./0-9A-Za-z]{8,22}$`)
 	cryptBase64  = base64.NewEncoding("./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz").WithPadding(base64.NoPadding)
 )
 
@@ -295,16 +295,23 @@ func Password(in string, values []string) (pass bool, entry string) {
 		return false, ""
 	}
 	login, password := strings.TrimSpace(parts[0]), parts[1]
+	if len(login) > 64 {
+		return
+	}
 
 	defer func(start time.Time) {
-		if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
-			time.Sleep(400*time.Millisecond - elapsed)
+		if elapsed := time.Since(start); elapsed < time.Second/2 {
+			time.Sleep(time.Second/2 - elapsed + time.Duration(uhash.RandInt(100))*time.Millisecond)
 		}
 	}(time.Now())
 
-	for _, value := range values {
+	for _, value := range values[:min(1000, len(values))] {
 		parts := strings.Split(value, ":")
 		if len(parts) < 2 {
+			continue
+		}
+		parts[0] = strings.TrimSpace(parts[0])
+		if len(parts[0]) > 64 {
 			continue
 		}
 		lhash, chash, check := uhash.Sum256([]byte(login)), uhash.Sum256([]byte(parts[0])), parts[1]
@@ -322,12 +329,13 @@ func Password(in string, values []string) (pass bool, entry string) {
 				}
 				rounds, salt := 5000, parts[2]
 				if len(parts) > 4 && strings.HasPrefix(parts[2], "rounds=") {
-					if value, err := strconv.Atoi(parts[2][7:]); err == nil {
-						rounds = value
+					value, err := strconv.Atoi(parts[2][7:])
+					if err != nil || value < 0 {
+						continue
 					}
-					salt = parts[3]
+					rounds, salt = value, parts[3]
 				}
-				if rounds >= 100000 && rounds <= 1000000 {
+				if rounds >= 100000 && rounds <= 200000 {
 					if encrypted, err := crypt512(password, salt, rounds); err == nil {
 						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
 							return true, entry
@@ -390,7 +398,7 @@ func Password(in string, values []string) (pass bool, entry string) {
 					}
 				}
 
-				if memory <= 32<<10 && time <= 8 && threads <= 4 {
+				if memory >= 19<<10 && memory <= 32<<10 && time >= 2 && time <= 4 && threads >= 1 && threads <= 2 {
 					if encrypted, err := argon2(password, parts[4], memory, time, threads); err == nil {
 						if subtle.ConstantTimeCompare([]byte(encrypted), []byte(check)) == 1 {
 							return true, entry
@@ -461,6 +469,9 @@ func passwordPrune(runes, seq []rune) []rune {
 }
 
 func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) {
+	if len(in) > 128 {
+		in = in[:128]
+	}
 	pool, chars, contains := 0, map[rune]struct{}{}, make([]bool, len(sets))
 	for _, char := range in {
 		chars[char] = struct{}{}
@@ -497,7 +508,7 @@ func PasswordEntropy(in string, extra ...[]string) (entropy float64, pass bool) 
 		runes = passwordPrune(runes, seq)
 	}
 	if len(extra) != 0 {
-		for _, seq := range extra[0] {
+		for _, seq := range extra[0][:min(16, len(extra[0]))] {
 			runes = passwordPrune(runes, []rune(seq))
 			runes = passwordPrune(runes, []rune(ustr.Reverse(seq)))
 		}

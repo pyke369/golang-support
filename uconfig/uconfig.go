@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -59,8 +60,8 @@ var (
 	esep = []byte{'\n', ' ', '"', '>', '{', '}', '[', ']', ','}
 )
 
-func mode(char byte) int {
-	switch char {
+func mode(c byte) int {
+	switch c {
 	case ' ':
 		return space
 
@@ -133,15 +134,22 @@ func expand(in []byte, start int, arena *bslab.Arena) (out []byte) {
 		return
 	}
 
-	offsets, size, instring, previous := make([][2]int, 0, min(256, end-start+1)), 0, false, byte(0)
+	offsets, size, instring := make([][2]int, 0, min(256, end-start+1)), 0, false
 	for offset := start; offset <= end; offset++ {
-		char := out[offset]
-		if char == '"' && previous != '\\' {
-			instring = !instring
+		c := out[offset]
+
+		if c == '"' {
+			pairs := 0
+			for index := offset - 1; index >= start && out[index] == '\\'; index-- {
+				pairs++
+			}
+			if pairs%2 == 0 {
+				instring = !instring
+			}
 		}
 
 		if !instring {
-			switch char {
+			switch c {
 			case '{', '[':
 				if offset > start+1 {
 					switch out[offset-1] {
@@ -184,8 +192,6 @@ func expand(in []byte, start int, arena *bslab.Arena) (out []byte) {
 				}
 			}
 		}
-
-		previous = char
 	}
 	if len(offsets) == 0 {
 		return
@@ -224,31 +230,36 @@ func New(in string, extra ...map[string]any) (config *UConfig, err error) {
 			config.arena = value
 		}
 	}
-	err = config.Load(in)
 
-	return config, ustr.Wrap(err, "uconfig")
+	return config, ustr.Wrap(config.Load(in), "uconfig")
 }
 
-func (c *UConfig) SetSeparator(separator string) {
-	c.separator = separator
+func (uc *UConfig) SetSeparator(separator string) {
+	uc.separator = separator
 }
 
-func (c *UConfig) SetPrefix(prefix string) {
-	c.prefix = prefix
+func (uc *UConfig) SetPrefix(prefix string) {
+	uc.prefix = prefix
 }
 
-func (c *UConfig) GetPrefix() string {
-	return c.prefix
+func (uc *UConfig) GetPrefix() string {
+	return uc.prefix
 }
 
-func (c *UConfig) Load(in string) (err error) {
-	base, _ := os.Getwd()
-	payload, name, top, root := c.arena.Get(max(64<<10, 3+len(base)+3+len(in))), "", "", c.root
+func (uc *UConfig) Load(in string) (err error) {
+	base, err := os.Getwd()
+	if err != nil {
+		return ustr.Wrap(err, "uconfig")
+	}
+	payload, name, top, sroot := uc.arena.Get(max(64<<10, 3+len(base)+3+len(in))), "", "", uc.root
 	payload = append(payload, '<', '<', '%')
 	payload = append(payload, base...)
 	payload = append(payload, '>', '>', ' ')
-	if c.inline {
+	if uc.inline {
 		payload = append(payload, in...)
+		if sroot == "" {
+			sroot = base
+		}
 
 	} else {
 		if !filepath.IsAbs(in) {
@@ -258,51 +269,62 @@ func (c *UConfig) Load(in string) (err error) {
 		payload = append(payload, '<', '<', '~')
 		payload = append(payload, in...)
 		payload = append(payload, '>', '>')
-		if root == "" {
-			root = top
+		if sroot == "" {
+			sroot = top
 		}
 	}
+	root, err := os.OpenRoot(sroot)
+	if err != nil {
+		return ustr.Wrap(err, "uconfig")
+	}
+	defer root.Close()
 
 	// remove commented-out sections and expand macros
-	length, previous, instring, cstart, cmode, mstart := len(payload), byte(0), false, -1, -1, -1
+	length, previous, instring, cstart, cmode, mstart, included := len(payload), byte(0), false, -1, -1, -1, map[string]int{}
 	for cindex := 0; cindex < length; cindex++ {
-		char := payload[cindex]
+		c := payload[cindex]
 
-		if cstart < 0 && char == '"' && previous != '\\' {
-			instring = !instring
+		if cstart < 0 && c == '"' {
+			pairs := 0
+			for index := cindex - 1; index >= 0 && payload[index] == '\\'; index-- {
+				pairs++
+			}
+			if pairs%2 == 0 {
+				instring = !instring
+			}
 		}
 
 		if !instring {
 			if mstart == -1 {
-				if char == '\r' || char == ';' {
-					char = '\n'
-					payload[cindex] = char
+				if c == '\r' || c == ';' {
+					c = '\n'
+					payload[cindex] = c
 
-				} else if char == '\t' {
-					char = ' '
-					payload[cindex] = char
+				} else if c == '\t' {
+					c = ' '
+					payload[cindex] = c
 				}
 
 				if cstart == -1 {
-					if char == '*' && previous == '/' {
+					if c == '*' && previous == '/' {
 						cstart, cmode = cindex-1, 1
 
-					} else if char == '#' || (char == '/' && previous == '/') {
+					} else if c == '#' || (c == '/' && previous == '/') {
 						cstart, cmode = cindex-1, 2
-						if char == '#' {
+						if c == '#' {
 							cstart = cindex
 						}
 					}
 
-				} else if (cmode == 1 && char == '/' && previous == '*') || (cmode == 2 && char == '\n') {
+				} else if (cmode == 1 && c == '/' && previous == '*') || (cmode == 2 && c == '\n') {
 					if cmode == 1 {
 						payload[cindex] = ' '
 					}
 					payload = slices.Delete(payload, cstart, cindex)
 					cindex = cstart
 					length, cstart, cmode = len(payload), -1, -1
-					if length > c.maxsize {
-						c.arena.Put(payload)
+					if length > uc.maxsize {
+						uc.arena.Put(payload)
 						return errors.New("uconfig: size exceeded")
 					}
 					continue
@@ -311,11 +333,11 @@ func (c *UConfig) Load(in string) (err error) {
 
 			if cstart == -1 {
 				if mstart == -1 {
-					if char == '<' && previous == '<' {
+					if c == '<' && previous == '<' {
 						mstart = cindex - 1
 					}
 
-				} else if char == '>' && previous == '>' {
+				} else if c == '>' && previous == '>' {
 					macro, arg, btrack := byte(0), "", false
 					if cindex-mstart >= 4 {
 						macro, arg = payload[mstart+2], strings.TrimSpace(string(payload[mstart+3:cindex-1]))
@@ -330,42 +352,53 @@ func (c *UConfig) Load(in string) (err error) {
 
 						switch macro {
 						case '~': // files content
+							arg = filepath.Clean(arg)
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							arg = filepath.Clean(arg)
+							arg = strings.TrimPrefix(arg, sroot+file.Sep)
 
 							paths, sizes, size := []string{}, map[string]int{}, 0
-							if values, err := filepath.Glob(arg); err == nil {
+							if values, err := fs.Glob(root.FS(), arg); err == nil {
 								for _, value := range values {
-									info := file.IsRegular(value)
-									if info == nil {
+									info, err := root.Stat(value)
+									if err != nil {
 										continue
 									}
-									sizes[value] = int(info.Size())
-									size += 4 + len(value) + 4 + 3*int(info.Size()) + 4 + len(base) + 3
+									fsize := info.Size()
+									if fsize < 0 || fsize > int64(uc.maxsize) {
+										continue
+									}
+									sizes[value] = int(fsize)
+									size += 4 + len(sroot) + 1 + len(value) + 4 + 3*int(fsize) + 4 + len(base) + 3
 									paths = append(paths, value)
 								}
 							}
 							if size != 0 {
-								if length+size > c.maxsize {
-									c.arena.Put(payload)
+								if length+size > uc.maxsize {
+									uc.arena.Put(payload)
 									return errors.New("uconfig: size exceeded")
 								}
-								insert = c.arena.Get(size)
+								insert = uc.arena.Get(size)
 								for _, path := range paths {
-									nbase := filepath.Dir(path)
+									arg := filepath.Join(sroot, path)
+									included[arg]++
+									if included[arg] > 2 {
+										return errors.New("uconfig: cyclic include detected")
+									}
+
+									nbase := filepath.Dir(arg)
 									insert = append(insert, ' ', '<', '<', '%')
 									insert = append(insert, nbase...)
 									insert = append(insert, '>', '>', '\n', ' ')
-									if handle, err := os.OpenInRoot(root, strings.TrimPrefix(path, root+file.Sep)); err == nil {
+									if handle, err := root.Open(path); err == nil {
 										start := len(insert)
 										insert = insert[:start+sizes[path]]
 										if read, err := io.ReadFull(handle, insert[start:]); err != nil || read != sizes[path] {
 											insert = insert[:start]
 
 										} else {
-											insert = expand(insert, start, c.arena)
+											insert = expand(insert, start, uc.arena)
 										}
 										handle.Close()
 									}
@@ -377,37 +410,42 @@ func (c *UConfig) Load(in string) (err error) {
 							}
 
 						case '^': // files lines
+							arg = filepath.Clean(arg)
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							arg = filepath.Clean(arg)
+							arg = strings.TrimPrefix(arg, sroot+file.Sep)
 
 							paths, sizes, size, empty := []string{}, map[string]int{}, 0, true
-							if values, err := filepath.Glob(arg); err == nil {
+							if values, err := fs.Glob(root.FS(), arg); err == nil {
 								for _, value := range values {
-									info := file.IsRegular(value)
-									if info == nil {
+									info, err := root.Stat(value)
+									if err != nil {
+										continue
+									}
+									fsize := info.Size()
+									if fsize < 0 || fsize > int64(uc.maxsize) {
 										continue
 									}
 
-									lsize := max(256, int(info.Size()))
+									lsize := max(256, int(fsize))
 									sizes[value] = lsize
 									size += lsize + 5*(lsize/2)
 									paths = append(paths, value)
 								}
 							}
-							if length+size > c.maxsize {
-								c.arena.Put(payload)
+							if length+size > uc.maxsize {
+								uc.arena.Put(payload)
 								return errors.New("uconfig: size exceeded")
 							}
-							insert = c.arena.Get(4 + size + 2)
+							insert = uc.arena.Get(4 + size + 2)
 							insert = append(insert, ' ', ' ', '[', ' ')
 							for _, path := range paths {
-								handle, err := os.OpenInRoot(root, strings.TrimPrefix(path, root+file.Sep))
+								handle, err := root.Open(path)
 								if err != nil {
 									continue
 								}
-								lines := c.arena.Get(sizes[path])
+								lines := uc.arena.Get(sizes[path])
 								lines = lines[:sizes[path]]
 								if read, err := handle.Read(lines); err == nil {
 									lines = lines[:read]
@@ -440,7 +478,7 @@ func (c *UConfig) Load(in string) (err error) {
 														}
 													}
 													insert = append(insert, lines[start:end+1]...)
-													insert = escape(insert, offset, c.arena)
+													insert = escape(insert, offset, uc.arena)
 													insert = append(insert, '"', ',', ' ')
 													empty = false
 												}
@@ -449,7 +487,7 @@ func (c *UConfig) Load(in string) (err error) {
 										}
 									}
 								}
-								c.arena.Put(lines)
+								uc.arena.Put(lines)
 								handle.Close()
 							}
 							if !empty {
@@ -458,23 +496,24 @@ func (c *UConfig) Load(in string) (err error) {
 							insert = append(insert, ']', ' ')
 
 						case '+', '*': // paths
+							arg = filepath.Clean(arg)
 							if !filepath.IsAbs(arg) {
 								arg = filepath.Join(base, arg)
 							}
-							arg = filepath.Clean(arg)
+							arg = strings.TrimPrefix(arg, sroot+file.Sep)
 
 							paths, size := []string{}, 0
-							if values, err := filepath.Glob(arg); err == nil {
+							if values, err := fs.Glob(root.FS(), arg); err == nil {
 								for _, value := range values {
 									size += 1 + 2*len(value) + 1
 									paths = append(paths, value)
 								}
 							}
-							if length+size > c.maxsize {
-								c.arena.Put(payload)
+							if length+size > uc.maxsize {
+								uc.arena.Put(payload)
 								return errors.New("uconfig: size exceeded")
 							}
-							insert = c.arena.Get(4 + size + len(paths)*3 + 2)
+							insert = uc.arena.Get(4 + size + len(paths)*3 + 2)
 							insert = append(insert, ' ', ' ', '[', ' ')
 							if len(paths) != 0 {
 								for _, path := range paths {
@@ -482,12 +521,10 @@ func (c *UConfig) Load(in string) (err error) {
 									path = filepath.Base(path)
 									start := len(insert)
 									if macro == '*' {
-										if index := strings.LastIndex(path, "."); index != -1 {
-											path = path[:index]
-										}
+										path = strings.TrimSuffix(path, filepath.Ext(path))
 									}
 									insert = append(insert, path...)
-									insert = escape(insert, start, c.arena)
+									insert = escape(insert, start, uc.arena)
 									insert = append(insert, '"', ',', ' ')
 								}
 								insert = insert[:len(insert)-2]
@@ -495,17 +532,17 @@ func (c *UConfig) Load(in string) (err error) {
 							insert = append(insert, ']', ' ')
 						}
 
-						payload = grow(payload, len(insert)-(cindex+1-mstart), c.arena)
+						payload = grow(payload, len(insert)-(cindex+1-mstart), uc.arena)
 						payload = slices.Replace(payload, mstart, cindex+1, insert...)
 
 						cindex = mstart
 						if !btrack {
 							cindex += len(insert)
 						}
-						c.arena.Put(insert)
+						uc.arena.Put(insert)
 						length, mstart = len(payload), -1
-						if length > c.maxsize {
-							c.arena.Put(payload)
+						if length > uc.maxsize {
+							uc.arena.Put(payload)
 							return errors.New("uconfig: size exceeded")
 						}
 						continue
@@ -513,7 +550,7 @@ func (c *UConfig) Load(in string) (err error) {
 				}
 			}
 		}
-		previous = char
+		previous = c
 	}
 	if cstart != -1 {
 		payload = slices.Delete(payload, cstart, len(payload))
@@ -524,28 +561,34 @@ func (c *UConfig) Load(in string) (err error) {
 	for pass := 1; pass <= 2; pass++ {
 		length, previous, instring, cstart, cmode, mstart = len(payload), byte(0), false, 0, -1, -1
 		for cindex := 0; cindex < length; cindex++ {
-			char := payload[cindex]
-			if char == '"' && previous != '\\' {
-				instring = !instring
+			c := payload[cindex]
+			if c == '"' {
+				pairs := 0
+				for index := cindex - 1; index >= 0 && payload[index] == '\\'; index-- {
+					pairs++
+				}
+				if pairs%2 == 0 {
+					instring = !instring
+				}
 			}
 
 			switch pass {
 			case 1:
-				if char == '\n' {
-					char = ','
-					payload[cindex] = char
+				if c == '\n' {
+					c = ','
+					payload[cindex] = c
 				}
 				if !instring {
-					if char == '=' {
-						char = ':'
-						payload[cindex] = char
+					if c == '=' {
+						c = ':'
+						payload[cindex] = c
 					}
 					if mstart == -1 {
-						if char == '<' && previous == '<' {
+						if c == '<' && previous == '<' {
 							mstart = cindex - 1
 						}
 
-					} else if char == '>' && previous == '>' {
+					} else if c == '>' && previous == '>' {
 						for index := mstart; index <= cindex; index++ {
 							payload[index] = ' '
 						}
@@ -555,10 +598,10 @@ func (c *UConfig) Load(in string) (err error) {
 
 			case 2:
 				if cmode == -1 {
-					cmode = mode(char)
+					cmode = mode(c)
 				}
 				if (cmode == 0 && !instring) || cmode != 0 {
-					if value := mode(char); cmode != value {
+					if value := mode(c); cmode != value {
 						tokens = append(tokens, [2]int{cmode, cindex - cstart})
 						cstart, cmode = cindex, value
 					}
@@ -567,7 +610,7 @@ func (c *UConfig) Load(in string) (err error) {
 					}
 				}
 			}
-			previous = char
+			previous = c
 		}
 	}
 
@@ -588,7 +631,7 @@ func (c *UConfig) Load(in string) (err error) {
 					tokens[index-1][1]--
 
 				} else {
-					payload = grow(payload, 1, c.arena)
+					payload = grow(payload, 1, uc.arena)
 					payload = slices.Insert(payload, offset, '"')
 				}
 				tokens[index][1]++
@@ -600,7 +643,7 @@ func (c *UConfig) Load(in string) (err error) {
 					tokens[index+1][1]--
 
 				} else {
-					payload = grow(payload, 1, c.arena)
+					payload = grow(payload, 1, uc.arena)
 					payload = slices.Insert(payload, offset+length, '"')
 				}
 				tokens[index][1]++
@@ -644,7 +687,7 @@ func (c *UConfig) Load(in string) (err error) {
 				tokens[index-1][1]--
 
 			} else {
-				payload = grow(payload, 1, c.arena)
+				payload = grow(payload, 1, uc.arena)
 				payload = slices.Insert(payload, offset, ':')
 			}
 			tokens[index][1]++
@@ -661,7 +704,7 @@ func (c *UConfig) Load(in string) (err error) {
 		if char != ' ' {
 			if char != '{' {
 				payload[0] = '{'
-				payload = grow(payload, 1, c.arena)
+				payload = grow(payload, 1, uc.arena)
 				payload = append(payload, '}')
 			}
 			break
@@ -669,7 +712,7 @@ func (c *UConfig) Load(in string) (err error) {
 	}
 
 	// compute hash
-	source, hasher := c.arena.Get(1<<10), sha256.New()
+	source, hasher := uc.arena.Get(1<<10), sha256.New()
 	for _, char := range payload {
 		if char != ' ' {
 			if len(source) < cap(source) {
@@ -684,14 +727,14 @@ func (c *UConfig) Load(in string) (err error) {
 	if len(source) != 0 {
 		hasher.Write(source)
 	}
-	c.arena.Put(source)
+	uc.arena.Put(source)
 	hash := hasher.Sum(nil)
 
 	// activate if needed
-	defer c.arena.Put(payload)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.active != nil && bytes.Equal(hash, c.active.hash[:]) {
+	defer uc.arena.Put(payload)
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+	if uc.active != nil && bytes.Equal(hash, uc.active.hash[:]) {
 		return nil
 	}
 
@@ -703,89 +746,89 @@ func (c *UConfig) Load(in string) (err error) {
 		}
 		return errors.New("uconfig: " + err.Error())
 	}
-	c.active = &active{name: name, top: top, config: config, cache: map[string]any{}}
-	copy(c.active.hash[:], hash)
+	uc.active = &active{name: name, top: top, config: config, cache: map[string]any{}}
+	copy(uc.active.hash[:], hash)
 
 	return nil
 }
 
-func (c *UConfig) Reload() (changed bool, err error) {
+func (uc *UConfig) Reload() (changed bool, err error) {
 	var hash [32]byte
 
-	c.mu.RLock()
-	if c.active != nil {
-		copy(hash[:], c.active.hash[:])
+	uc.mu.RLock()
+	if uc.active != nil {
+		copy(hash[:], uc.active.hash[:])
 	}
-	c.mu.RUnlock()
-	if err = c.Load(c.input); err != nil {
+	uc.mu.RUnlock()
+	if err = uc.Load(uc.input); err != nil {
 		return
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
 
-	return !bytes.Equal(hash[:], c.active.hash[:]), nil
+	return !bytes.Equal(hash[:], uc.active.hash[:]), nil
 }
 
-func (c *UConfig) Name() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (uc *UConfig) Name() string {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
 
-	if c.active != nil {
-		return c.active.name
+	if uc.active != nil {
+		return uc.active.name
 	}
 
 	return ""
 }
 
-func (c *UConfig) Top() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (uc *UConfig) Top() string {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
 
-	if c.active != nil {
-		return c.active.top
+	if uc.active != nil {
+		return uc.active.top
 	}
 
 	return ""
 }
 
-func (c *UConfig) Hash() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (uc *UConfig) Hash() string {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
 
-	if c.active != nil {
-		return ustr.Hex(c.active.hash[:])
+	if uc.active != nil {
+		return ustr.Hex(uc.active.hash[:])
 	}
 
 	return ""
 }
 
-func (c *UConfig) Dump() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (uc *UConfig) Dump() string {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
 
-	if c.active != nil {
-		config := &bytes.Buffer{}
-		encoder := json.NewEncoder(config)
+	if uc.active != nil {
+		dump := &bytes.Buffer{}
+		encoder := json.NewEncoder(dump)
 		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
-		if encoder.Encode(c.active.config) == nil {
-			return config.String()
+		if encoder.Encode(uc.active.config) == nil {
+			return dump.String()
 		}
 	}
 
 	return "{}"
 }
 
-func (c *UConfig) Base(path string) string {
-	if index := strings.LastIndex(path, c.separator); index != -1 {
+func (uc *UConfig) Base(path string) string {
+	if index := strings.LastIndex(path, uc.separator); index != -1 {
 		return path[index+1:]
 	}
 
 	return path
 }
 
-func (c *UConfig) Path(in ...string) string {
+func (uc *UConfig) Path(in ...string) string {
 	length, size := len(in), 0
 	for _, value := range in {
 		size += len(value)
@@ -793,12 +836,12 @@ func (c *UConfig) Path(in ...string) string {
 	if size == 0 {
 		return ""
 	}
-	out := make([]byte, 0, size+(len(in)*len(c.separator)))
+	out := make([]byte, 0, size+(len(in)*len(uc.separator)))
 	for index, value := range in {
 		if value != "" {
 			out = append(out, value...)
 			if index < length-1 {
-				out = append(out, c.separator...)
+				out = append(out, uc.separator...)
 			}
 		}
 	}
@@ -806,19 +849,19 @@ func (c *UConfig) Path(in ...string) string {
 	return string(out)
 }
 
-func (c *UConfig) Paths(path string) (paths []string) {
-	c.mu.RLock()
-	active := c.active
-	c.mu.RUnlock()
+func (uc *UConfig) Paths(path string) (paths []string) {
+	uc.mu.RLock()
+	active := uc.active
+	uc.mu.RUnlock()
 	if active == nil {
 		return
 	}
 
-	if c.prefix != "" {
+	if uc.prefix != "" {
 		if path == "" {
-			path = c.prefix
+			path = uc.prefix
 
-		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+		} else if prefix := uc.prefix + uc.separator; !strings.HasPrefix(path, prefix) {
 			path = prefix + path
 		}
 	}
@@ -834,7 +877,7 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	active.mu.Lock()
 	defer active.mu.Unlock()
 	current := active.config
-	for _, part := range strings.Split(path, c.separator) {
+	for _, part := range strings.Split(path, uc.separator) {
 		if part == "" {
 			continue
 		}
@@ -863,12 +906,12 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	switch reflect.TypeOf(current).Kind() {
 	case reflect.Slice:
 		for index := 0; index < len(current.([]any)); index++ {
-			paths = append(paths, path+c.separator+strconv.Itoa(index))
+			paths = append(paths, path+uc.separator+strconv.Itoa(index))
 		}
 
 	case reflect.Map:
 		for key := range current.(map[string]any) {
-			paths = append(paths, path+c.separator+key)
+			paths = append(paths, path+uc.separator+key)
 		}
 	}
 	active.cache[path] = paths
@@ -876,19 +919,19 @@ func (c *UConfig) Paths(path string) (paths []string) {
 	return
 }
 
-func (c *UConfig) Copy(path string) (out any) {
-	c.mu.RLock()
-	active := c.active
-	c.mu.RUnlock()
+func (uc *UConfig) Copy(path string) (out any) {
+	uc.mu.RLock()
+	active := uc.active
+	uc.mu.RUnlock()
 	if active == nil {
 		return
 	}
 
-	if c.prefix != "" {
+	if uc.prefix != "" {
 		if path == "" {
-			path = c.prefix
+			path = uc.prefix
 
-		} else if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+		} else if prefix := uc.prefix + uc.separator; !strings.HasPrefix(path, prefix) {
 			path = prefix + path
 		}
 	}
@@ -896,7 +939,7 @@ func (c *UConfig) Copy(path string) (out any) {
 	active.mu.RLock()
 	defer active.mu.RUnlock()
 	current := active.config
-	for _, part := range strings.Split(path, c.separator) {
+	for _, part := range strings.Split(path, uc.separator) {
 		if part == "" {
 			continue
 		}
@@ -930,16 +973,16 @@ func (c *UConfig) Copy(path string) (out any) {
 	return
 }
 
-func (c *UConfig) value(path string) (out string, exists bool) {
-	c.mu.RLock()
-	active := c.active
-	c.mu.RUnlock()
+func (uc *UConfig) value(path string) (out string, exists bool) {
+	uc.mu.RLock()
+	active := uc.active
+	uc.mu.RUnlock()
 	if active == nil {
 		return
 	}
 
-	if c.prefix != "" {
-		if prefix := c.prefix + c.separator; !strings.HasPrefix(path, prefix) {
+	if uc.prefix != "" {
+		if prefix := uc.prefix + uc.separator; !strings.HasPrefix(path, prefix) {
 			path = prefix + path
 		}
 	}
@@ -959,7 +1002,7 @@ func (c *UConfig) value(path string) (out string, exists bool) {
 	}
 
 	current := active.config
-	for _, part := range strings.Split(path, c.separator) {
+	for _, part := range strings.Split(path, uc.separator) {
 		if current == nil {
 			return
 		}
@@ -990,8 +1033,8 @@ func (c *UConfig) value(path string) (out string, exists bool) {
 	return "", false
 }
 
-func (c *UConfig) Boolean(path string, fallback ...bool) bool {
-	if value, exists := c.value(path); exists {
+func (uc *UConfig) Boolean(path string, fallback ...bool) bool {
+	if value, exists := uc.value(path); exists {
 		return j.Boolean(value)
 	}
 	if len(fallback) > 0 {
@@ -1001,8 +1044,8 @@ func (c *UConfig) Boolean(path string, fallback ...bool) bool {
 	return false
 }
 
-func (c *UConfig) String(path string, fallback ...string) string {
-	if value, exists := c.value(path); exists {
+func (uc *UConfig) String(path string, fallback ...string) string {
+	if value, exists := uc.value(path); exists {
 		return value
 	}
 	if len(fallback) > 0 {
@@ -1012,18 +1055,20 @@ func (c *UConfig) String(path string, fallback ...string) string {
 	return ""
 }
 
-func (c *UConfig) StringMatch(path, fallback, match string) string {
-	return c.StringMatchCaptures(path, fallback, match)[0]
+func (uc *UConfig) StringMatch(path, fallback, match string) string {
+	return uc.StringMatchCaptures(path, fallback, match)[0]
 }
 
-func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
-	value, exists := c.value(path)
+func (uc *UConfig) StringMatchCaptures(path, fallback, match string) []string {
+	value, exists := uc.value(path)
 	if !exists {
 		return []string{fallback}
 	}
 	if match != "" {
-		if captures := rcache.Get(match).FindStringSubmatch(value); captures != nil {
-			return captures
+		if matcher, err := rcache.GetErr(match); err == nil {
+			if captures := matcher.FindStringSubmatch(value); captures != nil {
+				return captures
+			}
 		}
 		return []string{fallback}
 	}
@@ -1031,12 +1076,12 @@ func (c *UConfig) StringMatchCaptures(path, fallback, match string) []string {
 	return []string{value}
 }
 
-func (c *UConfig) StringMap(path string) (out map[string]string) {
-	if paths := c.Paths(path); len(paths) != 0 {
+func (uc *UConfig) StringMap(path string) (out map[string]string) {
+	if paths := uc.Paths(path); len(paths) != 0 {
 		out = map[string]string{}
 		for _, key := range paths {
-			if value := c.String(key); value != "" {
-				out[c.Base(key)] = value
+			if value := uc.String(key); value != "" {
+				out[uc.Base(key)] = value
 			}
 		}
 	}
@@ -1044,17 +1089,17 @@ func (c *UConfig) StringMap(path string) (out map[string]string) {
 	return
 }
 
-func (c *UConfig) Strings(path string, fallback ...[]string) (out []string) {
-	if value := strings.TrimSpace(c.String(path)); value != "" {
+func (uc *UConfig) Strings(path string, fallback ...[]string) (out []string) {
+	if value := strings.TrimSpace(uc.String(path)); value != "" {
 		out = append(out, value)
 
 	} else {
-		for _, path := range c.Paths(path) {
-			if value := strings.TrimSpace(c.String(path)); value != "" {
+		for _, path := range uc.Paths(path) {
+			if value := strings.TrimSpace(uc.String(path)); value != "" {
 				out = append(out, value)
 
 			} else {
-				if value := strings.Join(c.Strings(path), " "); value != "" {
+				if value := strings.Join(uc.Strings(path), " "); value != "" {
 					out = append(out, value)
 				}
 			}
@@ -1067,17 +1112,17 @@ func (c *UConfig) Strings(path string, fallback ...[]string) (out []string) {
 	return
 }
 
-func (c *UConfig) Integer(path string, extra ...int64) int64 {
+func (uc *UConfig) Integer(path string, extra ...int64) int64 {
 	fallback := int64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
 
-	return c.IntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
+	return uc.IntegerBounds(path, fallback, math.MinInt64, math.MaxInt64)
 }
 
-func (c *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) int64 {
-	value, ok := c.value(path)
+func (uc *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) int64 {
+	value, ok := uc.value(path)
 	if !ok {
 		return fallback
 	}
@@ -1089,17 +1134,17 @@ func (c *UConfig) IntegerBounds(path string, fallback, lowest, highest int64) in
 	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) Float(path string, extra ...float64) float64 {
+func (uc *UConfig) Float(path string, extra ...float64) float64 {
 	fallback := float64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
 
-	return c.FloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
+	return uc.FloatBounds(path, fallback, -math.MaxFloat64, math.MaxFloat64)
 }
 
-func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) float64 {
-	value, ok := c.value(path)
+func (uc *UConfig) FloatBounds(path string, fallback, lowest, highest float64) float64 {
+	value, ok := uc.value(path)
 	if !ok {
 		return fallback
 	}
@@ -1111,28 +1156,28 @@ func (c *UConfig) FloatBounds(path string, fallback, lowest, highest float64) fl
 	return max(min(nvalue, highest), lowest)
 }
 
-func (c *UConfig) Size(path string, fallback int64, extra ...bool) int64 {
-	return c.SizeBounds(path, fallback, 0, math.MaxInt64, extra...)
+func (uc *UConfig) Size(path string, fallback int64, extra ...bool) int64 {
+	return uc.SizeBounds(path, fallback, 0, math.MaxInt64, extra...)
 }
 
-func (c *UConfig) SizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
-	if value, ok := c.value(path); ok {
+func (uc *UConfig) SizeBounds(path string, fallback, lowest, highest int64, extra ...bool) int64 {
+	if value, ok := uc.value(path); ok {
 		return j.SizeBounds(value, fallback, lowest, highest, extra...)
 	}
 
 	return fallback
 }
 
-func (c *UConfig) Duration(path string, extra ...float64) time.Duration {
+func (uc *UConfig) Duration(path string, extra ...float64) time.Duration {
 	fallback := float64(0)
 	if len(extra) != 0 {
 		fallback = extra[0]
 	}
-	return c.DurationBounds(path, fallback, 0, math.MaxFloat64)
+	return uc.DurationBounds(path, fallback, 0, math.MaxFloat64)
 }
 
-func (c *UConfig) DurationBounds(path string, fallback, lowest, highest float64) time.Duration {
-	if value, ok := c.value(path); ok {
+func (uc *UConfig) DurationBounds(path string, fallback, lowest, highest float64) time.Duration {
+	if value, ok := uc.value(path); ok {
 		return j.DurationBounds(value, fallback, lowest, highest)
 	}
 
