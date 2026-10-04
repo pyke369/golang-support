@@ -217,7 +217,7 @@ func Strip(in, charset string) string {
 func Replace(in string, pairs [][2]string) string {
 	for _, pair := range pairs {
 		if strings.HasPrefix(pair[0], "~") {
-			if matcher, err := rcache.GetErr(strings.TrimSpace(strings.TrimPrefix(pair[0], "~"))); err == nil {
+			if matcher, err := rcache.Get(strings.TrimSpace(strings.TrimPrefix(pair[0], "~"))); err == nil {
 				in = matcher.ReplaceAllString(in, pair[1])
 			}
 
@@ -612,7 +612,7 @@ const (
 	OptionComment = 0x10
 	OptionEmpty   = 0x20
 	OptionFirst   = 0x40
-	OptionJSON    = 0x80
+	OptionJson    = 0x80
 )
 
 func Options(in string) (out int) {
@@ -620,29 +620,29 @@ func Options(in string) (out int) {
 		if value = strings.TrimSpace(value); value == "" {
 			continue
 		}
-		if strings.HasPrefix("trim", value) {
+		if value == "trim" || value == "t" {
 			out |= OptionTrim
 		}
-		if strings.HasPrefix("space", value) {
+		if value == "space" || value == "s" {
 			out |= OptionSpace
 		}
-		if strings.HasPrefix("lower", value) {
+		if value == "lower" || value == "l" {
 			out |= OptionLower
 		}
-		if strings.HasPrefix("upper", value) {
+		if value == "upper" || value == "u" {
 			out |= OptionUpper
 		}
-		if strings.HasPrefix("comment", value) {
+		if value == "comment" || value == "c" {
 			out |= OptionComment
 		}
-		if strings.HasPrefix("empty", value) {
+		if value == "empty" || value == "e" {
 			out |= OptionEmpty
 		}
-		if strings.HasPrefix("first", value) {
+		if value == "first" || value == "f" {
 			out |= OptionFirst
 		}
-		if strings.HasPrefix("json", value) {
-			out |= OptionJSON
+		if value == "json" || value == "j" {
+			out |= OptionJson
 		}
 	}
 

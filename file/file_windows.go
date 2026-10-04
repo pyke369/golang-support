@@ -6,7 +6,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const O_NOFOLLOW = windows.O_FILE_FLAG_OPEN_REPARSE_POINT
+const (
+	O_NOFOLLOW = windows.O_FILE_FLAG_OPEN_REPARSE_POINT
+)
 
 func Space(in string) (total, free, occupied uint64) {
 	occupied = 100

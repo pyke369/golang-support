@@ -20,15 +20,19 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/pyke369/golang-support/file"
+	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/uhash"
 	"github.com/pyke369/golang-support/ustr"
 )
 
-var dpool = sync.Pool{
-	New: func() any {
-		decoder, _ := zstd.NewReader(nil)
-		return decoder
-	}}
+var (
+	nameMatcher = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	dpool       = sync.Pool{
+		New: func() any {
+			decoder, _ := zstd.NewReader(nil)
+			return decoder
+		}}
+)
 
 type RPACK struct {
 	Modified     int64
@@ -48,26 +52,25 @@ func Pack(root, out, pkgname, funcname, include, exclude string, minified bool) 
 	if root = strings.TrimSuffix(root, "/"); root == "" || out == "" {
 		return errors.New("rpack: invalid root path")
 	}
-	matcher := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-	if !matcher.MatchString(pkgname) {
+	if !nameMatcher.MatchString(pkgname) {
 		return errors.New("rpack: invalid package name")
 	}
 	if funcname == "" {
 		funcname = "Resources"
 	}
-	if !matcher.MatchString(funcname) {
+	if !nameMatcher.MatchString(funcname) {
 		return errors.New("rpack: invalid function name")
 	}
 
 	if include != "" {
-		value, err := regexp.Compile(strings.TrimSpace(include))
+		value, err := rcache.Get(strings.TrimSpace(include))
 		if err != nil {
 			return errors.New("rpack: invalid include expression")
 		}
 		includer = value
 	}
 	if exclude != "" {
-		value, err := regexp.Compile(strings.TrimSpace(exclude))
+		value, err := rcache.Get(strings.TrimSpace(exclude))
 		if err != nil {
 			return errors.New("rpack: invalid exclude expression")
 		}
@@ -236,9 +239,12 @@ func get(pack map[string]*RPACK, rpath string, uncompress bool) (content []byte,
 			if err := decompressor.Reset(bytes.NewReader(entry.raw)); err != nil {
 				return nil, "", 0, ustr.Wrap(err, "rpack")
 			}
-			decompressed, err := io.ReadAll(io.LimitReader(decompressor.IOReadCloser(), 4<<20))
+			decompressed, err := io.ReadAll(io.LimitReader(decompressor.IOReadCloser(), (4<<20)+1))
 			if err != nil {
 				return nil, "", 0, ustr.Wrap(err, "rpack")
+			}
+			if len(decompressed) > 4<<20 {
+				return nil, "", 0, errors.New("rpack: resource too large")
 			}
 			entry.decompressed = decompressed
 		}
@@ -259,17 +265,6 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool, extra ...ma
 		if r.Method != http.MethodHead && r.Method != http.MethodGet {
 			rw.WriteHeader(http.StatusMethodNotAllowed)
 			return
-		}
-
-		rw.Header().Set("Vary", "Accept-Encoding")
-		if sttl := ttl / time.Second; sttl > 0 {
-			rw.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10))
-			rw.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
-		}
-		if len(extra) != 0 {
-			for k, v := range extra[0] {
-				rw.Header().Set(k, v)
-			}
 		}
 
 		if strings.HasSuffix(r.URL.Path, "/") {
@@ -317,8 +312,9 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool, extra ...ma
 			}
 
 			if pcontent, pmime, pmodified, err := get(pack, rpath, uncompress); err == nil {
-				if !uncompress {
-					rw.Header().Set("Content-Encoding", "zstd")
+				if len(content)+len(pcontent) > 8<<20 {
+					rw.WriteHeader(http.StatusInternalServerError)
+					return
 				}
 				content = append(content, pcontent...)
 
@@ -338,15 +334,29 @@ func Serve(pack map[string]*RPACK, ttl time.Duration, minified bool, extra ...ma
 				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
+		}
 
-			if len(content) > 8<<20 {
-				rw.WriteHeader(http.StatusInternalServerError)
-				return
+		if len(content) == 0 {
+			rw.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		rw.Header().Set("Content-Type", ctype)
+		rw.Header().Set("Vary", "Accept-Encoding")
+		rw.Header().Set("X-Content-Type-Options", "nosniff")
+		if !uncompress {
+			rw.Header().Set("Content-Encoding", "zstd")
+		}
+		if sttl := ttl / time.Second; sttl > 0 {
+			rw.Header().Set("Cache-Control", "max-age="+strconv.FormatInt(int64(sttl), 10))
+			rw.Header().Set("Expires", time.Now().Add(ttl).UTC().Format(http.TimeFormat))
+		}
+		if len(extra) != 0 {
+			for k, v := range extra[0] {
+				rw.Header().Set(k, v)
 			}
 		}
 
-		rw.Header().Set("X-Content-Type-Options", "nosniff")
-		rw.Header().Set("Content-Type", ctype)
 		http.ServeContent(rw, r, "", time.Unix(modified, 0), bytes.NewReader(content))
 	})
 }

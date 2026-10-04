@@ -6,6 +6,7 @@ import (
 	"container/list"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"os"
@@ -19,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pyke369/golang-support/bslab"
 	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
 	"github.com/pyke369/golang-support/ustr"
@@ -97,7 +97,6 @@ type ULog struct {
 	fields                map[string]any
 	order                 []string
 	external              func(string, []byte)
-	arena                 *bslab.Arena
 	mu                    sync.RWMutex
 	done                  chan struct{}
 	lru                   *list.List
@@ -110,8 +109,8 @@ type fileOutput struct {
 }
 
 type colorizer struct {
-	expression *regexp.Regexp
-	replace    []byte
+	matcher *regexp.Regexp
+	replace []byte
 }
 
 var (
@@ -151,7 +150,7 @@ var (
 		LOG_INFO:    "\x1b[36m",
 		LOG_DEBUG:   "\x1b[32m",
 	}
-	structureColors = []*colorizer{
+	colorizers = []*colorizer{
 		&colorizer{regexp.MustCompile(`"(err(:?or)?|reason)":`), []byte("\"\x1b[31m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"(warn(:?ing)?)":`), []byte("\"\x1b[33m$1\x1b[m\":")},
 		&colorizer{regexp.MustCompile(`"([^"]+)":`), []byte("\"\x1b[38;5;250m$1\x1b[m\":")},
@@ -161,21 +160,20 @@ var (
 		&colorizer{regexp.MustCompile(`false([,}\]])`), []byte("\x1b[33mfalse\x1b[m$1")},
 		&colorizer{regexp.MustCompile(`null([,}\]])`), []byte("\x1b[35mnull\x1b[m$1")},
 	}
+	entryMatcher    = regexp.MustCompile(`(file|console|syslog|option|purge|compress)\s*\(([^\)]*)\)`)
 	optionMatcher   = regexp.MustCompile(`([^:=,\s]+)\s*[:=]\s*([^,\s]+)`)
 	templateMatcher = regexp.MustCompile(`\{\{\s*[^\s\}]+\s*\}\}`)
+	nameMatcher     = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 )
 
-func New(target string, root string, arena ...*bslab.Arena) *ULog {
+func New(target, root string) *ULog {
 	root = filepath.Clean(root)
 	if !filepath.IsAbs(root) {
 		if value, err := filepath.Abs(root); err == nil {
 			root = value
 		}
 	}
-	l := &ULog{root: root, fileOutputs: map[string]*list.Element{}, level: LOG_INFO, arena: bslab.Default, lru: list.New()}
-	if len(arena) != 0 && arena[0] != nil {
-		l.arena = arena[0]
-	}
+	l := &ULog{root: root, fileOutputs: map[string]*list.Element{}, level: LOG_INFO, lru: list.New()}
 
 	return l.Load(target)
 }
@@ -208,7 +206,7 @@ func (l *ULog) Load(target string) *ULog {
 	l.level = LOG_INFO
 	l.done = make(chan struct{})
 
-	for _, target := range regexp.MustCompile(`(file|console|syslog|option|purge|compress)\s*\(([^\)]*)\)`).FindAllStringSubmatch(target, -1) {
+	for _, target := range entryMatcher.FindAllStringSubmatch(target, -1) {
 		switch strings.ToLower(target[1]) {
 		case "syslog":
 			l.syslog = true
@@ -221,7 +219,7 @@ func (l *ULog) Load(target string) *ULog {
 					}
 
 				case "name":
-					l.syslogName = option[2]
+					l.syslogName = ustr.Strip(option[2], "\r\n\t<>[] \x00")
 
 				case "facility":
 					l.syslogFacility = facilities[strings.ToLower(option[2])]
@@ -386,28 +384,32 @@ func (l *ULog) Load(target string) *ULog {
 			go func() {
 				l.mu.RLock()
 
-				go func(purge string, age time.Duration, count int) {
+				go func(sroot, purge string, age time.Duration, count int) {
 					if purge == "" || (age <= 0 && count <= 0) {
 						return
 					}
 
-					root, err := os.OpenRoot(l.root)
+					root, err := os.OpenRoot(sroot)
 					if err != nil {
 						return
 					}
 					defer root.Close()
-					paths, err := filepath.Glob(purge)
+					purge = filepath.Clean(purge)
+					if !filepath.IsAbs(purge) {
+						if value, err := filepath.Abs(purge); err == nil {
+							purge = value
+						}
+					}
+					purge = strings.TrimPrefix(purge, sroot+file.Sep)
+					paths, err := fs.Glob(root.FS(), purge)
 					if err != nil {
 						return
 					}
+					paths = paths[:min(1000, len(paths))]
+
 					entries := []*fileOutput{}
 					for _, path := range paths {
-						if !filepath.IsAbs(path) {
-							if value, err := filepath.Abs(path); err == nil {
-								path = value
-							}
-						}
-						if info, err := root.Stat(strings.TrimPrefix(path, l.root+file.Sep)); err == nil && info.Mode().IsRegular() {
+						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() {
 							entries = append(entries, &fileOutput{active: info.ModTime(), path: path})
 						}
 					}
@@ -417,38 +419,39 @@ func (l *ULog) Load(target string) *ULog {
 
 					for index, entry := range entries {
 						if (age > 0 && time.Since(entry.active) >= age) || (count > 0 && index >= count) {
-							for entry.path != l.root {
-								root.Remove(entry.path)
-								entry.path = filepath.Dir(entry.path)
+							if root.Remove(entry.path) == nil {
+								root.Remove(filepath.Dir(entry.path))
 							}
 						}
 					}
-				}(l.purgePath, l.purgeAge, l.purgeCount)
+				}(l.root, l.purgePath, l.purgeAge, l.purgeCount)
 
-				go func(compress string, age time.Duration) {
+				go func(sroot, compress string, age time.Duration) {
 					if compress == "" || age <= 0 {
 						return
 					}
 
-					root, err := os.OpenRoot(l.root)
+					root, err := os.OpenRoot(sroot)
 					if err != nil {
 						return
 					}
 					defer root.Close()
-					paths, err := filepath.Glob(compress)
+					compress = filepath.Clean(compress)
+					if !filepath.IsAbs(compress) {
+						if value, err := filepath.Abs(compress); err == nil {
+							compress = value
+						}
+					}
+					compress = strings.TrimPrefix(compress, sroot+file.Sep)
+					paths, err := fs.Glob(root.FS(), compress)
 					if err != nil {
 						return
 					}
+					paths = paths[:min(1000, len(paths))]
 
 					start := time.Now()
 					for _, path := range paths {
-						if !filepath.IsAbs(path) {
-							if value, err := filepath.Abs(path); err == nil {
-								path = value
-							}
-						}
-						path = strings.TrimPrefix(path, l.root+file.Sep)
-						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() /*&& time.Since(info.ModTime()) >= age*/ {
+						if info, err := root.Stat(path); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) >= age {
 							ok := false
 							if source, err := root.Open(path); err == nil {
 								if target, err := root.OpenFile(path+".gz", os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600); err == nil {
@@ -476,7 +479,7 @@ func (l *ULog) Load(target string) *ULog {
 							break
 						}
 					}
-				}(l.compressPath, l.compressAge)
+				}(l.root, l.compressPath, l.compressAge)
 
 				l.mu.RUnlock()
 			}()
@@ -503,8 +506,8 @@ func (l *ULog) Close() {
 		l.syslogHandle.Close()
 		l.syslogHandle = nil
 	}
-	time.Sleep(time.Second / 5)
 	l.mu.Unlock()
+	time.Sleep(time.Second / 5)
 }
 
 func (l *ULog) SetLevel(level string) {
@@ -581,10 +584,7 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 	sfields, sorder, sutc, spath := maps.Clone(l.fields), slices.Clone(l.order), l.optionUTC, l.filePath
 	l.mu.RUnlock()
 
-	structured, content := false, l.arena.Get(1<<10)
-	defer func() {
-		l.arena.Put(content)
-	}()
+	structured, content := false, make([]byte, 0, 1<<10)
 
 	templates := map[string]any{
 		"datetime":    now.Format(time.DateTime),
@@ -638,12 +638,12 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 
 		if value, ok := templates["payload"].(string); ok {
 			content = append(content,
-				bytes.Map(func(r rune) rune {
+				bytes.TrimSpace(bytes.Map(func(r rune) rune {
 					if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
 						return -1
 					}
 					return r
-				}, []byte(value))...,
+				}, []byte(value)))...,
 			)
 
 		} else {
@@ -673,7 +673,9 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 						}
 					}
 				}
-				buffer.Truncate(buffer.Len() - 1)
+				if buffer.Len() > 1 {
+					buffer.Truncate(buffer.Len() - 1)
+				}
 			}
 			buffer.WriteByte('}')
 			content = append(content, buffer.Bytes()...)
@@ -681,12 +683,14 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 	}
 
 	if value, ok := in.(string); ok {
-		content = append(content, bytes.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
-				return -1
-			}
-			return r
-		}, []byte(value))...)
+		content = append(content,
+			bytes.TrimSpace(bytes.Map(func(r rune) rune {
+				if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
+					return -1
+				}
+				return r
+			}, []byte(value)))...,
+		)
 	}
 
 	if len(content) == 0 {
@@ -741,7 +745,7 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 				key = strings.ToLower(strings.TrimSpace(key[2 : len(key)-2]))
 				if value, ok := templates[key]; ok {
 					if value, ok := value.(string); ok {
-						return value
+						return nameMatcher.ReplaceAllString(value, "_")
 					}
 				}
 				return ""
@@ -761,7 +765,7 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 						rpath := strings.TrimPrefix(path, l.root+file.Sep)
 						if root.MkdirAll(filepath.Dir(rpath), 0o700) == nil {
 							if handle, err := root.OpenFile(rpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NONBLOCK, 0o600); err == nil {
-								if len(l.fileOutputs) >= 64 {
+								if len(l.fileOutputs) >= 256 {
 									if value := l.lru.Back(); value != nil {
 										if value := l.lru.Remove(value); value != nil {
 											output := value.(*fileOutput)
@@ -859,13 +863,15 @@ func (l *ULog) Log(now time.Time, severity int, in any) {
 				prefix = append(prefix, "\x1b[m"...)
 			}
 		}
-		if structured && l.consoleColors {
-			for _, item := range structureColors {
-				content = item.expression.ReplaceAll(content, item.replace)
+
+		colorized := content
+		if structured && l.consoleColors && len(content) <= 4<<10 {
+			for _, colorizer := range colorizers {
+				colorized = colorizer.matcher.ReplaceAll(colorized, colorizer.replace)
 			}
 		}
 		l.consoleHandle.Write(prefix)
-		l.consoleHandle.Write(content)
+		l.consoleHandle.Write(colorized)
 		l.mu.Unlock()
 	}
 }

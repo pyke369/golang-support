@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"math"
+	"mime"
 	"net/http"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ const (
 	INVALID_PARAMS_MESSAGE        = "invalid params"
 	INTERNAL_ERROR_CODE           = -32603
 	INTERNAL_ERROR_MESSAGE        = "internal error"
+	TIMEOUT_ERROR_CODE            = -32070
+	TIMEOUT_ERROR_MESSAGE         = "timeout"
 )
 
 type CONTEXT_KEY string
@@ -89,6 +92,10 @@ type HANDLER func(map[string]any, any) (any, *ERROR)
 
 var (
 	httpDefaultTransport *http.Transport
+	templateMatcher      = regexp.MustCompile(`\{\{\s*([^\}\s]+)\s*\}\}`)
+	sizeMatcher          = regexp.MustCompile(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`)
+	durationMatcher      = regexp.MustCompile(`^(\d+)(Y|MO|D|H|MN|S|MS|US)?$`)
+	timeMatcher          = regexp.MustCompile(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`)
 )
 
 func init() {
@@ -110,11 +117,9 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 	if options.Timeout == 0 {
 		options.Timeout = 10 * time.Second
 	}
-	if options.Timeout < 100*time.Millisecond {
-		options.Timeout = 100 * time.Millisecond
-	}
+	options.Timeout = min(60*time.Second, max(100*time.Millisecond, options.Timeout))
 	if options.Transport == nil {
-		options.Transport = httpDefaultTransport
+		options.Transport = httpDefaultTransport.Clone()
 	}
 	if request, err := http.NewRequest("POST", options.URL, bytes.NewBuffer(in)); err == nil {
 		if options.Context != nil {
@@ -140,6 +145,9 @@ func DefaultTransport(in []byte, tcontext any) (out []byte, err error) {
 			if response.StatusCode/100 != 2 {
 				return nil, errors.New("jsonrpc: HTTP error")
 			}
+			if mtype, _, err := mime.ParseMediaType(response.Header.Get("Content-Type")); err != nil || mtype != "application/json" {
+				return nil, errors.New("jsonrpc: invalid content type")
+			}
 
 		} else {
 			return nil, ustr.Wrap(err, "jsonrpc")
@@ -161,7 +169,7 @@ func Request(calls []*CALL) (payload []byte, err error) {
 		if call.Method == "" {
 			return nil, errors.New("jsonrpc: invalid method for call #" + strconv.Itoa(index))
 		}
-		call.id, call.paired = call.Id, false
+		call.id = call.Id
 		if call.Notification {
 			call.id = ""
 
@@ -174,21 +182,25 @@ func Request(calls []*CALL) (payload []byte, err error) {
 		}
 		if !call.Notification {
 			payload = append(payload, `,"id":`...)
-			if value, err := json.Marshal(call.id); err == nil {
-				payload = append(payload, value...)
+			value, err := json.Marshal(call.id)
+			if err != nil {
+				return nil, ustr.Wrap(err, "jsonrpc")
 			}
+			payload = append(payload, value...)
 		}
 		if call.Params != nil {
-			if value, err := json.Marshal(call.Params); err == nil {
-				payload = append(payload, `,"params":`...)
-				if value[0] != '[' && value[0] != '{' {
-					payload = append(payload, '[')
-					payload = append(payload, value...)
-					payload = append(payload, ']')
+			value, err := json.Marshal(call.Params)
+			if err != nil {
+				return nil, ustr.Wrap(err, "jsonrpc")
+			}
+			payload = append(payload, `,"params":`...)
+			if len(value) > 0 && value[0] != '[' && value[0] != '{' {
+				payload = append(payload, '[')
+				payload = append(payload, value...)
+				payload = append(payload, ']')
 
-				} else {
-					payload = append(payload, value...)
-				}
+			} else {
+				payload = append(payload, value...)
 			}
 		}
 		payload = append(payload, '}')
@@ -207,9 +219,14 @@ func Response(payload []byte, calls []*CALL) (results []*CALL, err error) {
 	if payload == nil {
 		payload = []byte("[]")
 	}
-	if payload = bytes.TrimSpace(payload); len(payload) == 0 {
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 {
 		return nil, errors.New("jsonrpc: empty payload")
 	}
+	if len(payload) > 256<<10 {
+		return nil, errors.New("jsonrpc: payload too large")
+	}
+
 	if payload[0] != '[' {
 		payload = append([]byte("["), payload...)
 		payload = append(payload, ']')
@@ -274,11 +291,13 @@ func Call(calls []*CALL, transport TRANSPORT, tcontext any) (results []*CALL, er
 }
 
 func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
+	var fatal *RESPONSE
+
 	in, out = bytes.TrimSpace(in), []byte{}
 	batch := true
 	requests, responses := []REQUEST{}, map[any]*RESPONSE{}
 	if len(in) == 0 || len(in) > 256<<10 {
-		responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
+		fatal = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 	} else {
 		if in[0] != '[' {
@@ -287,7 +306,7 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 			in = append(in, ']')
 		}
 		if json.Unmarshal(in, &requests) != nil {
-			responses[true] = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
+			fatal = &RESPONSE{Error: &ERROR{Code: PARSE_ERROR_CODE, Message: PARSE_ERROR_MESSAGE}}
 
 		} else {
 			concurrency := 1
@@ -296,11 +315,11 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 					concurrency = min(16, value)
 				}
 			}
-			if len(requests) == 0 || len(requests) > concurrency || requests[0].JSONRPC == "" {
-				responses[true] = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
+			if len(requests) == 0 || len(requests) > concurrency {
+				fatal = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 
 			} else {
-				running, sink := 0, make(chan *RESPONSE, 16)
+				ids, running, sink := map[any]struct{}{}, 0, make(chan *RESPONSE, len(requests))
 				for _, request := range requests {
 					_, ok1 := request.Id.(string)
 					_, ok2 := request.Id.(float64)
@@ -310,73 +329,97 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 						}
 						continue
 					}
-					if routes == nil || routes[request.Method] == nil {
-						if request.Id != nil {
-							responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: METHOD_NOT_FOUND_CODE, Message: METHOD_NOT_FOUND_MESSAGE}}
+					if request.Id != nil {
+						if _, exists := ids[request.Id]; exists {
+							fatal = &RESPONSE{Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
 						}
-						continue
+						ids[request.Id] = struct{}{}
 					}
-
-					if request.Params != nil {
-						if kind := reflect.TypeOf(request.Params).Kind(); kind != reflect.Slice && kind != reflect.Map {
+				}
+				if fatal == nil {
+					for _, request := range requests {
+						if routes == nil || routes[request.Method] == nil || routes[request.Method].Handler == nil {
 							if request.Id != nil {
-								responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
+								responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: METHOD_NOT_FOUND_CODE, Message: METHOD_NOT_FOUND_MESSAGE}}
 							}
 							continue
-
-						} else if kind == reflect.Slice {
-							params := map[string]any{}
-							for index, value := range request.Params.([]any) {
-								params["_"+strconv.Itoa(index)] = value
-							}
-							request.Params = params
 						}
 
-					} else {
-						request.Params = map[string]any{}
-					}
+						if request.Params != nil {
+							if kind := reflect.TypeOf(request.Params).Kind(); kind != reflect.Slice && kind != reflect.Map {
+								if request.Id != nil {
+									responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: INVALID_REQUEST_CODE, Message: INVALID_REQUEST_MESSAGE}}
+								}
+								continue
 
-					running++
-					go func(request REQUEST) {
-						defer func() {
-							if recover() != nil {
-								sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE, Data: request.Id}}
+							} else if kind == reflect.Slice {
+								params := map[string]any{}
+								for index, value := range request.Params.([]any) {
+									params["_"+strconv.Itoa(index)] = value
+								}
+								request.Params = params
 							}
-						}()
-
-						ctx := routes[request.Method].Context
-						if ctx == nil && len(extra) > 0 {
-							ctx = extra[0]
-						}
-						if result, err := routes[request.Method].Handler(request.Params.(map[string]any), ctx); err != nil {
-							sink <- &RESPONSE{Id: request.Id, Error: err}
 
 						} else {
-							sink <- &RESPONSE{Id: request.Id, Result: result}
+							request.Params = map[string]any{}
 						}
-					}(request)
-				}
 
-				for running > 0 {
-					response := <-sink
-					if response.Id != nil {
-						responses[response.Id] = response
+						running++
+						go func(request REQUEST) {
+							defer func() {
+								if recover() != nil {
+									sink <- &RESPONSE{Id: request.Id, Error: &ERROR{Code: INTERNAL_ERROR_CODE, Message: INTERNAL_ERROR_MESSAGE}}
+								}
+							}()
+
+							ctx := routes[request.Method].Context
+							if ctx == nil && len(extra) > 0 {
+								ctx = extra[0]
+							}
+							if result, err := routes[request.Method].Handler(request.Params.(map[string]any), ctx); err != nil {
+								sink <- &RESPONSE{Id: request.Id, Error: err}
+
+							} else {
+								sink <- &RESPONSE{Id: request.Id, Result: result}
+							}
+						}(request)
 					}
-					running--
+
+					timeout := time.NewTimer(30 * time.Second)
+					defer timeout.Stop()
+					for running > 0 {
+						select {
+						case response := <-sink:
+							if response.Id != nil {
+								responses[response.Id] = response
+							}
+							running--
+
+						case <-timeout.C:
+							for _, request := range requests {
+								if request.Id != nil {
+									if _, exists := responses[request.Id]; !exists {
+										responses[request.Id] = &RESPONSE{Id: request.Id, Error: &ERROR{Code: TIMEOUT_ERROR_CODE, Message: TIMEOUT_ERROR_MESSAGE}}
+									}
+								}
+							}
+							running = 0
+						}
+					}
 				}
-				close(sink)
 			}
 		}
 	}
-	if response := responses[true]; response != nil && response.Error != nil {
+
+	if fatal != nil && fatal.Error != nil {
 		out = append(out, `{"jsonrpc":"2.0","error":{"code":`...)
-		out = strconv.AppendInt(out, int64(response.Error.Code), 10)
-		if value, err := json.Marshal(response.Error.Message); err == nil {
+		out = strconv.AppendInt(out, int64(fatal.Error.Code), 10)
+		if value, err := json.Marshal(fatal.Error.Message); err == nil {
 			out = append(out, `,"message":`...)
 			out = append(out, value...)
 		}
-		if response.Error.Data != nil {
-			if data, err := json.Marshal(response.Error.Data); err == nil {
+		if fatal.Error.Data != nil {
+			if data, err := json.Marshal(fatal.Error.Data); err == nil {
 				out = append(out, `,"data":`...)
 				out = append(out, data...)
 			}
@@ -384,6 +427,11 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 		out = append(out, `}}`...)
 		return out
 	}
+
+	if len(responses) == 0 {
+		return nil
+	}
+
 	if batch {
 		out = append(out, '[')
 	}
@@ -391,7 +439,7 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 	for id, response := range responses {
 		out = append(out, `{"jsonrpc":"2.0","id":`...)
 		if value, ok := id.(float64); ok {
-			out = strconv.AppendInt(out, int64(value), 10)
+			out = strconv.AppendFloat(out, value, 'f', -1, 64)
 		}
 		if value, ok := id.(string); ok {
 			if value, err := json.Marshal(value); err == nil {
@@ -436,45 +484,92 @@ func Handle(in []byte, routes map[string]*ROUTE, extra ...any) (out []byte) {
 	return out
 }
 
-func Flatten(in any, out map[string]string, extra ...map[string]any) {
-	separator, path, options := ".", "", map[string]any{}
-	if len(extra) > 0 && extra[0] != nil {
-		options = maps.Clone(extra[0])
+func Flatten(in any, out map[string]string, filter map[string][2]string, extra ...string) {
+	sep := "."
+	if len(extra) > 0 && extra[0] != "" {
+		sep = extra[0]
 	}
-	if value, ok := options["_level"].(int); !ok {
-		options["_level"] = 1
+	flatten(in, out, sep, "", 1)
 
-	} else {
-		options["_level"] = value + 1
+	filtered := map[string]string{}
+done:
+	for fpath, fvalue := range filter {
+		fpath, fvalue[0], fvalue[1] = strings.TrimSpace(fpath), strings.TrimSpace(fvalue[0]), strings.TrimSpace(fvalue[1])
+		for _, replace := range templateMatcher.FindAllStringSubmatch(fpath, -1) {
+			fpath = strings.Replace(fpath, replace[0], out[replace[1]], 1)
+		}
+
+		if strings.HasPrefix(fpath, "~") {
+			if matcher, err := rcache.Get(strings.TrimSpace(strings.TrimPrefix(fpath, "~"))); err == nil {
+				for path := range out {
+					if captures := matcher.FindStringSubmatch(path); captures != nil {
+						if fvalue[0] != "" {
+							if matcher, err := rcache.Get(fvalue[0]); err != nil || !matcher.MatchString(out[path]) {
+								filtered = map[string]string{}
+								break done
+							}
+						}
+						if key := fvalue[1]; key != "" {
+							for index := 1; index < len(captures); index++ {
+								key = strings.ReplaceAll(key, `${`+strconv.Itoa(index)+`}`, captures[index])
+							}
+							value := filtered[key]
+							if value != "" {
+								value += " "
+							}
+							filtered[key] = value + out[path]
+						}
+					}
+				}
+			}
+
+		} else {
+			value, exists := out[fpath]
+			if fvalue[0] != "" {
+				if !exists {
+					filtered = map[string]string{}
+					break
+				}
+				if matcher, err := rcache.Get(fvalue[0]); err != nil || !matcher.MatchString(value) {
+					filtered = map[string]string{}
+					break
+				}
+			}
+			if fvalue[1] != "" && exists {
+				filtered[fvalue[1]] = strings.TrimSpace(value)
+			}
+		}
 	}
-	if options["_level"].(int) > 1000 {
+	for key := range out {
+		delete(out, key)
+	}
+	for key, value := range filtered {
+		out[key] = value
+	}
+}
+
+func flatten(in any, out map[string]string, sep, path string, level int) {
+	level++
+	if level > 128 {
 		return
-	}
-	if value, ok := options["separator"].(string); ok {
-		separator = value
-	}
-	if value, ok := options["_path"].(string); ok {
-		path = value
 	}
 
 	if item, ok := in.(map[string]any); ok && len(item) != 0 {
 		for key, value := range item {
 			kpath := key
 			if path != "" {
-				kpath = path + separator + kpath
+				kpath = path + sep + kpath
 			}
-			options["_path"] = kpath
-			Flatten(value, out, options)
+			flatten(value, out, sep, kpath, level)
 		}
 
 	} else if item, ok := in.([]any); ok && len(item) != 0 {
 		for index, value := range item {
 			kpath := "[" + strconv.Itoa(index) + "]"
 			if path != "" {
-				kpath = path + separator + kpath
+				kpath = path + sep + kpath
 			}
-			options["_path"] = kpath
-			Flatten(value, out, options)
+			flatten(value, out, sep, kpath, level)
 		}
 
 	} else if value, ok := in.(bool); ok {
@@ -500,57 +595,6 @@ func Flatten(in any, out map[string]string, extra ...map[string]any) {
 
 	} else if in == nil {
 		out[path] = ""
-	}
-
-	if path == "" {
-		if filter, ok := options["filter"].(map[string][2]string); ok && len(filter) != 0 {
-			filtered := map[string]string{}
-		done:
-			for fpath, fvalue := range filter {
-				fpath, fvalue[0], fvalue[1] = strings.TrimSpace(fpath), strings.TrimSpace(fvalue[0]), strings.TrimSpace(fvalue[1])
-				for _, replace := range rcache.Get(`\{\{\s*([^\}\s]+)\s*\}\}`).FindAllStringSubmatch(fpath, -1) {
-					fpath = strings.Replace(fpath, replace[0], out[replace[1]], 1)
-				}
-
-				if strings.HasPrefix(fpath, "~") {
-					matcher := rcache.Get(strings.TrimSpace(fpath[1:]))
-					for path := range out {
-						if captures := matcher.FindStringSubmatch(path); captures != nil {
-							if fvalue[0] != "" && !rcache.Get(fvalue[0]).MatchString(out[path]) {
-								filtered = map[string]string{}
-								break done
-							}
-							if key := fvalue[1]; key != "" {
-								for index := 1; index < len(captures); index++ {
-									key = strings.ReplaceAll(key, `${`+strconv.Itoa(index)+`}`, captures[index])
-								}
-								value := filtered[key]
-								if value != "" {
-									value += " "
-								}
-								filtered[key] = value + out[path]
-							}
-						}
-					}
-
-				} else {
-					value, exists := out[fpath]
-					if fvalue[0] != "" && (!exists || !rcache.Get(fvalue[0]).MatchString(value)) {
-						filtered = map[string]string{}
-						break
-					}
-					if fvalue[1] != "" && exists {
-						filtered[fvalue[1]] = strings.TrimSpace(value)
-					}
-				}
-			}
-			for key := range out {
-				delete(out, key)
-			}
-			for key, value := range filtered {
-				out[key] = value
-			}
-		}
 	}
 }
 
@@ -826,7 +870,7 @@ func Size(in string, fallback int64, extra ...bool) int64 {
 }
 
 func SizeBounds(in string, fallback, lowest, highest int64, extra ...bool) (out int64) {
-	if captures := rcache.Get(`^(\d+(?:\.\d*)?)\s*([KMGTP]?)(B?)$`).FindStringSubmatch(strings.TrimSpace(strings.ToUpper(in))); captures != nil {
+	if captures := sizeMatcher.FindStringSubmatch(strings.TrimSpace(strings.ToUpper(in))); captures != nil {
 		value, err := strconv.ParseFloat(captures[1], 64)
 		if err != nil {
 			return fallback
@@ -850,7 +894,7 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 	in = strings.TrimSpace(in)
 
 	value := float64(0.0)
-	if captures := rcache.Get(`^(\d+)(Y|MO|D|H|MN|S|MS|US)?$`).FindAllStringSubmatch(strings.ToUpper(in), -1); captures != nil {
+	if captures := durationMatcher.FindAllStringSubmatch(strings.ToUpper(in), -1); captures != nil {
 		for index := 0; index < len(captures); index++ {
 			if uvalue, err := strconv.ParseFloat(captures[index][1], 64); err == nil {
 				switch captures[index][2] {
@@ -884,7 +928,7 @@ func DurationBounds(in string, fallback, lowest, highest float64) (out time.Dura
 			}
 		}
 
-	} else if captures := rcache.Get(`^(?:(\d+):)?(\d{2}):(\d{2})(?:\.(\d{1,3}))?$`).FindStringSubmatch(in); captures != nil {
+	} else if captures := timeMatcher.FindStringSubmatch(in); captures != nil {
 		hours, _ := strconv.ParseFloat(captures[1], 64)
 		minutes, _ := strconv.ParseFloat(captures[2], 64)
 		seconds, _ := strconv.ParseFloat(captures[3], 64)
