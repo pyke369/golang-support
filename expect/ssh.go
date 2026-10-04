@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/pyke369/golang-support/file"
 	j "github.com/pyke369/golang-support/jsonrpc"
+	p "github.com/pyke369/golang-support/process"
 	"github.com/pyke369/golang-support/rcache"
 	"github.com/pyke369/golang-support/ustr"
 	"github.com/pyke369/golang-support/uuid"
@@ -39,7 +41,9 @@ type SSHOptions struct {
 	Filter         string
 	MaxLines       int
 	KnownHosts     string
-	AcceptHandler  func(string, net.Addr, string, ssh.PublicKey) bool
+	// AcceptHandler is called ONLY for hosts absent from KnownHosts. Returning true performs
+	// TOFU and is potentially vulnerable to MITM on the first connection by design.
+	AcceptHandler func(string, net.Addr, string, ssh.PublicKey) bool
 }
 
 type SSHConn struct {
@@ -71,9 +75,10 @@ func NewSSHConn(remote string, credentials SSHCredentials, extra *SSHOptions) (c
 	if extra != nil {
 		options = *extra
 	}
-	if options.MaxLines == 0 {
+	if options.MaxLines <= 0 {
 		options.MaxLines = 100000
 	}
+	options.MaxLines = min(1000000, options.MaxLines)
 	if options.Mode == "" {
 		options.Mode = TEXT
 	}
@@ -119,12 +124,24 @@ func NewSSHConn(remote string, credentials SSHCredentials, extra *SSHOptions) (c
 	if options.Prompt == "" {
 		return nil, errors.New("expect: invalid prompt")
 	}
+	if _, err := rcache.Get(options.Prompt); err != nil {
+		return nil, ustr.Wrap(err, "expect")
+	}
+	if options.Filter != "" {
+		if _, err := rcache.Get(options.Filter); err != nil {
+			return nil, ustr.Wrap(err, "expect")
+		}
+	}
+
 	if options.Mode != TEXT && options.Mode != JSON && options.Mode != XML {
 		return nil, errors.New("expect: invalid mode")
 	}
 
 	auth := []ssh.AuthMethod{}
 	if credentials.Key != "" {
+		if info, err := os.Stat(credentials.Key); err != nil || info.Mode()&0o077 != 0 {
+			return nil, errors.New("expect: invalid private key")
+		}
 		if private, err := os.ReadFile(credentials.Key); err != nil {
 			return nil, ustr.Wrap(err, "expect")
 
@@ -169,7 +186,9 @@ func NewSSHConn(remote string, credentials SSHCredentials, extra *SSHOptions) (c
 				err = value(hostname, remote, key)
 				if value, ok := err.(*kh.KeyError); ok && len(value.Want) == 0 && !appended && options.AcceptHandler != nil {
 					if options.AcceptHandler(hostname, remote, ssh.FingerprintSHA256(key), key) {
-						file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "create append")
+						if err := file.Write(options.KnownHosts, []string{kh.Line([]string{kh.Normalize(hostname)}, key)}, "create append"); err != nil {
+							return err
+						}
 						appended = true
 						goto retry
 					}
@@ -182,12 +201,10 @@ func NewSSHConn(remote string, credentials SSHCredentials, extra *SSHOptions) (c
 	}, nil
 }
 
-func (c *SSHConn) Close() {
+func (c *SSHConn) close() {
 	if c.closed.Swap(true) {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.session != nil {
 		c.session.Close()
@@ -200,15 +217,21 @@ func (c *SSHConn) Close() {
 	}
 }
 
-func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace *os.File, command string) (lines []string, err error) {
+func (c *SSHConn) Close() {
+	c.mu.Lock()
+	c.close()
+	c.mu.Unlock()
+}
+
+func (c *SSHConn) readlines(timeout time.Duration, prompt, filter *regexp.Regexp, tracer func(string), command string) (lines []string, err error) {
 	type result struct {
 		lines []string
 		err   error
 	}
 	queue := make(chan *result, 1)
 
-	go func() {
-		data, offset, prompt, filter, lines, size := make([]byte, 8<<10), 0, rcache.Get(prompt), rcache.Get(filter), []string{}, 0
+	go func(prompt, filter *regexp.Regexp) {
+		data, offset, lines, size := make([]byte, 8<<10), 0, []string{}, 0
 	done:
 		for {
 			if offset == cap(data) {
@@ -222,24 +245,24 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 				return
 			}
 			n += offset
-			atomic.StoreInt64(&c.last, time.Now().Unix())
+			atomic.StoreInt64(&c.last, p.Now().Unix())
 
 			loffset := 0
 			for {
 				if lindex := bytes.IndexAny(data[loffset:n], "\n"); lindex >= 0 {
 					line := data[loffset : loffset+lindex]
-					if trace != nil {
-						trace.WriteString("<  " + string(line) + "\n")
+					if tracer != nil {
+						tracer("<  " + string(line))
 					}
 					line = bytes.TrimSpace(line)
 					loffset += lindex + 1
 					if prompt.Match(line) {
-						if trace != nil {
-							trace.WriteString("\n")
+						if tracer != nil {
+							tracer("")
 						}
 						break done
 					}
-					if c.options.Filter != "" && filter.Match(line) {
+					if filter != nil && filter.Match(line) {
 						continue
 					}
 					if c.options.Subsystem == "" && command != "" && command == string(line) {
@@ -249,7 +272,7 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 						queue <- &result{nil, errors.New("lines count overflow")}
 						return
 					}
-					if size >= 64<<20 {
+					if size >= 16<<20 {
 						queue <- &result{nil, errors.New("lines size overflow")}
 						return
 					}
@@ -265,8 +288,8 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 					copy(data, data[loffset:n])
 					offset = n - loffset
 					if prompt.Match(bytes.TrimSpace(data[:offset])) {
-						if trace != nil {
-							trace.WriteString("\n")
+						if tracer != nil {
+							tracer("")
 						}
 						break done
 					}
@@ -275,25 +298,25 @@ func (c *SSHConn) readlines(timeout time.Duration, prompt, filter string, trace 
 			}
 		}
 		queue <- &result{lines, nil}
-	}()
+	}(prompt, filter)
 
 	select {
 	case r := <-queue:
 		return r.lines, r.err
 
 	case <-time.After(max(time.Second, timeout)):
-		c.Close()
+		c.close()
 		return nil, os.ErrDeadlineExceeded
 	}
 }
 
-func (c *SSHConn) write(message string, trace *os.File) (err error) {
+func (c *SSHConn) write(message string, tracer func(string)) (err error) {
 	message = strings.TrimSpace(message)
-	if trace != nil {
+	if tracer != nil {
 		for _, line := range strings.Split(message, "\n") {
-			trace.WriteString(">  " + line + "\n")
+			tracer(">  " + line)
 		}
-		trace.WriteString("\n")
+		tracer("")
 	}
 	_, err = c.input.Write([]byte(message + "\n"))
 
@@ -301,25 +324,73 @@ func (c *SSHConn) write(message string, trace *os.File) (err error) {
 }
 
 func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err error) {
-	var trace *os.File
+	var tracer func(string)
 
 	if c.closed.Load() {
 		return nil, errors.New("expect: connection closed")
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	command = strings.TrimSpace(command)
 	switch c.options.Subsystem {
 	case "":
-		allowed := `a-zA-Z0-9 ._:/=,+@%\-` + c.options.Allowed
-		if !rcache.Get(`^[` + allowed + `]{1,512}$`).MatchString(command) {
+		allowed := `a-zA-Z0-9 ._:/=,+@%\-`
+		if c.options.Allowed != "" {
+			// some shell-sensitive charactedr (like $, |, quotes, ...) are not filtered out by the
+			// following list _on purpose_ as they may be needed in some cases /!\ caveat emptor /!\
+			if len(c.options.Allowed) > 32 || strings.ContainsAny(c.options.Allowed, "#;&`()[]<>\r\n\t\x00\\") {
+				return nil, errors.New("expect: invalid allowed charset")
+			}
+			for _, c := range c.options.Allowed {
+				c := string(c)
+				matcher, err := regexp.Compile(`[` + allowed + `]`)
+				if err != nil {
+					return nil, errors.New("expect: invalid allowed charset")
+				}
+				if matcher.MatchString(c) {
+					continue
+				}
+				allowed += regexp.QuoteMeta(c)
+				matcher, err = regexp.Compile(`[` + allowed + `]`)
+				if err != nil || !matcher.MatchString(c) {
+					return nil, errors.New("expect: invalid allowed charset")
+				}
+			}
+		}
+		command = ustr.Strip(command, "\r\n\t")
+		if matcher, err := rcache.Get(`^[` + allowed + `]{1,512}$`); err != nil || !matcher.MatchString(command) {
 			return nil, errors.New("expect: invalid command")
 		}
 
+		switch c.options.Mode {
+		case JSON:
+			if !strings.Contains(command, "display json") {
+				command += "|display json |no-more"
+			}
+
+		case XML:
+			if !strings.Contains(command, "display xml") {
+				command += "|display xml |no-more"
+			}
+		}
+
 	case "netconf":
-		index := strings.Index(command, "</rpc>")
-		if len(command) < 4 || strings.Contains(command, "]]>]]>") || (index != -1 && index < len(command)-6) {
+		if len(command) < 4 || strings.Contains(command, "]]>]]>") {
 			return nil, errors.New("expect: invalid command")
 		}
+		if !strings.HasPrefix(command, "<rpc") {
+			id := uuid.New()
+			command = `<rpc message-id="` + id.String() + `">` + "\n" + command
+		}
+		if !strings.HasSuffix(command, "</rpc>") {
+			command += "\n</rpc>"
+		}
+		if err := CheckCommand(strings.NewReader(command), len(command), "rpc"); err != nil {
+			return nil, ustr.Wrap(err, "expect")
+		}
+		command += "\n]]>]]>"
 	}
 
 	timeout, prompt, filter, raw, empty := c.options.ExecTimeout, c.options.Prompt, c.options.Filter, false, false
@@ -339,54 +410,74 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		if value, ok := extra[0]["empty"].(bool); ok {
 			empty = value
 		}
-		if value, ok := extra[0]["trace"].(*os.File); ok {
-			trace = value
+		// every line of the communication is passed verbatim to the tracer callback
+		// when provided, some potentially containing sensitive information. content
+		// received by this callback should not be directly wired to production logs.
+		if value, ok := extra[0]["tracer"].(func(string)); ok {
+			tracer = value
 		}
 	}
 	timeout = min(5*time.Minute, max(5*time.Second, timeout))
 
+	if prompt == "" {
+		return nil, errors.New("expect: invalid prompt")
+	}
+	rprompt, err := rcache.Get(prompt)
+	if err != nil {
+		return nil, ustr.Wrap(err, "expect")
+	}
+
+	var rfilter *regexp.Regexp
+
+	if filter != "" {
+		rfilter, err = rcache.Get(filter)
+		if err != nil {
+			return nil, ustr.Wrap(err, "expect")
+		}
+	}
+
 	if c.session == nil {
-		start := time.Now()
+		start := p.Now()
 		if c.client, err = ssh.Dial("tcp", c.remote, c.config); err != nil {
-			c.Close()
+			c.close()
 			return nil, ustr.Wrap(err, "expect")
 		}
 		if c.session, err = c.client.NewSession(); err != nil {
-			c.Close()
+			c.close()
 			return nil, ustr.Wrap(err, "expect")
 		}
 
 		if c.input, err = c.session.StdinPipe(); err != nil {
-			c.Close()
+			c.close()
 			return nil, ustr.Wrap(err, "expect")
 		}
 		if c.output, err = c.session.StdoutPipe(); err != nil {
-			c.Close()
+			c.close()
 			return nil, ustr.Wrap(err, "expect")
 		}
 
 		if c.options.Subsystem != "" {
 			if err = c.session.RequestSubsystem(c.options.Subsystem); err != nil {
-				c.Close()
+				c.close()
 				return nil, ustr.Wrap(err, "expect")
 			}
 
 		} else {
 			if c.options.Pty {
 				if err = c.session.RequestPty("xterm", 40, 80, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
-					c.Close()
+					c.close()
 					return nil, ustr.Wrap(err, "expect")
 				}
 			}
 			if err = c.session.Shell(); err != nil {
-				c.Close()
+				c.close()
 				return nil, ustr.Wrap(err, "expect")
 			}
 		}
 
-		lines, err := c.readlines(c.options.ConnectTimeout-time.Since(start), prompt, "", trace, "")
+		lines, err := c.readlines(c.options.ConnectTimeout-time.Since(start), rprompt, nil, tracer, "")
 		if err != nil {
-			c.Close()
+			c.close()
 			return nil, ustr.Wrap(err, "expect")
 		}
 
@@ -394,11 +485,11 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			message := ParseXML(lines, map[string]any{"skip": false})
 			hello, exists := message["hello"]
 			if !exists {
-				c.Close()
+				c.close()
 				return nil, errors.New("expect: invalid netconf hello message")
 			}
 			if _, exists := j.Map(hello)["session-id"]; !exists {
-				c.Close()
+				c.close()
 				return nil, errors.New("expect: invalid netconf hello message")
 			}
 			if err := c.write(`<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
@@ -407,20 +498,20 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
     <capability>urn:ietf:params:xml:ns:netconf:base:1.0</capability>
   </capabilities>
 </hello>
-]]>]]>`, trace); err != nil {
-				c.Close()
+]]>]]>`, tracer); err != nil {
+				c.close()
 				return nil, ustr.Wrap(err, "expect")
 			}
 		}
 
 		if c.options.IdleTimeout != 0 {
-			c.last = time.Now().Unix()
+			c.last = p.Now().Unix()
 			go func(c *SSHConn) {
 				for {
 					if c.closed.Load() {
 						break
 					}
-					if time.Now().Unix()-atomic.LoadInt64(&c.last) >= int64(c.options.IdleTimeout/time.Second) {
+					if p.Now().Unix()-atomic.LoadInt64(&c.last) >= int64(c.options.IdleTimeout/time.Second) {
 						c.Close()
 						break
 					}
@@ -430,42 +521,17 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 		}
 	}
 
-	switch c.options.Subsystem {
-	case "":
-		switch c.options.Mode {
-		case JSON:
-			if !strings.Contains(command, "display json") {
-				command += "|display json |no-more"
-			}
-
-		case XML:
-			if !strings.Contains(command, "display xml") {
-				command += "|display xml |no-more"
-			}
-		}
-
-	case "netconf":
-		if !strings.HasPrefix(command, "<rpc") {
-			id := uuid.New()
-			command = `<rpc message-id="` + id.String() + `">` + "\n" + command
-		}
-		if !strings.HasSuffix(command, "</rpc>") {
-			command += "\n</rpc>"
-		}
-		command += "\n]]>]]>"
-	}
-
 	var lines []string
 
-	atomic.StoreInt64(&c.last, time.Now().Unix())
-	if err = c.write(command, trace); err != nil {
-		c.Close()
+	atomic.StoreInt64(&c.last, p.Now().Unix())
+	if err = c.write(command, tracer); err != nil {
+		c.close()
 		return nil, ustr.Wrap(err, "expect")
 	}
 
-	lines, err = c.readlines(timeout, prompt, filter, trace, command)
+	lines, err = c.readlines(timeout, rprompt, rfilter, tracer, command)
 	if err != nil {
-		c.Close()
+		c.close()
 		return nil, ustr.Wrap(err, "expect")
 	}
 
@@ -531,7 +597,7 @@ func (c *SSHConn) Run(command string, extra ...map[string]any) (result any, err 
 			}
 		}
 	}
-	atomic.StoreInt64(&c.last, time.Now().Unix())
+	atomic.StoreInt64(&c.last, p.Now().Unix())
 
 	return
 }

@@ -14,15 +14,14 @@ type entry struct {
 }
 
 var (
-	nomatch = regexp.MustCompile(`^\x00{256}$`)
-	mu      sync.RWMutex
-	cache   = map[string]*list.Element{}
-	lru     = list.New()
+	mu    sync.RWMutex
+	cache = map[string]*list.Element{}
+	lru   = list.New()
 )
 
-func GetErr(expr string) (matcher *regexp.Regexp, err error) {
+func Get(expr string) (matcher *regexp.Regexp, err error) {
 	if expr = strings.TrimSpace(expr); len(expr) > 256 {
-		return nomatch, errors.New("rcache: expression too long")
+		return nil, errors.New("rcache: expression too long")
 	}
 
 	mu.Lock()
@@ -37,7 +36,7 @@ func GetErr(expr string) (matcher *regexp.Regexp, err error) {
 	if err == nil {
 		mu.Lock()
 		if _, exists := cache[expr]; !exists {
-			if len(cache) >= 4<<10 {
+			if len(cache) >= 8<<10 {
 				if value := lru.Back(); value != nil {
 					if value := lru.Remove(value); value != nil {
 						delete(cache, value.(*entry).expr)
@@ -50,11 +49,15 @@ func GetErr(expr string) (matcher *regexp.Regexp, err error) {
 		return matcher, nil
 	}
 
-	return nomatch, err
+	return nil, errors.New("rcache: " + err.Error())
 }
 
-func Get(expr string) *regexp.Regexp {
-	matcher, _ := GetErr(expr)
+// MustGet() will panic on invalid expression (by design)
+func MustGet(expr string) *regexp.Regexp {
+	matcher, err := Get(expr)
+	if err != nil {
+		panic(err.Error())
+	}
 
 	return matcher
 }

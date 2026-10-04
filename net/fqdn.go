@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,12 +17,12 @@ func FQDN() (hostname, address string) {
 	if hostname, err := os.Hostname(); err == nil {
 		if addresses, err := resolver.LookupHost(ctx, hostname); err == nil {
 			for _, address := range addresses {
-				if hostnames, err := resolver.LookupAddr(ctx, address); err == nil && len(hostnames) > 0 {
+				if hostnames, err := resolver.LookupAddr(ctx, address); err == nil {
 					for _, hostname := range hostnames {
-						if strings.Count(hostname, ".") > 1 {
-							hostname = strings.TrimSuffix(hostname, ".")
-							if addresses, err := resolver.LookupHost(ctx, hostname); err == nil && len(addresses) != 0 {
-								return hostname, addresses[0]
+						hostname = strings.TrimSuffix(hostname, ".")
+						if addresses, err := resolver.LookupHost(ctx, hostname); err == nil {
+							if slices.Contains(addresses, address) {
+								return hostname, address
 							}
 						}
 					}

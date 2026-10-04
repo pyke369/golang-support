@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -78,7 +79,14 @@ func SerialProbe(path string) (active bool, err error) {
 func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string) (conn *serial, err error) {
 	var info unix.Stat_t
 
-	handle, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	root, err := unix.Open("/dev", 0, 0)
+	if err != nil {
+		return nil, ustr.Wrap(err, "uio")
+	}
+	defer unix.Close(root)
+	path = strings.TrimPrefix(filepath.Clean(path), "/dev/")
+
+	handle, err := unix.Openat(root, path, unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, ustr.Wrap(err, "uio")
 	}
@@ -109,6 +117,19 @@ func SerialDial(path string, speed int, bit, parity, stop byte, extra ...string)
 			Cflag: unix.CLOCAL | unix.CREAD | serialSpeeds[speed] | serialBits[bit] | serialParities[parity] | serialStops[stop],
 		}
 		termios.Cc[unix.VMIN] = 1
+
+		if len(extra) > 1 {
+			switch strings.ToLower(extra[1]) {
+			case "software":
+				termios.Cc[unix.VSTART] = 17
+				termios.Cc[unix.VSTOP] = 19
+				termios.Iflag |= unix.IXON | unix.IXOFF
+
+			case "hardware":
+				termios.Cflag |= unix.CRTSCTS
+			}
+		}
+
 		if err := unix.IoctlSetTermios(handle, unix.TCSETS, &termios); err != nil {
 			unix.Close(handle)
 			return nil, ustr.Wrap(err, "uio")
@@ -180,8 +201,14 @@ func (s *serial) SetWriteDeadline(t time.Time) error {
 }
 
 func (s *serial) GetControl() (control string, err error) {
-	handle := int(s.handle.Fd())
-	value, err := unix.IoctlGetInt(handle, unix.TIOCMGET)
+	conn, err := s.handle.SyscallConn()
+	if err != nil {
+		return "", ustr.Wrap(err, "uio")
+	}
+	value := 0
+	if cerr := conn.Control(func(fd uintptr) { value, err = unix.IoctlGetInt(int(fd), unix.TIOCMGET) }); cerr != nil {
+		return "", ustr.Wrap(cerr, "uio")
+	}
 	if err != nil {
 		return "", ustr.Wrap(err, "uio")
 	}
@@ -205,8 +232,14 @@ func (s *serial) SetControl(control string) (err error) {
 	lines := strings.Fields(strings.ToUpper(control))
 	rts, dtr := slices.Contains(lines, "RTS"), slices.Contains(lines, "DTR")
 	if rts || dtr {
-		handle := int(s.handle.Fd())
-		value, err := unix.IoctlGetInt(handle, unix.TIOCMGET)
+		conn, err := s.handle.SyscallConn()
+		if err != nil {
+			return ustr.Wrap(err, "uio")
+		}
+		value := 0
+		if cerr := conn.Control(func(fd uintptr) { value, err = unix.IoctlGetInt(int(fd), unix.TIOCMGET) }); cerr != nil {
+			return ustr.Wrap(cerr, "uio")
+		}
 		if err != nil {
 			return ustr.Wrap(err, "uio")
 		}
@@ -216,7 +249,10 @@ func (s *serial) SetControl(control string) (err error) {
 		if dtr {
 			value |= unix.TIOCM_DTR
 		}
-		return unix.IoctlSetPointerInt(handle, unix.TIOCMSET, value)
+		if cerr := conn.Control(func(fd uintptr) { err = unix.IoctlSetPointerInt(int(fd), unix.TIOCMSET, value) }); cerr != nil {
+			return ustr.Wrap(cerr, "uio")
+		}
+		return ustr.Wrap(err, "uio")
 	}
 
 	return nil
@@ -226,8 +262,14 @@ func (s *serial) ClearControl(control string) (err error) {
 	lines := strings.Fields(strings.ToUpper(control))
 	rts, dtr := slices.Contains(lines, "RTS"), slices.Contains(lines, "DTR")
 	if rts || dtr {
-		handle := int(s.handle.Fd())
-		value, err := unix.IoctlGetInt(handle, unix.TIOCMGET)
+		conn, err := s.handle.SyscallConn()
+		if err != nil {
+			return ustr.Wrap(err, "uio")
+		}
+		value := 0
+		if cerr := conn.Control(func(fd uintptr) { value, err = unix.IoctlGetInt(int(fd), unix.TIOCMGET) }); cerr != nil {
+			return ustr.Wrap(cerr, "uio")
+		}
 		if err != nil {
 			return ustr.Wrap(err, "uio")
 		}
@@ -237,7 +279,10 @@ func (s *serial) ClearControl(control string) (err error) {
 		if dtr {
 			value &= ^unix.TIOCM_DTR
 		}
-		return unix.IoctlSetPointerInt(handle, unix.TIOCMSET, value)
+		if cerr := conn.Control(func(fd uintptr) { err = unix.IoctlSetPointerInt(int(fd), unix.TIOCMSET, value) }); cerr != nil {
+			return ustr.Wrap(cerr, "uio")
+		}
+		return ustr.Wrap(err, "uio")
 	}
 
 	return nil

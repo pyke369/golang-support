@@ -6,15 +6,23 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"math/big"
 	"strings"
 )
 
+var (
+	crc32table = crc32.MakeTable(crc32.Castagnoli)
+)
+
 func RandInt(in int) (out int) {
 	if in <= 0 {
-		panic("uhash: argument is <= 0")
+		return 0
 	}
-	value, _ := rand.Int(rand.Reader, big.NewInt(int64(in)))
+	value, err := rand.Int(rand.Reader, big.NewInt(int64(in)))
+	if err != nil {
+		panic("uhash: entropy source failure")
+	}
 
 	return int(value.Int64())
 }
@@ -23,19 +31,38 @@ func RandKey(size int, extra ...string) (out string, err error) {
 	if size <= 0 || size > 256 {
 		return "", errors.New("uhash: invalid size")
 	}
-	encoding := "hex"
+	encoding, raw := "hex", false
 	if len(extra) != 0 {
-		encoding = strings.ToLower(extra[0])
+		value := strings.ToLower(extra[0])
+		if strings.Contains(value, "raw") {
+			raw = true
+		}
+		if strings.Contains(value, "std") {
+			encoding = "std"
+		}
+		if strings.Contains(value, "url") {
+			encoding = "url"
+		}
 	}
 
 	value := make([]byte, size)
-	_, _ = rand.Read(value)
+	if _, err := rand.Read(value); err != nil {
+		panic("uhash: entropy source failure")
+	}
 	switch encoding {
 	case "std":
-		out = base64.RawStdEncoding.EncodeToString(value)
+		if raw {
+			out = base64.RawStdEncoding.EncodeToString(value)
+		} else {
+			out = base64.StdEncoding.EncodeToString(value)
+		}
 
 	case "url":
-		out = base64.RawURLEncoding.EncodeToString(value)
+		if raw {
+			out = base64.RawURLEncoding.EncodeToString(value)
+		} else {
+			out = base64.URLEncoding.EncodeToString(value)
+		}
 
 	default:
 		out = hex.EncodeToString(value)
@@ -100,6 +127,10 @@ func Sum16(inputs ...[]byte) uint16 {
 	}
 
 	return ^uint16(csum)
+}
+
+func Sum32(in []byte) uint32 {
+	return crc32.Checksum(in, crc32table)
 }
 
 func Sum128(in []byte) (out [16]byte) {

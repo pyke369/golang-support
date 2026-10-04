@@ -17,9 +17,11 @@ type slab struct {
 	lost  uint64
 }
 
+// nozero disables zeroing buffers returned to the arena (for performance
+// reasons). only use for arenas whose buffers never hold sensitive data.
 type Arena struct {
-	name   string
 	nozero bool
+	name   string
 	slabs  map[int]*slab
 }
 
@@ -28,7 +30,10 @@ type Info struct {
 	Values map[int][6]uint64
 }
 
-var Default *Arena
+var (
+	// the Default arena always zero returned buffers
+	Default *Arena
+)
 
 func init() {
 	Default = New(map[string]any{"name": "default"})
@@ -65,8 +70,8 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 	if len(extra) != 0 {
 		item = extra[0]
 	}
-	if size < 0 {
-		panic("bslab: negative allocation size")
+	if size <= 0 {
+		return []byte{}
 	}
 	osize := size
 	if size < (1 << 8) {
@@ -112,6 +117,7 @@ func (a *Arena) Get(size int, extra ...[]byte) (out []byte) {
 			}
 		}
 		if out == nil {
+			osize = max(1, osize)
 			atomic.AddUint64(&(a.slabs[0].get), 1)
 			atomic.AddUint64(&(a.slabs[0].alloc), uint64(osize))
 			out = make([]byte, 0, osize)

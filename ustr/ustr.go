@@ -23,6 +23,31 @@ var (
 		[2]string{"0", "1"},
 	}
 	htable = []byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
+	days   = [][]byte{
+		nil,
+		[]byte("Monday"),
+		[]byte("Tuesday"),
+		[]byte("Wednesday"),
+		[]byte("Thursday"),
+		[]byte("Friday"),
+		[]byte("Saturday"),
+		[]byte("Sunday"),
+	}
+	months = [][]byte{
+		nil,
+		[]byte("January"),
+		[]byte("February"),
+		[]byte("March"),
+		[]byte("April"),
+		[]byte("May"),
+		[]byte("June"),
+		[]byte("July"),
+		[]byte("August"),
+		[]byte("September"),
+		[]byte("October"),
+		[]byte("November"),
+		[]byte("December"),
+	}
 )
 
 func Wrap(err error, msg string) error {
@@ -217,7 +242,7 @@ func Strip(in, charset string) string {
 func Replace(in string, pairs [][2]string) string {
 	for _, pair := range pairs {
 		if strings.HasPrefix(pair[0], "~") {
-			if matcher, err := rcache.GetErr(strings.TrimSpace(strings.TrimPrefix(pair[0], "~"))); err == nil {
+			if matcher, err := rcache.Get(strings.TrimSpace(strings.TrimPrefix(pair[0], "~"))); err == nil {
 				in = matcher.ReplaceAllString(in, pair[1])
 			}
 
@@ -348,40 +373,54 @@ func Duration(duration time.Duration, extra ...int) (out string) {
 	return
 }
 
+func Count(count int64, extra ...int) (out string) {
+	if count <= 0 {
+		out = "."
+
+	} else {
+		out = strconv.FormatInt(count, 10)
+	}
+	if len(extra) > 0 {
+		return String(out, extra...)
+	}
+
+	return
+}
+
 func Size(size int64, extra ...int) (out string) {
 	switch {
 	case size < 1<<10:
-		out = strconv.FormatInt(size, 10) + "B "
+		out = strconv.FormatInt(size, 10) + " B"
 
 	case size < 1<<20:
-		out = strconv.FormatInt(size/(1<<10), 10) + "kiB"
+		out = strconv.FormatInt(size/(1<<10), 10) + " kiB"
 
 	case size < 10*(1<<20):
-		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 2, 64) + "MiB"
+		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 2, 64) + " MiB"
 
 	case size < 100*(1<<20):
-		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 1, 64) + "MiB"
+		out = strconv.FormatFloat(float64(size)/(1<<20), 'f', 1, 64) + " MiB"
 
 	case size < 1<<30:
-		out = strconv.FormatInt(size/(1<<20), 10) + "MiB"
+		out = strconv.FormatInt(size/(1<<20), 10) + " MiB"
 
 	case size < 10*(1<<30):
-		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 2, 64) + "GiB"
+		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 2, 64) + " GiB"
 
 	case size < 100*(1<<30):
-		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 1, 64) + "GiB"
+		out = strconv.FormatFloat(float64(size)/(1<<30), 'f', 1, 64) + " GiB"
 
 	case size < 1<<40:
-		out = strconv.FormatInt(size/(1<<30), 10) + "GiB"
+		out = strconv.FormatInt(size/(1<<30), 10) + " GiB"
 
 	case size < 10*(1<<40):
-		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 2, 64) + "TiB"
+		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 2, 64) + " TiB"
 
 	case size < 100*(1<<40):
-		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 1, 64) + "TiB"
+		out = strconv.FormatFloat(float64(size)/(1<<40), 'f', 1, 64) + " TiB"
 
 	default:
-		out = strconv.FormatInt(size/(1<<40), 10) + "TiB"
+		out = strconv.FormatInt(size/(1<<40), 10) + " TiB"
 	}
 	if len(extra) > 0 {
 		return String(out, extra...)
@@ -441,154 +480,357 @@ func Plural(in string, count int, plural ...string) string {
 	return in
 }
 
-func Strftime(layout string, base time.Time) string {
-	length, out := len(layout), make([]byte, 0, 128)
+type STRFTIME []byte
+
+func Strftime(layout string, base time.Time, extra ...[]byte) (out STRFTIME) {
+	if !strings.Contains(layout, "%") {
+		return []byte(layout)
+	}
+
+	if len(extra) != 0 && extra[0] != nil {
+		out = extra[0]
+
+	} else {
+		out = make([]byte, 0, 32)
+	}
+
+	length, hour, minute, second := len(layout), uint64(base.Hour()), uint64(base.Minute()), uint64(base.Second())
+	year, month, day, wday, yday := uint64(base.Year()), uint64(base.Month()), uint64(base.Day()), uint64(base.Weekday()), uint64(base.YearDay())
+	nwday := wday
+	if nwday == 0 {
+		nwday = 7
+	}
+
 	for index := 0; index < length; index++ {
 		switch layout[index] {
 		case '%':
 			if index < length-1 {
-				switch layout[index+1] {
+				c := layout[index+1]
+				switch c {
 				case 'a':
-					out = append(out, base.Format("Mon")...)
+					out = append(out, days[nwday][:3]...)
 
 				case 'A':
-					out = append(out, base.Format("Monday")...)
+					out = append(out, days[nwday]...)
 
 				case 'b', 'h':
-					out = append(out, base.Format("Jan")...)
+					out = append(out, months[month][:3]...)
 
 				case 'B':
-					out = append(out, base.Format("January")...)
+					out = append(out, months[month]...)
 
 				case 'c':
-					out = append(out, base.Format("Mon Jan 2 15:04:05 2006")...)
+					out = append(out, days[nwday][:3]...)
+					out = append(out, ' ')
+					out = append(out, months[month][:3]...)
+					if day < 10 {
+						out = append(out, ' ', ' ')
 
-				case 'C':
+					} else {
+						out = append(out, ' ')
+					}
+					out = strconv.AppendUint(out, day, 10)
+					if hour < 10 {
+						out = append(out, ' ', '0')
+
+					} else {
+						out = append(out, ' ')
+					}
+					out = strconv.AppendUint(out, hour, 10)
+					if minute < 10 {
+						out = append(out, ':', '0')
+
+					} else {
+						out = append(out, ':')
+					}
+					out = strconv.AppendUint(out, minute, 10)
+					if second < 10 {
+						out = append(out, ':', '0')
+
+					} else {
+						out = append(out, ':')
+					}
+					out = strconv.AppendUint(out, second, 10)
+					switch {
+					case year < 10:
+						out = append(out, ' ', ' ', '0', '0', '0')
+
+					case year < 100:
+						out = append(out, ' ', ' ', '0', '0')
+
+					case year < 1000:
+						out = append(out, ' ', ' ', '0')
+
+					default:
+						out = append(out, ' ')
+					}
+					out = strconv.AppendUint(out, year, 10)
+
+				case 'C': // TODO remove Int()
 					out = append(out, Int(base.Year()/100, 2)...)
 
-				case 'd':
-					out = append(out, base.Format("02")...)
+				case 'd', 'e':
+					if day < 10 {
+						if c == 'd' {
+							out = append(out, '0')
+
+						} else {
+							out = append(out, ' ')
+						}
+					}
+					out = strconv.AppendUint(out, day, 10)
 
 				case 'D':
 					out = append(out, base.Format("01/02/06")...)
 
-				case 'e':
-					out = append(out, base.Format("_2")...)
-
-				case 'f':
-					out = append(out, Int(base.Nanosecond()/1000, 6)...)
-
 				case 'F':
-					out = append(out, base.Format("2006-01-02")...)
+					switch {
+					case year < 10:
+						out = append(out, '0', '0', '0')
 
-				case 'g':
+					case year < 100:
+						out = append(out, '0', '0')
+
+					case year < 1000:
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, year, 10)
+					if month < 10 {
+						out = append(out, '-', '0')
+
+					} else {
+						out = append(out, '-')
+					}
+					out = strconv.AppendUint(out, month, 10)
+					if day < 10 {
+						out = append(out, '-', '0')
+
+					} else {
+						out = append(out, '-')
+					}
+					out = strconv.AppendUint(out, day, 10)
+
+				case 'g': // TODO remove ISOWeek()
 					year, _ := base.ISOWeek()
 					out = append(out, Int(year%100, 2)...)
 
-				case 'G':
+				case 'G': // TODO remove ISOWeek()
 					year, _ := base.ISOWeek()
 					out = append(out, Int(year, 4)...)
 
-				case 'H':
-					out = append(out, base.Format("15")...)
+				case 'H', 'k':
+					if hour < 10 {
+						if c == 'H' {
+							out = append(out, '0')
 
-				case 'I':
-					out = append(out, base.Format("03")...)
+						} else {
+							out = append(out, ' ')
+						}
+					}
+					out = strconv.AppendUint(out, hour, 10)
 
-				case 'j':
-					out = append(out, base.Format("002")...)
-
-				case 'k':
-					out = append(out, Int(base.Hour(), 2, 1)...)
-
-				case 'l':
-					if base.Hour() == 0 || base.Hour() == 12 {
-						out = append(out, "12"...)
+				case 'I', 'l':
+					if hour == 0 || hour == 12 {
+						out = append(out, '1', '2')
 
 					} else {
-						out = append(out, Int(base.Hour()%12, 2, 1)...)
+						value := hour % 12
+						if value < 10 {
+							if c == 'I' {
+								out = append(out, '0')
+
+							} else {
+								out = append(out, ' ')
+							}
+						}
+						out = strconv.AppendUint(out, value, 10)
 					}
 
+				case 'j': // TODO remove Format()
+					out = append(out, base.Format("002")...)
+
 				case 'm':
-					out = append(out, base.Format("01")...)
+					if month < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, month, 10)
 
 				case 'M':
-					out = append(out, base.Format("04")...)
+					if minute < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, minute, 10)
 
 				case 'n':
 					out = append(out, '\n')
 
 				case 'p':
-					out = append(out, base.Format("PM")...)
+					if hour < 12 {
+						out = append(out, 'A', 'M')
+
+					} else {
+						out = append(out, 'P', 'M')
+					}
 
 				case 'P':
-					out = append(out, base.Format("pm")...)
+					if hour < 12 {
+						out = append(out, 'a', 'm')
 
-				case 'r':
+					} else {
+						out = append(out, 'p', 'm')
+					}
+
+				case 'r': // TODO remove Format()
 					out = append(out, base.Format("03:04:05 PM")...)
 
 				case 'R':
-					out = append(out, base.Format("15:04")...)
+					if hour < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, hour, 10)
+					if minute < 10 {
+						out = append(out, ':', '0')
+
+					} else {
+						out = append(out, ':')
+					}
+					out = strconv.AppendUint(out, minute, 10)
 
 				case 's':
 					out = append(out, strconv.FormatInt(base.Unix(), 10)...)
 
 				case 'S':
-					out = append(out, base.Format("05")...)
+					if second < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, second, 10)
 
 				case 't':
 					out = append(out, '\t')
 
-				case 'T':
-					out = append(out, base.Format("15:04:05")...)
+				case 'T', 'X':
+					if hour < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, hour, 10)
+					if minute < 10 {
+						out = append(out, ':', '0')
+
+					} else {
+						out = append(out, ':')
+					}
+					out = strconv.AppendUint(out, minute, 10)
+					if second < 10 {
+						out = append(out, ':', '0')
+
+					} else {
+						out = append(out, ':')
+					}
+					out = strconv.AppendUint(out, second, 10)
 
 				case 'u':
-					day := base.Weekday()
-					if day == 0 {
-						day = 7
-					}
-					out = append(out, strconv.Itoa(int(day))...)
+					out = strconv.AppendUint(out, nwday, 10)
 
 				case 'U':
-					out = append(out, Int((base.YearDay()+6-int(base.Weekday()))/7, 2)...)
+					value := (yday + 6 - wday) / 7
+					if value < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, value, 10)
 
 				case 'V':
 					_, week := base.ISOWeek()
-					out = append(out, Int(week, 2)...)
+					out = append(out, Int(week, 2, '0')...)
 
 				case 'w':
-					out = append(out, strconv.Itoa(int(base.Weekday()))...)
+					out = strconv.AppendUint(out, wday, 10)
 
 				case 'W':
-					day := int(base.Weekday())
-					if day == 0 {
-						day = 6
-
-					} else {
-						day--
+					value := (yday + 6 - (nwday - 1)) / 7
+					if value < 10 {
+						out = append(out, '0')
 					}
-					out = append(out, Int((base.YearDay()+6-day)/7, 2)...)
+					out = strconv.AppendUint(out, value, 10)
 
 				case 'x':
-					out = append(out, base.Format("01/02/06")...)
+					if month < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, month, 10)
+					if day < 10 {
+						out = append(out, '/', '0')
 
-				case 'X':
-					out = append(out, base.Format("15:04:05")...)
+					} else {
+						out = append(out, '/')
+					}
+					out = strconv.AppendUint(out, day, 10)
+					value := year % 100
+					if value < 10 {
+						out = append(out, '/', '0')
+
+					} else {
+						out = append(out, '/')
+					}
+					out = strconv.AppendUint(out, value, 10)
 
 				case 'y':
-					out = append(out, base.Format("06")...)
+					value := year % 100
+					if value < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, value, 10)
 
 				case 'Y':
-					out = append(out, base.Format("2006")...)
+					switch {
+					case year < 10:
+						out = append(out, '0', '0', '0')
+
+					case year < 100:
+						out = append(out, '0', '0')
+
+					case year < 1000:
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, year, 10)
 
 				case 'z':
-					out = append(out, base.Format("-0700")...)
+					_, offset := base.Zone()
+					if offset >= 0 {
+						out = append(out, '+')
+
+					} else {
+						out = append(out, '-')
+						offset = -offset
+					}
+
+					value := offset / 3600
+					if value < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, uint64(value), 10)
+					value = (offset - (value * 3600)) / 60
+					if value < 10 {
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, uint64(value), 10)
 
 				case 'Z':
-					out = append(out, base.Format("MST")...)
+					zone, _ := base.Zone()
+					out = append(out, zone...)
 
-				case '+':
+				case '+': // TODO remove Format()
 					out = append(out, base.Format(time.UnixDate)...)
+
+				case '=':
+					millisecond := uint64(base.Nanosecond() / 1000000)
+					switch {
+					case millisecond < 10:
+						out = append(out, '0', '0')
+
+					case millisecond < 100:
+						out = append(out, '0')
+					}
+					out = strconv.AppendUint(out, millisecond, 10)
 
 				case '%':
 					out = append(out, '%')
@@ -601,7 +843,11 @@ func Strftime(layout string, base time.Time) string {
 		}
 	}
 
-	return string(out)
+	return out
+}
+
+func (s STRFTIME) String() string {
+	return string(s)
 }
 
 const (
@@ -612,7 +858,7 @@ const (
 	OptionComment = 0x10
 	OptionEmpty   = 0x20
 	OptionFirst   = 0x40
-	OptionJSON    = 0x80
+	OptionJson    = 0x80
 )
 
 func Options(in string) (out int) {
@@ -620,29 +866,29 @@ func Options(in string) (out int) {
 		if value = strings.TrimSpace(value); value == "" {
 			continue
 		}
-		if strings.HasPrefix("trim", value) {
+		if value == "trim" || value == "t" {
 			out |= OptionTrim
 		}
-		if strings.HasPrefix("space", value) {
+		if value == "space" || value == "s" {
 			out |= OptionSpace
 		}
-		if strings.HasPrefix("lower", value) {
+		if value == "lower" || value == "l" {
 			out |= OptionLower
 		}
-		if strings.HasPrefix("upper", value) {
+		if value == "upper" || value == "u" {
 			out |= OptionUpper
 		}
-		if strings.HasPrefix("comment", value) {
+		if value == "comment" || value == "c" {
 			out |= OptionComment
 		}
-		if strings.HasPrefix("empty", value) {
+		if value == "empty" || value == "e" {
 			out |= OptionEmpty
 		}
-		if strings.HasPrefix("first", value) {
+		if value == "first" || value == "f" {
 			out |= OptionFirst
 		}
-		if strings.HasPrefix("json", value) {
-			out |= OptionJSON
+		if value == "json" || value == "j" {
+			out |= OptionJson
 		}
 	}
 
